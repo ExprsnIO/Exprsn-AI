@@ -71,7 +71,7 @@ body{overflow:auto}
 
 <div class="topbar">
   <span class="eyebrow">Exprsn-AI console · design mockup</span>
-  <nav><a href="#overview">Overview</a><a href="#entry">Entry points</a><a href="#s1">1 Source</a><a href="#s2">2 Browse</a><a href="#s3">3 Select</a><a href="#s4">4 Review</a><a href="#s5">5 Destination</a><a href="#s6">6 Confirm</a><a href="#queue">Imports</a><a href="#repos">Repositories</a><a href="#model">Data model</a><a href="#states">States</a><a href="#backlog">1.5.0 rollup</a></nav>
+  <nav><a href="#overview">Overview</a><a href="#entry">Entry points</a><a href="#s1">1 Source</a><a href="#s2">2 Browse</a><a href="#s3">3 Select</a><a href="#s4">4 Review</a><a href="#s5">5 Destination</a><a href="#s6">6 Confirm</a><a href="#queue">Imports</a><a href="#repos">Repositories</a><a href="#model">Data model</a><a href="#backlog">1.5.0 rollup</a></nav>
   <button type="button" class="btn sm theme" id="theme">Theme: system</button>
 </div>
 
@@ -431,20 +431,6 @@ body{overflow:auto}
       <tr><td class="mono">classifiers</td><td class="fg2">eval set reference to a training dataset version; engine kind <span class="mono">imported_model</span></td></tr>
       <tr><td class="mono">permissions</td><td class="fg2"><span class="mono">imports:run</span> (model admin, ML admin, knowledge admin by destination), <span class="mono">imports:repositories</span> (model admin, dual control)</td></tr>
     </tbody></table></div></div>
-  </div>
-</section>
-
-<section class="section" id="states">
-  <h2>States to design from this page</h2>
-  <div class="state-strip">
-    <div class="state-card"><div class="st warn">Gated repository</div><div class="sd">A gated Hugging Face model lists no files until the licence gate is accepted with the recorded token. Next stays disabled.</div></div>
-    <div class="state-card"><div class="st danger">Pickle refused</div><div class="sd">The repository publishes only pytorch_model.bin. The format check fails, nothing is written and no tag is registered.</div></div>
-    <div class="state-card"><div class="st danger">Licence outside policy</div><div class="sd">A CC BY-NC dataset is outside the tenant allow list. The import waits on a licence exception from legal.</div></div>
-    <div class="state-card"><div class="st warn">PII in the preview</div><div class="sd">The PII classifier flags columns in the 2,000-row sample. The scrub masks free text and generalises quasi-identifiers before rows are stored.</div></div>
-    <div class="state-card"><div class="st warn">Dataset over quota</div><div class="sd">A multi-terabyte dataset exceeds the 500 GB quota. Only a streamed sample or a smaller configuration can be imported.</div></div>
-    <div class="state-card"><div class="st warn">Source rate limited</div><div class="sd">ModelScope is rate limiting the staging proxy. Browsing falls back to the weekly snapshot and downloads queue with backoff.</div></div>
-    <div class="state-card"><div class="st info">Air-gapped: joins the bundle</div><div class="sd">With no outbound path, the request joins the weekly bundle. Staging fetches, scans and signs; the item appears after the diode transfer.</div></div>
-    <div class="state-card"><div class="st ok">Knowledge set created</div><div class="sd">A monthly Eurostat table becomes a knowledge set with a refresh schedule; rows are documents with citations back to the row.</div></div>
   </div>
 </section>
 

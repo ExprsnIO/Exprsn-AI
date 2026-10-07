@@ -26,10 +26,21 @@
     moon: 'M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z', copy: 'M8 8h12v12H8zM4 16V4h12', refresh: 'M4 12a8 8 0 0 1 14-5l2 2M20 4v5h-5M20 12a8 8 0 0 1-14 5l-2-2M4 20v-5h5', edit: 'M4 20h4l11-11-4-4L4 16zM13 7l4 4',
     branch: 'M6 4v8a4 4 0 0 0 4 4h4M6 4a2 2 0 1 0 0 .01M18 16a2 2 0 1 0 0 .01M6 20a2 2 0 1 0 0 .01', flag: 'M5 3v18M5 4h12l-3 4 3 4H5', attach: 'M8 12l7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7l8-8', send: 'M4 12l16-8-6 16-2-6z',
     play: 'M7 5v14l11-7z', stop: 'M6 6h12v12H6z', pause: 'M7 5v14M17 5v14', lock: 'M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3', key: 'M14 10a4 4 0 1 0-3.5 4L12 15.5h2V18h2.5v2.5H20V17l-6-6z',
-    info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01', warn: 'M12 3l10 18H2zM12 10v4M12 17h.01', thumb: 'M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5a2 2 0 0 1 2 2l-1 7a2 2 0 0 1-2 2H7', download: 'M12 4v12M6 10l6 6 6-6M4 20h16',
+    info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01', warn: 'M12 3l10 18H2zM12 10v4M12 17h.01', thumb: 'M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5a2 2 0 0 1 2 2l-1 7a2 2 0 0 1-2 2H7', social: 'M4 4h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM18 8h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1v3l-4-3h-4a1 1 0 0 1-1-1v-1', download: 'M12 4v12M6 10l6 6 6-6M4 20h16',
     filter: 'M4 5h16l-6 8v6l-4-2v-4z', sort: 'M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4', dots: 'M5 12h.01M12 12h.01M19 12h.01', link: 'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',
+    groups: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M21 20a6 6 0 0 0-6-6', messages: 'M4 4h12v9H8l-4 3zM20 9v9l-3-2h-7',
+    moderation: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4', channels: 'M4 13a8 8 0 0 1 16 0M4 13v4h3v-5H4M20 13v4h-3v-5h3M17 19a4 4 0 0 1-4 2', roles: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16',
     grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2', brain: 'M9 4a3 3 0 0 0-3 3v10a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3zM15 4a3 3 0 0 1 3 3v10a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3z',
-    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6'
+    calc: 'M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', upload: 'M12 20V8M6 14l6-6 6 6M4 4h16', undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14', trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6',
+    // Sprint 30 (B-3402 to B-3404, B-3407, B-3408): the trust, apps and files screens
+    certificates: 'M12 3l2.5 2 3-.5.5 3 2 2.5-2 2.5-.5 3-3-.5L12 17l-2.5-2-3 .5-.5-3L4 10l2-2.5.5-3 3 .5zM9 17l-1 5 4-2 4 2-1-5', vault: 'M4 4h16v16H4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 10v2M20 8h2M20 16h2',
+    plugins: 'M9 3v4M15 3v4M6 7h12v5a6 6 0 0 1-12 0zM12 18v3', files: 'M3 6h6l2 2h10v11H3z', apps: 'M4 4h16v16H4zM4 9h16M9 9v11',
+    // 1.6.0 (B-4202, B-4203, Q13): the Overview and Jobs and queues screens
+    overview: 'M4 13a8 8 0 0 1 16 0M12 13l4-4M4 17h16', jobs: 'M4 5h16v4H4zM4 11h16v4H4zM4 17h10M18 17h2',
+    // Sprint 31 (B-3406): the AT-Protocol screen
+    atproto: 'M12 12c-2-5-6-8-8-6s0 8 4 10c2 1 3 0 4-2M12 12c2-5 6-8 8-6s0 8-4 10c-2 1-3 0-4-2M12 12v8',
+    // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration
+    storage: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3', configuration: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4'
   };
   const icon = (name, size, extra) => {
     const d = ICONS[name] || ICONS.info;
@@ -146,21 +157,42 @@
   };
 
   // ---------- Navigation model ----------
-  // `perm` is the permission the server checks for the screen's API; the item is hidden without it.
+  // `perm` is the permission the server checks for the screen's API; the item is hidden without it. A list means any
+  // one of them (a screen whose tabs each need their own permission, such as AT-Protocol).
   // `live` marks screens backed by the server; the rest still show prototype data (see docs/PLAN.md for their sprint).
   const NAV = [
     { group: null, items: [
       { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', live: true },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', live: true }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', live: true }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', live: true },
-      { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', live: true }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', live: true }
+      { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', live: true }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', live: true },
+      // Sprint 30 (B-3408, B-3407): files and low-code apps
+      { id: 'files', label: 'Files', icon: 'files', perm: 'files:read', live: true }, { id: 'apps', label: 'Apps', icon: 'apps', perm: 'records:read', live: true },
+      // 1.5.0 (Sprint 30): groups and events, messages and the workspace feed
+      { id: 'groups', label: 'Groups and events', icon: 'groups', perm: 'groups:read', live: true }, { id: 'messages', label: 'Messages and feed', icon: 'messages', perm: 'messages:read', live: true }
     ] },
     { group: 'Admin', items: [
+      // 1.6.0 (B-4202, Q3): the Overview, first in the Admin group
+      { id: 'overview', label: 'Overview', icon: 'overview', perm: ['platform:manage', 'tenant:manage'], live: true },
       { id: 'models', label: 'Models', icon: 'models', perm: 'models:manage', live: true }, { id: 'profiles', label: 'Profiles', icon: 'profiles', perm: 'profiles:manage', live: true }, { id: 'pools', label: 'Pools', icon: 'pools', perm: 'pools:manage', live: true },
       { id: 'registry', label: 'Registry', icon: 'registry', perm: 'tools:manage', live: true }, { id: 'mcp-servers', label: 'MCP servers', icon: 'mcp', perm: 'mcp:manage', live: true }, { id: 'guardrails', label: 'Guardrails', icon: 'guardrails', perm: 'guardrails:manage', live: true },
-      { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
-      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true },
+      { id: 'flags', label: 'Flags', icon: 'flags', perm: 'flags:review', live: true }, { id: 'classifiers', label: 'Classifiers', icon: 'classifiers', perm: 'classifiers:manage', live: true }, 
+      { id: 'moderation', label: 'Moderation', icon: 'moderation', perm: 'moderation:review', live: true }, { id: 'channels', label: 'Channels', icon: 'channels', perm: 'channels:review', live: true }, 
+      // 1.6.0 (B-4206): Social and messaging, after Channels with the other domain policies (decision Q13: its own icon)
+      { id: 'social', label: 'Social and messaging', icon: 'social', perm: 'social:manage', live: true },
+      { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
+      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true }, { id: 'roles', label: 'Roles and access', icon: 'roles', perm: 'roles:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
-      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true }, { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
+      // Sprint 30 (B-3402 to B-3404): the trust screens
+      { id: 'certificates', label: 'Certificates', icon: 'certificates', perm: 'pki:manage', live: true }, { id: 'vault', label: 'Vault', icon: 'vault', perm: 'secrets:admin', live: true }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins', perm: 'plugins:manage', live: true },
+      // Sprint 31 (B-3406): service DID and keys (pki:manage), labels and labelers (labels:manage), firehose and feeds
+      // (firehose:manage), DID bindings (identity:manage) and the PDS (pds:manage)
+      { id: 'atproto', label: 'AT-Protocol', icon: 'atproto', perm: ['pki:manage', 'labels:manage', 'firehose:manage', 'identity:manage', 'pds:manage'], live: true },
+      { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true },
+      // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration, before Platform (design/platform-admin, Q13)
+      { id: 'storage', label: 'Storage', icon: 'storage', perm: 'platform:manage', live: true }, { id: 'configuration', label: 'Configuration', icon: 'configuration', perm: 'platform:manage', live: true },
+      // 1.6.0 (B-4203): Jobs and queues, beside Platform with the operator's screens
+      { id: 'jobs', label: 'Jobs and queues', icon: 'jobs', perm: ['platform:manage', 'tenant:manage'], live: true },
+      { id: 'platform', label: 'Platform', icon: 'platform', perm: 'platform:manage', live: true }
     ] }
   ];
   const NAV_BY_ID = {}; NAV.forEach((g) => g.items.forEach((it) => { NAV_BY_ID[it.id] = it; }));
@@ -221,7 +253,7 @@
     me: null, socket: null,
     api,
     get: (url) => api('GET', url), post: (url, body) => api('POST', url, body === undefined ? {} : body), patch: (url, body) => api('PATCH', url, body), del: (url) => api('DELETE', url),
-    can(perm) { return !!(App.me && App.me.permissions.indexOf(perm) >= 0); },
+    can(perm) { if (Array.isArray(perm)) return perm.some((p) => App.can(p)); return !!(App.me && App.me.permissions.indexOf(perm) >= 0); },
     canOpen(route) { if (OPEN_ROUTES[route]) return true; const it = NAV_BY_ID[route]; return !it || App.can(it.perm); },
     isLive(route) { const it = NAV_BY_ID[route]; return OPEN_ROUTES[route] || !!(it && it.live) || !!(screens[route] && screens[route].live); },
     /** Shows a problem's title, detail and trace id in a toast. */
@@ -311,6 +343,23 @@
         App.renderHeader(); App.toast('<b>' + esc(n.title) + '</b>' + (n.body ? ' ' + esc(n.body) : ''), 'warn', 6000);
       });
       App.socket = sock;
+      App.watchIdle(sock);
+    },
+    /**
+     * Presence (B-5802): tells the server when this console goes idle (five minutes without input, or the page hidden)
+     * and when it is used again, so an automatic status reads away while every console of the person is idle.
+     */
+    watchIdle(sock) {
+      const IDLE_MS = 5 * 60 * 1000;
+      let idle = false; let last = Date.now(); let timer = null;
+      const send = (v) => { if (idle === v) return; idle = v; if (sock.connected) sock.emit('presence.idle', { idle: v }); };
+      const arm = () => { clearTimeout(timer); timer = setTimeout(() => send(true), Math.max(1000, IDLE_MS - (Date.now() - last))); };
+      const active = () => { last = Date.now(); if (document.hidden) return; send(false); arm(); };
+      ['keydown', 'pointerdown', 'pointermove', 'wheel', 'focus'].forEach((ev) => window.addEventListener(ev, () => { if (Date.now() - last > 5000 || idle) active(); }, { passive: true }));
+      document.addEventListener('visibilitychange', () => { if (document.hidden) send(true); else active(); });
+      // A reconnected socket is a new connection on the server: it starts active, so say again if it is not.
+      sock.on('connect', () => { const was = idle; idle = false; if (was || document.hidden) send(true); });
+      arm();
     },
     /** Asks the server whether this browser already has a session, then renders. */
     async boot() {
@@ -667,7 +716,7 @@
 
   // not-found screen
   App.register({ id: 'not-found', title: 'Not found', crumb: ['Not found'], render(root, ctx) { root.innerHTML = '<div class="page">' + UI.problem('No such screen', 'The route in the address bar does not match a screen in the console.', false) + '<div>' + UI.btn('Open the screen map', { kind: 'primary', attrs: 'data-map' }) + '</div></div>'; ctx.on('click', '[data-map]', () => App.map()); } });
-  App.register({ id: 'forbidden', title: 'Not permitted', crumb: ['Not permitted'], render(root, ctx) { const it = NAV_BY_ID[state.route]; root.innerHTML = '<div class="page">' + UI.problem('You do not have access to ' + (it ? it.label : 'this screen'), 'It needs the ' + (it ? it.perm : '') + ' permission, which none of your roles grant. An identity admin can map your directory group to a role that does.', false) + '<div>' + UI.btn('Back to your workspace', { kind: 'primary', attrs: 'data-home' }) + '</div></div>'; ctx.on('click', '[data-home]', () => App.navigate(App.firstRoute())); } });
+  App.register({ id: 'forbidden', title: 'Not permitted', crumb: ['Not permitted'], render(root, ctx) { const it = NAV_BY_ID[state.route]; root.innerHTML = '<div class="page">' + UI.problem('You do not have access to ' + (it ? it.label : 'this screen'), 'It needs the ' + (it ? [].concat(it.perm).join(' or ') : '') + ' permission, which none of your roles grant. An identity admin can map your directory group to a role that does.', false) + '<div>' + UI.btn('Back to your workspace', { kind: 'primary', attrs: 'data-home' }) + '</div></div>'; ctx.on('click', '[data-home]', () => App.navigate(App.firstRoute())); } });
 
   // global events
   let tabTurn = 0;

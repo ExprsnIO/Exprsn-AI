@@ -4,6 +4,7 @@ import { actorFrom } from '../audit/chain.js';
 import { clears, isLabel, labelRank, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { safeEqual } from '../crypto/index.js';
+import type { Knex } from 'knex';
 import { json } from '../db/knex.js';
 import { loadPrincipal } from '../http/middleware.js';
 import { conflict, HttpProblem, notFound } from '../http/problem.js';
@@ -133,6 +134,18 @@ const MAX_EVENT_MS = 31 * 86_400_000;
 const FEED_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const SIG = /^[A-Za-z0-9_-]{43}$/;
 
+/**
+ * B-3603: reads an event's row inside a transaction with a row lock (SELECT … FOR UPDATE on PostgreSQL and MySQL), so
+ * whoever counts the places next waits for this transaction to finish. SQLite has no row locks and needs none here:
+ * it has one writer and the app gives it one connection, so its transactions already run one after another.
+ */
+export async function lockEventRow(trx: Knex.Transaction, eventId: string): Promise<{ capacity: number | null; state: string } | undefined> {
+  const q = trx('group_events').where({ id: eventId }).select('capacity', 'state');
+  const sqlite = /sqlite/.test(String(trx.client.config.client));
+  const r = (await (sqlite ? q : q.forUpdate()).first()) as { capacity: number | string | null; state: string } | undefined;
+  return r ? { capacity: r.capacity == null ? null : Number(r.capacity), state: String(r.state) } : undefined;
+}
+
 function badTime(detail: string): HttpProblem {
   return new HttpProblem(400, 'Invalid request', detail, { extensions: { errors: [{ path: 'start', message: detail }] } });
 }
@@ -252,10 +265,12 @@ export class CalendarService {
     const t = Date.now();
     const seal = (v: string | null | undefined, kind: string) => (v ? s.keys.seal(g.tenant_id, v, `event-${kind}:${id}`) : Promise.resolve(null));
     const reminders = [...new Set(input.reminders ?? [])].sort((x, y) => y - x);
+    // 1.6.0 (B-4206): an event without a capacity starts from its workspace's default (Social and messaging).
+    const capacity = input.capacity !== undefined ? input.capacity : (await s.socialAdmin.policy(g.tenant_id, g.workspace_id)).eventCapacity;
     const row = {
       id, tenant_id: g.tenant_id, group_id: g.id, workspace_id: g.workspace_id,
       title: (await seal(input.title, 'title'))!, description: await seal(input.description, 'description'), location: await seal(input.location, 'location'),
-      starts_at: start, ends_at: end, time_zone: input.timeZone, all_day: !!input.allDay, capacity: input.capacity ?? null, max_guests: input.maxGuests ?? 0,
+      starts_at: start, ends_at: end, time_zone: input.timeZone, all_day: !!input.allDay, capacity: capacity ?? null, max_guests: input.maxGuests ?? 0,
       reminders: JSON.stringify(reminders), label: g.label, state: 'scheduled', sequence: 0, cancel_reason: null, created_by: ctx.p.userId, created_at: t, updated_at: t
     };
     await s.db('group_events').insert(row);
@@ -403,10 +418,18 @@ export class CalendarService {
     if (guests > e.max_guests) throw new HttpProblem(422, 'Too many guests', e.max_guests ? `Bring at most ${e.max_guests} guest${e.max_guests === 1 ? '' : 's'}.` : 'This event does not allow guests.');
     const t = Date.now();
     await s.db.transaction(async (trx) => {
-      if (input.response === 'going' && e.capacity != null) {
-        const rows = (await trx('group_event_rsvps').where({ event_id: id, response: 'going' }).whereNot({ user_id: ctx.p.userId }).select('guests')) as { guests: number }[];
-        const taken = rows.reduce((n, r) => n + 1 + Number(r.guests), 0);
-        if (taken + 1 + guests > e.capacity) throw new HttpProblem(409, 'Event full', `The event holds ${e.capacity} people and ${Math.max(0, e.capacity - taken)} place${e.capacity - taken === 1 ? ' is' : 's are'} left.`, { extensions: { capacity: e.capacity, left: Math.max(0, e.capacity - taken) } });
+      if (input.response === 'going') {
+        // B-3603: lock the event row, then count the places from what is committed (and read the capacity and state
+        // again: they may have changed while this request waited for the lock).
+        const locked = await lockEventRow(trx, id);
+        if (!locked) throw notFound('Event');
+        if (locked.state !== 'scheduled') throw conflict(`The event is ${locked.state}.`);
+        const capacity = locked.capacity;
+        if (capacity != null) {
+          const rows = (await trx('group_event_rsvps').where({ event_id: id, response: 'going' }).whereNot({ user_id: ctx.p.userId }).select('guests')) as { guests: number }[];
+          const taken = rows.reduce((n, r) => n + 1 + Number(r.guests), 0);
+          if (taken + 1 + guests > capacity) throw new HttpProblem(409, 'Event full', `The event holds ${capacity} people and ${Math.max(0, capacity - taken)} place${capacity - taken === 1 ? ' is' : 's are'} left.`, { extensions: { capacity, left: Math.max(0, capacity - taken) } });
+        }
       }
       const existing = await trx('group_event_rsvps').where({ event_id: id, user_id: ctx.p.userId }).first();
       if (existing) await trx('group_event_rsvps').where({ event_id: id, user_id: ctx.p.userId }).update({ response: input.response, guests, updated_at: t });
@@ -574,15 +597,16 @@ export class CalendarService {
     return ((await this.db('calendar_feeds').where({ tenant_id: p.tenantId, user_id: p.userId }).orderBy('created_at', 'desc')) as Record<string, unknown>[]).map(feedFrom).map((f) => this.feedView(f));
   }
 
-  async revokeFeed(ctx: Ctx, id: string) {
+  /** `admin`: from Social and messaging (B-4206), where the route already required social:manage. */
+  async revokeFeed(ctx: Ctx, id: string, o: { admin?: boolean } = {}) {
     const r = await this.db('calendar_feeds').where({ tenant_id: ctx.p.tenantId, id }).first();
     if (!r) throw notFound('Feed');
     const f = feedFrom(r);
-    // Owners revoke their own feeds; groups:manage holders any feed in the tenant.
-    if (f.user_id !== ctx.p.userId && !effectivePermissions(ctx.p).has('groups:manage')) throw notFound('Feed');
+    // Owners revoke their own feeds; groups:manage holders (and social:manage, from the admin screen) any feed in the tenant.
+    if (f.user_id !== ctx.p.userId && !o.admin && !effectivePermissions(ctx.p).has('groups:manage')) throw notFound('Feed');
     if (f.revoked_at) return this.feedView(f);
     await this.db('calendar_feeds').where({ id: f.id }).update({ revoked_at: Date.now(), revoked_by: ctx.p.userId });
-    await this.audit(ctx, 'calendar.feed.revoked', { feed: f.id, kind: f.kind, owner: f.user_id });
+    await this.audit(ctx, 'calendar.feed.revoked', { feed: f.id, kind: f.kind, owner: f.user_id }, o.admin ? { via: 'social-admin' } : undefined);
     return this.feedView(feedFrom(await this.db('calendar_feeds').where({ id: f.id }).first()));
   }
 

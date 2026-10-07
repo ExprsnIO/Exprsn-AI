@@ -1,7 +1,12 @@
 import { test, expect, ready, expectLive, type Page } from './fixtures';
 
-// Every sidebar screen, in the order of the NAV table in web/js/app.js, plus Settings (opened from the avatar).
-export const SCREENS = ['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'connections', 'training', 'tenants', 'directories', 'identity', 'zones', 'usage-audit', 'platform'];
+// Every sidebar screen, in the order of the NAV table in web/js/app.js, plus Settings (opened from the avatar) and,
+// since 1.5.0 (B-5801), the Profile page (opened from people's names).
+export const SCREENS = ['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'files', 'apps', 'groups', 'messages', 'overview', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'moderation', 'channels', 'social', 'connections', 'training', 'tenants', 'roles', 'directories', 'identity', 'certificates', 'vault', 'plugins', 'atproto', 'zones', 'usage-audit', 'jobs', 'storage', 'configuration', 'platform'];
+
+/** The routes the accessibility and reflow specs walk: every screen and Settings, or only E2E_ONLY (comma-separated)
+ *  while writing a screen. */
+export const SWEEP: string[] = process.env.E2E_ONLY ? process.env.E2E_ONLY.split(',').map((r) => r.trim()).filter(Boolean) : [...SCREENS, 'settings', 'person'];
 
 export async function sweep(page: Page, routes: string[], shots: string | null) {
   const background: Record<string, string> = {};
@@ -41,7 +46,7 @@ export function everyScreen(title: string): void {
       test.setTimeout(180_000);
       await page.goto('/#/chat');
       await ready(page, 'chat');
-      await sweep(page, [...SCREENS, 'settings'], process.env.E2E_SCREENSHOTS ? testInfo.outputPath('shots') : null);
+      await sweep(page, [...SCREENS, 'settings', 'person'], process.env.E2E_SCREENSHOTS ? testInfo.outputPath('shots') : null);
     });
 
     test.describe('as a member', () => {
@@ -50,8 +55,8 @@ export function everyScreen(title: string): void {
         await page.goto('/#/chat');
         await ready(page, 'chat');
         const allowed = await page.evaluate((all) => all.filter((r) => (window as unknown as { App: { canOpen(r: string): boolean } }).App.canOpen(r)), SCREENS);
-        expect(allowed).toEqual(['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'media', 'images']);
-        await sweep(page, [...allowed, 'settings'], null);
+        expect(allowed).toEqual(['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'media', 'images', 'files', 'apps', 'groups', 'messages']);
+        await sweep(page, [...allowed, 'settings', 'person'], null);
       });
     });
   });

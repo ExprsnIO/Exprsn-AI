@@ -1,5 +1,5 @@
 import { test, expect, open, settle, type Page } from './support/fixtures';
-import { SCREENS } from './support/sweep';
+import { SCREENS, SWEEP } from './support/sweep';
 
 // B-1507 (WCAG 1.4.10 Reflow) for dialogs and drawers: at 320 CSS pixels (400 % zoom) and 640 (200 % zoom), each
 // screen's dialogs and drawers, opened through its design states (the boards' "States to design from this page",
@@ -62,7 +62,9 @@ function measure(page: Page): Promise<{ kind: 'modal' | 'drawer' | null; problem
 /**
  * Candidate controls on the screen that may open a dialog or a drawer, most likely first: actions named like a form
  * ("New", "Add", "Edit"…), then other buttons, then clickable rows and cards (which open detail drawers). Controls
- * whose name reads like a change (remove, revoke, approve…) are left out; tabs, segments and design-state cards too.
+ * whose name reads like a change (remove, revoke, approve…) are left out; tabs, segments and design-state cards too,
+ * and the Workflows step palette, whose buttons add a step to the draft (Workflows 2 made it longer than the sweep's
+ * 25 controls).
  */
 async function candidates(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -74,7 +76,7 @@ async function candidates(page: Page): Promise<string[]> {
     const els = Array.from(document.querySelectorAll('#main button, #main a[href="#"], #main tr[tabindex], #main tr.row, #main [role="button"], #main .listlink, #main [data-open], #main [data-doc], #main [data-src]'));
     for (const el of els) {
       if (!(el instanceof HTMLElement) || !el.getClientRects().length) continue;
-      if (el.matches(':disabled,[aria-disabled="true"],[role="tab"],.state-card,[data-state],[data-tab],[data-seg],.seg button,.tabs *') || el.closest('.states,.seg,.tabs,[role="tablist"]')) continue;
+      if (el.matches(':disabled,[aria-disabled="true"],[role="tab"],.state-card,[data-state],[data-tab],[data-seg],.seg button,.tabs *') || el.closest('.states,.seg,.tabs,[role="tablist"],[aria-label="Step palette"]')) continue;
       const name = (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ');
       if (risky.test(name)) continue;
       const key = el.tagName + '|' + name.slice(0, 40) + '|' + Array.from(el.attributes).filter((a) => a.name.startsWith('data-')).map((a) => a.name).join(',');
@@ -107,10 +109,13 @@ async function clickCandidate(page: Page, i: number): Promise<boolean> {
 
 /**
  * Screens whose dialogs and drawers the sweep reaches with the suite's data. If it stopped opening them, the check
- * would pass vacuously; every other screen is measured whenever it opens one.
+ * would pass vacuously; every other screen is measured whenever it opens one. Overview, Jobs and queues and
+ * Configuration open their dialogs only on state the sweep does not create (an instance to drain, a type to pause, a
+ * setting to override); their own specs (overview.spec.ts, jobs.spec.ts, storage-configuration.spec.ts) open each
+ * dialog and run this reflow check on it (B-4207).
  */
-const MODALS = SCREENS.filter((r) => !['memory', 'flags'].includes(r)).concat('settings');
-const DRAWERS = ['knowledge', 'memory', 'scripts', 'media', 'models', 'pools', 'training'];
+const MODALS = SCREENS.filter((r) => !['memory', 'flags', 'overview', 'jobs', 'configuration'].includes(r)).concat('settings').filter((r) => SWEEP.includes(r));
+const DRAWERS = ['knowledge', 'memory', 'scripts', 'media', 'models', 'pools', 'training'].filter((r) => SWEEP.includes(r));
 
 for (const width of [320, 640]) {
   test(`dialogs and drawers reflow at ${width} px`, async ({ page, watch }) => {
@@ -120,7 +125,7 @@ for (const width of [320, 640]) {
     await page.setViewportSize({ width, height: 800 });
     const failures: string[] = [];
     const opened: Record<string, Set<string>> = {};
-    for (const route of [...SCREENS, 'settings']) {
+    for (const route of SWEEP) {
       await test.step(route, async () => {
         await open(page, route);
         const seen = (opened[route] = new Set());

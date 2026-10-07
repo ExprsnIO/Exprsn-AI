@@ -60,6 +60,15 @@ export interface PostRow {
   updated_at: number;
   published_at: number | null;
   edited_at: number | null;
+  /** B-3904: what made the post when a person did not type it (a workflow run, an agent run, a plugin). */
+  source_kind?: string | null;
+  source_id?: string | null;
+}
+
+/** B-3904: the source a post records (`workflow-run`, `agent-run`, `message`, `plugin`…) and its id. */
+export interface PostSource {
+  kind: string;
+  id: string;
 }
 
 export interface CommentRow {
@@ -85,7 +94,7 @@ export interface Ctx {
 export interface Scope {
   p: Principal;
   workspaces: Map<string, Workspace>;
-  groups: Map<string, { workspaceId: string; label: Label; moderate: boolean; post: boolean }>;
+  groups: Map<string, { workspaceId: string; label: Label; moderate: boolean; post: boolean; archived?: boolean }>;
   labels: Label[];
   manage: boolean;
 }
@@ -176,12 +185,13 @@ export class FeedService {
     if (ws.length) {
       const manager = perms.has('groups:manage');
       const roles = new Map(((await this.db('group_members').where({ tenant_id: p.tenantId, user_id: p.userId }).select('group_id', 'role')) as { group_id: string; role: string }[]).map((m) => [m.group_id, m.role]));
-      const rows = (await this.db('social_groups').where({ tenant_id: p.tenantId, state: 'active' }).whereIn('workspace_id', [...workspaces.keys()]).select('id', 'workspace_id', 'visibility', 'label')) as { id: string; workspace_id: string; visibility: string; label: string }[];
+      // 1.6.0 (B-4206): an archived group's feed stays readable; nobody posts in it.
+      const rows = (await this.db('social_groups').where({ tenant_id: p.tenantId }).whereIn('state', ['active', 'archived']).whereIn('workspace_id', [...workspaces.keys()]).select('id', 'workspace_id', 'visibility', 'label', 'state')) as { id: string; workspace_id: string; visibility: string; label: string; state: string }[];
       for (const g of rows) {
         const label: Label = isLabel(g.label) ? g.label : 'restricted';
         const role = roles.get(g.id) ?? null;
         if (!clears(p.clearance, label) || !(manager || role || g.visibility === 'public')) continue;
-        groups.set(g.id, { workspaceId: g.workspace_id, label, moderate: manager || role === 'owner' || role === 'moderator', post: manager || !!role });
+        groups.set(g.id, { workspaceId: g.workspace_id, label, moderate: manager || role === 'owner' || role === 'moderator', post: g.state === 'active' && (manager || !!role), archived: g.state === 'archived' });
       }
     }
     return { p, workspaces, groups, labels: LABELS.filter((l) => clears(p.clearance, l)), manage: perms.has('feed:manage') };
@@ -225,9 +235,10 @@ export class FeedService {
   }
 
   /** A published post to act on (comment, react, repost, bookmark): a deleted one is refused as deleted. */
-  private async live(sc: Scope, id: string): Promise<PostRow> {
+  private async live(sc: Scope, id: string, o: { reading?: boolean } = {}): Promise<PostRow> {
     const x = await this.visible(sc, id, { deleted: 'conflict' });
     if (x.state !== 'published') throw conflict(x.state === 'held' ? 'The post waits for review.' : `The post is ${x.state}.`);
+    if (!o.reading && x.group_id && sc.groups.get(x.group_id)?.archived) throw conflict('The group is archived; it is read only.');
     return x;
   }
 
@@ -300,6 +311,7 @@ export class FeedService {
         label: x.label,
         state: x.state,
         repostOf: x.repost_of,
+        source: x.source_kind && x.source_id ? { kind: x.source_kind, id: x.source_id } : null,
         media: (mediaBy.get(x.id) ?? []).map((m) => ({ fileId: m.file_id, name: m.name, type: m.type, size: m.size == null ? null : Number(m.size), available: m.state === 'ready' && m.trashed_at == null })),
         tags: (tagsBy.get(x.id) ?? []).map((t) => t.tag),
         counts: { comments: commentsBy.get(x.id) ?? 0, reposts: repostsBy.get(x.id) ?? 0, reactions: counts },
@@ -449,7 +461,10 @@ export class FeedService {
   /** The `user-input` checkpoint for a post or comment: refusals throw; a hold is returned when it may wait for review. */
   private async guard(p: Principal, x: { id: string; workspaceId: string; groupId: string | null; label: Label }, text: string, kind: 'post' | 'comment', holdable: boolean): Promise<{ text: string; hold: GuardDecision | null; action: string }> {
     const s = this.s();
-    const d = await s.guardrails.check({ tenantId: p.tenantId, workspaceId: x.workspaceId, checkpoint: 'user-input', text, label: x.label, principal: p, source: { kind: kind === 'post' ? POST_OBJECT : COMMENT_OBJECT, id: x.id }, meta: { objectType: kind === 'post' ? POST_OBJECT : COMMENT_OBJECT, via: 'feed', workspace: x.workspaceId, group: x.groupId, tokens: Math.ceil(text.length / 4) } });
+    // 1.6.0 (B-4206): a workspace whose posts do not pass user-input in full keeps the platform baseline for posts
+    // labelled internal or below; anything above internal is always checked in full.
+    const baselineOnly = kind === 'post' && labelRank(x.label) <= labelRank('internal') && !(await s.socialAdmin.policy(p.tenantId, x.workspaceId)).feedGuard;
+    const d = await s.guardrails.check({ tenantId: p.tenantId, workspaceId: x.workspaceId, checkpoint: 'user-input', text, label: x.label, principal: p, source: { kind: kind === 'post' ? POST_OBJECT : COMMENT_OBJECT, id: x.id }, meta: { objectType: kind === 'post' ? POST_OBJECT : COMMENT_OBJECT, via: 'feed', workspace: x.workspaceId, group: x.groupId, tokens: Math.ceil(text.length / 4), ...(baselineOnly ? { baselineOnly: true } : {}) } });
     // A hold from a check that could not run is not a reviewer's to decide: it stays a refusal.
     const reviewable = d.action === 'require-approval' && holdable && d.findings.some((f) => f.stage === 'enforce' && f.action === 'require-approval' && !f.detail?.startsWith('unavailable:'));
     if (reviewable) return { text: d.text, hold: d, action: d.action };
@@ -487,17 +502,21 @@ export class FeedService {
     const s = this.s();
     const ids = [...new Set(fileIds)];
     if (ids.length > MAX_MEDIA) throw new HttpProblem(422, 'Too many files', `A post carries at most ${MAX_MEDIA} files.`);
+    // 1.6.0 (B-4206): the workspace's media policy (Social and messaging).
+    const pol = ids.length ? await s.socialAdmin.policy(p.tenantId, workspaceId) : null;
+    if (pol && !pol.feedMedia) throw new HttpProblem(422, 'No media here', 'Posts in this workspace carry no files.', { extensions: { step: 'workspace-policy' } });
     let label: Label = 'public';
     for (const id of ids) {
       const { file } = await s.files.readable(p, id);
       if (file.workspace_id !== workspaceId) throw new HttpProblem(422, 'File from another workspace', `${file.name} is in another workspace; attach files from the post's workspace.`);
+      if (pol?.feedMediaMaxBytes != null && Number(file.size) > pol.feedMediaMaxBytes) throw new HttpProblem(422, 'File too large', `${file.name} is larger than this workspace allows on posts (${Math.round(pol.feedMediaMaxBytes / 1048576)} MiB).`, { extensions: { step: 'workspace-policy' } });
       if (file.state !== 'ready') throw conflict(file.state === 'pending' ? `${file.name} is still in quarantine; attach it once its scan has finished.` : `${file.name} was rejected by the scan and cannot be attached.`);
       label = highest(label, file.label);
     }
     return { ids, label };
   }
 
-  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined }) {
+  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined; source?: PostSource | undefined }) {
     const s = this.s();
     const p = ctx.p;
     const sc = await this.scope(p);
@@ -512,7 +531,7 @@ export class FeedService {
     const id = ulid();
     const g = body ? await this.guard(p, { id, workspaceId: t.workspaceId, groupId: t.groupId, label }, body, 'post', true) : { text: '', hold: null, action: 'allow' };
     const now = Date.now();
-    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null };
+    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null, ...(input.source ? { source_kind: input.source.kind.slice(0, 40), source_id: input.source.id.slice(0, 64) } : {}) };
     await this.db.transaction(async (trx) => {
       await trx('feed_posts').insert(row);
       if (m.ids.length) await trx('feed_post_media').insert(m.ids.map((fileId, i) => ({ post_id: id, tenant_id: p.tenantId, file_id: fileId, position: i })));
@@ -552,7 +571,7 @@ export class FeedService {
   /** What follows publishing: hashtags, the audit entry, the catalogue event and the live feeds. */
   private async published(ctx: Ctx | null, x: PostRow, text: string, detail: Record<string, unknown>): Promise<void> {
     await this.indexTags(x, text);
-    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}) }, { length: text.length, ...detail }, x.label);
+    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}) }, { length: text.length, ...detail, ...(x.source_kind ? { source: { kind: x.source_kind, id: x.source_id } } : {}) }, x.label);
     this.event(x, 'post.created', x.author_id);
     await this.deliver(x, 'feed.post.created');
   }
@@ -632,6 +651,11 @@ export class FeedService {
     if (x.state === 'deleted') return { postId: x.id, state: x.state };
     if (x.state !== 'held') throw conflict(`The post is ${x.state}, not waiting for review.`);
     if (x.author_id === p.userId) throw forbidden('You cannot decide on your own post.', { step: 'dual-control' });
+    // 1.6.0 (B-4206): who approves held posts in this workspace (Social and messaging).
+    const approver = (await this.s().socialAdmin.policy(x.tenant_id, x.workspace_id)).feedApprover;
+    // `reviewers` (the default): any reviewer of the flag queue (flags:review, checked by the route) decides.
+    const need = approver === 'guardrails' ? 'guardrails:manage' : approver === 'moderators' ? 'moderation:review' : approver === 'feed' ? 'feed:manage' : null;
+    if (need && !effectivePermissions(p).has(need)) throw forbidden(`Held posts in this workspace are decided by holders of ${need}.`, { step: 'approver', permission: need });
     const now = Date.now();
     const state: PostState = decision === 'approved' ? 'published' : 'rejected';
     const n = await this.db('feed_posts').where({ id: x.id, state: 'held' }).update({ state, updated_at: now, ...(state === 'published' ? { published_at: now } : {}) });
@@ -834,7 +858,7 @@ export class FeedService {
   async bookmark(ctx: Ctx, postId: string) {
     const p = ctx.p;
     const sc = await this.scope(p);
-    const x = await this.live(sc, postId);
+    const x = await this.live(sc, postId, { reading: true });
     let added = true;
     try {
       await this.db('feed_bookmarks').insert({ tenant_id: p.tenantId, user_id: p.userId, post_id: x.id, created_at: Date.now() });

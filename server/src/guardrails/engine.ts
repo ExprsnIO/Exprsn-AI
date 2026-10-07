@@ -168,7 +168,10 @@ export class GuardrailEngine implements Guardrails {
   async check(input: GuardInput): Promise<GuardDecision> {
     const t0 = performance.now();
     const agent = typeof input.meta?.agent === 'string' ? input.meta.agent : null;
-    const active = (await this.sets.forCheck(input.tenantId, input.workspaceId, agent)).filter((a) => a.rule.enabled && a.rule.checkpoint === input.checkpoint);
+    // 1.6.0 (B-4206): `meta.baselineOnly` (a workspace's posts that do not pass user-input in full) keeps the platform
+    // baseline only; nothing can relax it.
+    const baselineOnly = input.meta?.baselineOnly === true;
+    const active = (await this.sets.forCheck(input.tenantId, input.workspaceId, agent)).filter((a) => a.rule.enabled && a.rule.checkpoint === input.checkpoint && (!baselineOnly || a.set.scope === 'platform'));
     const results = await Promise.all(active.map(async (a) => ({ a, r: await this.evaluate(a.rule, input) })));
     // Where a failure must not fall open: confidential and above, and turns that can call tools.
     const sensitive = labelRank(input.label) >= labelRank('confidential') || input.checkpoint === 'tool-call' || input.meta?.tools === true;

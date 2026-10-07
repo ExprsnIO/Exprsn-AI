@@ -17,7 +17,7 @@ import { LABELS } from '../authz/labels.js';
  * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
  */
 
-export const CATALOGUE_VERSION = 5;
+export const CATALOGUE_VERSION = 9;
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -44,8 +44,10 @@ export const EVENT_GROUPS: EventGroup[] = [
   { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
   { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened' },
   { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
-  { pattern: 'workflow.*', description: 'Workflow runs and approvals (audit actions)' },
+  { pattern: 'workflow.*', description: 'Workflow runs and approvals; since 1.5.0 also triggers set, removed, updated, fired, skipped and throttled (workflow.trigger.*), runs dead-lettered and redriven, and bundles exported, imported and refused (audit actions)' },
   { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
+  // 1.5.0, Sprint 32 (B-4101)
+  { pattern: 'chain.*', description: 'The chain context: invocations the chain rules refused (chain.refused: depth, per-kind depth, principal, budget) and chains stopped at their root\'s budget (chain.stopped) (audit actions)' },
   { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
   { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
   { pattern: 'authz.*', description: 'Authorisation denials; since 1.5.0 also custom roles created, proposed, approved, rejected, withdrawn, updated and retired (authz.role.*) and access reviews created, opened, confirmed, revoked, escalated, closed and cancelled (authz.review.*) (audit actions)' },
@@ -56,7 +58,7 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0 (B-2001)
   { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
   // 1.4.0, Sprint 25 (B-1608 to B-1611)
-  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*) (audit actions)' },
+  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*); since 1.5.0 relay commits rejected (atproto.firehose.commit.rejected), feed generators created, updated, deleted, published and unpublished (atproto.feed.*) and DID services added (atproto.identity.service-added) (audit actions)' },
   { pattern: 'record.*', description: 'Low-code app records (Sprint 27): created, updated, deleted, transitioned' },
   // 1.4.0, Sprint 27 (B-2201 to B-2208)
   { pattern: 'app.*', description: 'Low-code apps: apps, entities, record changes, imports and exports, forms and public submissions, triggers fired and skipped, AI fields, bundles and drafts (audit actions; never record values)' },
@@ -74,7 +76,15 @@ export const EVENT_GROUPS: EventGroup[] = [
   // 1.4.0, Sprint 26 (B-1901 to B-1907)
   { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
   // 1.4.0, Sprint 25c (B-1704 to B-1706)
-  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' }
+  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' },
+  // 1.5.0, Sprint 30 (B-3101 to B-3103)
+  { pattern: 'dav.*', description: 'CalDAV and CardDAV: app passwords created and revoked; personal calendars and address books created, changed and deleted; objects created, updated, copied, moved and deleted; properties changed (audit actions; never the content)' },
+  // 1.5.0, Sprint 30 (B-3701 to B-3703)
+  { pattern: 'memory.*', description: 'Memory: added, edited, proposed, accepted, rejected, merged, forgotten and exported; proposals refused by the memory checkpoint, extraction fallbacks to the rules, consolidation runs, merge and expiry proposals and their decisions, settings changes and reindexes (audit actions; never the text)' },
+  // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004)
+  { pattern: 'pds.*', description: 'The AT-Protocol PDS: hosting enabled, disabled and its settings; accounts created, deactivated, activated, taken down, restored and their handles; app passwords, sessions, invite codes and service tokens; repo commits and imports (counts, never record content); blobs stored and rejected by the scan; PLC operations signed and submitted; relays asked to crawl; feed generator records published and withdrawn (audit actions)' },
+  // 1.5.0, Sprint 30 (B-3801 to B-3803)
+  { pattern: 'import.*', description: 'Imports: repositories proposed, confirmed, rejected, updated, enabled, disabled, deleted and harvested; gates accepted; imports requested, refused, completed, failed, cancelled and retried; licence exceptions requested, granted and refused; the licence allow-list and the import quota (audit actions; never credentials)' }
 ];
 
 const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };

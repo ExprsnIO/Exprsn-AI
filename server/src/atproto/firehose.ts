@@ -9,6 +9,8 @@ import { json } from '../db/knex.js';
 import { conflict, forbidden, HttpProblem } from '../http/problem.js';
 import { checkServiceUrl, literalProblem, serviceLookup, servicePolicy, ServiceUrlRefused } from '../platform/egress.js';
 import type { Services } from '../services.js';
+import { CommitVerifier, type CommitCheck, type CommitProof } from './commit.js';
+import { DidResolver } from './did.js';
 import { collectionAllowed, parseJetstream, parseRepoFrame, recordText, sampled, type FirehoseMessage, type FirehoseProtocol, type Parsed } from './firehose-frames.js';
 
 /*
@@ -34,6 +36,16 @@ import { collectionAllowed, parseJetstream, parseRepoFrame, recordText, sampled,
  * disconnect or FIREHOSE_IDLE_MS without a message.
  *
  * The endpoint is an operator-chosen service URL: checked when saved and at every connection (B-901, `egress.ts`).
+ *
+ * Relay commits (B-3604). A subscribeRepos `#commit` is believed only when its signature verifies against the repo's
+ * `#atproto` key and every operation used is proven against the signed tree (`commit.ts`). One that fails is dropped
+ * whole (its posts are neither checked nor indexed, the cursor still moves past it), counted in `rejected` and audited
+ * as `atproto.firehose.commit.rejected`, at most FIREHOSE_REJECT_AUDITS a minute per subscription, with the rest
+ * summed in the next audit. Jetstream messages carry no signatures (Jetstream re-encodes the relay's commits as JSON):
+ * a Jetstream endpoint is trusted as the operator's choice.
+ *
+ * Feeds (B-3002). Each post that passed the moderation check, and each delete, goes on to the tenant's feed generators
+ * (`feeds.ts`), which index the ones their rules take.
  */
 
 export const FIREHOSE_TOPIC = 'atproto.firehose.changed';
@@ -48,6 +60,8 @@ export interface FirehoseOptions {
   backoffMaxMs: number;
   idleMs: number;
   maxPerTenant: number;
+  /** B-3604: the most `atproto.firehose.commit.rejected` audits a subscription writes in a minute. */
+  rejectAudits?: number;
 }
 
 export interface SubscriptionRow {
@@ -76,6 +90,7 @@ export interface SubscriptionRow {
   labelled: number;
   failed: number;
   reconnects: number;
+  rejected: number;
   created_by: string | null;
   created_at: number;
   updated_at: number;
@@ -108,6 +123,7 @@ interface Counts {
   labelled: number;
   failed: number;
   reconnects: number;
+  rejected: number;
 }
 
 const num = (v: unknown): number => Number(v ?? 0);
@@ -130,6 +146,7 @@ const subFrom = (r: Record<string, unknown>): SubscriptionRow => ({
   labelled: num(r.labelled),
   failed: num(r.failed),
   reconnects: num(r.reconnects),
+  rejected: num(r.rejected),
   created_at: num(r.created_at),
   updated_at: num(r.updated_at)
 });
@@ -150,15 +167,21 @@ export function streamUrl(row: Pick<SubscriptionRow, 'protocol' | 'endpoint' | '
   return url;
 }
 
-interface Post {
+export interface Post {
   uri: string;
   cid: string | null;
   text: string;
+  did: string;
+  collection: string;
 }
 
 interface Item {
   cursor: number;
   posts: Post[];
+  /** Deleted records' URIs (taken out of the feed indexes). */
+  deletes: string[];
+  /** subscribeRepos: the commit to verify first, narrowed to the operations used (B-3604). */
+  proof?: CommitProof;
 }
 
 interface FirehoseMetrics {
@@ -185,7 +208,9 @@ class Consumer {
   private status: SubscriptionRow['status'] = 'connecting';
   private lastError: string | null = null;
   private lastEventAt: number | null = null;
-  private readonly pending: Counts = { received: 0, checked: 0, flagged: 0, labelled: 0, failed: 0, reconnects: 0 };
+  private readonly pending: Counts = { received: 0, checked: 0, flagged: 0, labelled: 0, failed: 0, reconnects: 0, rejected: 0 };
+  /** B-3604: rejection audits written in the current minute, and the ones left out of it. */
+  private rejectWindow = { start: 0, written: 0, skipped: 0 };
   private working: Promise<void> | null = null;
   private saving: Promise<boolean> = Promise.resolve(true);
   private idle: NodeJS.Timeout | null = null;
@@ -323,21 +348,32 @@ class Consumer {
     this.lastEventAt = Date.now();
     if (msg.time !== null) this.gauge(this.m.metrics.lag, Math.max(0, (Date.now() - msg.time) / 1000));
     const posts: Post[] = [];
+    const deletes: string[] = [];
+    const used = new Set<string>();
     for (const op of msg.ops) {
       const uri = `at://${op.did}/${op.collection}/${op.rkey}`;
+      const wanted = collectionAllowed(op.collection, this.row.collections) && (!this.didSet || this.didSet.has(op.did)) && sampled(uri, this.row.sample_ppm);
+      if (wanted && op.action === 'delete') {
+        deletes.push(uri);
+        used.add(`${op.collection}/${op.rkey}`);
+        continue;
+      }
       const text = op.action === 'delete' ? '' : recordText(op.record);
-      if (!text || !collectionAllowed(op.collection, this.row.collections) || (this.didSet && !this.didSet.has(op.did)) || !sampled(uri, this.row.sample_ppm)) {
+      if (!text || !wanted) {
         ev.inc({ result: 'skipped' });
         continue;
       }
-      posts.push({ uri, cid: op.cid, text });
+      posts.push({ uri, cid: op.cid, text, did: op.did, collection: op.collection });
+      used.add(`${op.collection}/${op.rkey}`);
     }
     // Nothing to check and nothing ahead of it: the cursor moves at once.
-    if (!posts.length && !this.queue.length && !this.working) {
+    if (!posts.length && !deletes.length && !this.queue.length && !this.working) {
       this.cursor = msg.cursor;
       return;
     }
-    this.queue.push({ cursor: msg.cursor, posts });
+    // Only the operations used need proving (B-3604); the signature covers the whole commit either way.
+    const proof = msg.proof && (posts.length || deletes.length) ? { ...msg.proof, ops: msg.proof.ops.filter((o) => used.has(o.path)) } : undefined;
+    this.queue.push({ cursor: msg.cursor, posts, deletes, ...(proof ? { proof } : {}) });
     this.gauge(this.m.metrics.queue, this.queue.length);
     if (this.queue.length >= this.m.o.queueMax && !this.paused && this.ws) {
       this.ws.pause();
@@ -363,7 +399,21 @@ class Consumer {
   private async drain(): Promise<void> {
     while (!this.stopped && this.queue.length) {
       const item = this.queue[0]!;
-      for (const p of item.posts) if (!(await this.checkPost(p))) return; // stopped: the item is taken again next time
+      // Deletes matter only to feeds: without any, they need neither proof nor work.
+      let { proof, deletes } = item;
+      if (deletes.length && !(await this.m.feeds()?.hasActive(this.row.tenant_id))) {
+        deletes = [];
+        if (proof) proof = { ...proof, ops: proof.ops.filter((o) => o.action !== 'delete') };
+      }
+      if (item.posts.length || deletes.length) {
+        const verdict = proof ? await this.m.verifier.verify(proof) : null;
+        if (this.stopped) return;
+        if (verdict && !verdict.ok) await this.reject(item, verdict);
+        else {
+          for (const p of item.posts) if (!(await this.checkPost(p))) return; // stopped: the item is taken again next time
+          for (const uri of deletes) await this.m.feeds()?.forget(this.row.tenant_id, uri).catch((err: unknown) => this.s.log.warn({ err, subscription: this.row.id }, 'firehose: removing a deleted post from the feeds failed'));
+        }
+      }
       this.queue.shift();
       this.cursor = item.cursor;
       this.gauge(this.m.metrics.queue, this.queue.length);
@@ -395,6 +445,13 @@ class Consumer {
           ev.inc({ result: 'labelled' });
         }
         if (r.labelError) this.lastError = `Labelling ${p.uri.slice(0, 200)} failed: ${r.labelError}`.slice(0, 500);
+        // B-3002: the feed generators index what their rules take (a failure there does not undo the check).
+        await this.m
+          .feeds()
+          ?.ingest(this.row, p, { action: r.verdict.action, labels: r.labels })
+          .catch((err: unknown) => {
+            this.lastError = `Indexing ${p.uri.slice(0, 200)} for the feeds failed: ${(err as Error).message}`.slice(0, 500);
+          });
         return true;
       } catch (err) {
         // A refusal about the object itself will not change; anything else (the database, a lock) is tried again.
@@ -408,6 +465,30 @@ class Consumer {
         await sleep(250 * attempt);
       }
     }
+  }
+
+  /** B-3604: a commit that did not verify. Its posts are dropped; it is counted and audited (rate-limited). */
+  private async reject(item: Item, v: Extract<CommitCheck, { ok: false }>): Promise<void> {
+    this.pending.rejected++;
+    this.m.metrics.events.inc({ result: 'rejected' });
+    const repo = item.proof?.repo ?? '';
+    this.lastError = `A commit from ${repo.slice(0, 200)} was dropped (${v.reason}): ${v.detail}`.slice(0, 500);
+    const now = Date.now();
+    const w = this.rejectWindow;
+    if (now - w.start >= 60_000) {
+      w.start = now;
+      w.written = 0;
+    }
+    if (w.written >= (this.m.o.rejectAudits ?? 20)) {
+      w.skipped++;
+      return;
+    }
+    w.written++;
+    const more = w.skipped;
+    w.skipped = 0;
+    await this.s.audit
+      .append({ tenantId: this.row.tenant_id, action: 'atproto.firehose.commit.rejected', kind: 'system', actor: { service: 'atproto-firehose' }, target: { subscription: this.row.id, did: repo.slice(0, 300) }, label: 'internal', detail: { reason: v.reason, detail: v.detail, seq: item.cursor, posts: item.posts.length, deletes: item.deletes.length, ...(more ? { more } : {}) }, traceId: null })
+      .catch((err: unknown) => this.s.log.warn({ err, subscription: this.row.id }, 'firehose: auditing a rejected commit failed'));
   }
 
   /**
@@ -434,7 +515,8 @@ class Consumer {
             flagged: db.raw('flagged + ?', [d.flagged]),
             labelled: db.raw('labelled + ?', [d.labelled]),
             failed: db.raw('failed + ?', [d.failed]),
-            reconnects: db.raw('reconnects + ?', [d.reconnects])
+            reconnects: db.raw('reconnects + ?', [d.reconnects]),
+            rejected: db.raw('rejected + ?', [d.rejected])
           });
         return n === 1;
       } catch (err) {
@@ -476,11 +558,28 @@ export class FirehoseService {
   private closed = false;
   private offBus: (() => void) | null = null;
   private m: FirehoseMetrics | null = null;
+  private v: CommitVerifier | null = null;
 
   constructor(
     private readonly s: () => Services,
     readonly o: FirehoseOptions
   ) {}
+
+  /**
+   * B-3604: the commit verifier. Repo DIDs are resolved through the AT-Protocol service's guarded fetch (the service
+   * URL checks, B-901) with their own cache, larger than the labelers' since a relay carries many repos.
+   */
+  get verifier(): CommitVerifier {
+    if (this.v) return this.v;
+    const s = this.s();
+    this.v = new CommitVerifier(new DidResolver(s.atproto.http, () => s.cfg.ATPROTO_PLC_URL, 5 * 60_000, 50_000));
+    return this.v;
+  }
+
+  /** B-3002: the feed generators, when the services carry them. */
+  feeds(): Services['feedGenerators'] | null {
+    return this.s().feedGenerators ?? null;
+  }
 
   get services(): Services {
     return this.s();
@@ -492,7 +591,7 @@ export class FirehoseService {
     const counter = <T extends string>(name: string, help: string, labelNames: T[]) => (reg.getSingleMetric(name) as client.Counter<T> | undefined) ?? new client.Counter({ name, help, labelNames, registers: [reg] });
     const gauge = (name: string, help: string) => (reg.getSingleMetric(name) as client.Gauge<'subscription'> | undefined) ?? new client.Gauge({ name, help, labelNames: ['subscription'], registers: [reg] });
     this.m = {
-      events: counter('exprsn_firehose_events_total', 'Firehose messages and posts by outcome: received, skipped, checked, flagged, labelled, failed, error', ['result']),
+      events: counter('exprsn_firehose_events_total', 'Firehose messages and posts by outcome: received, skipped, checked, flagged, labelled, failed, error, rejected (a relay commit that did not verify)', ['result']),
       reconnects: counter<string>('exprsn_firehose_reconnects_total', 'Firehose reconnections (after a disconnect, an error or silence)', []),
       pauses: counter<string>('exprsn_firehose_pauses_total', 'Times a firehose socket was paused because its queue was full', []),
       queue: gauge('exprsn_firehose_queue_depth', 'Messages waiting in a firehose consumer queue'),
@@ -577,6 +676,7 @@ export class FirehoseService {
         labelled: 0,
         failed: 0,
         reconnects: 0,
+        rejected: 0,
         created_by: by.userId,
         created_at: now,
         updated_at: now
@@ -681,7 +781,7 @@ export class FirehoseService {
       cursorAt: row.cursor_at,
       lastEventAt: row.last_event_at,
       lastError: row.last_error,
-      counts: { received: row.received, checked: row.checked, flagged: row.flagged, labelled: row.labelled, failed: row.failed },
+      counts: { received: row.received, checked: row.checked, flagged: row.flagged, labelled: row.labelled, failed: row.failed, rejected: row.rejected },
       reconnects: row.reconnects,
       rev: row.rev,
       live: local ? local.view() : null,

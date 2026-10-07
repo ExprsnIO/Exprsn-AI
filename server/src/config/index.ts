@@ -112,6 +112,20 @@ const base = z.object({
     /** Workflows: HTTP steps only call internal (private) addresses; this comma list narrows the hosts further. */
     WORKFLOW_HTTP_HOSTS: z.string().default(''),
     WORKFLOW_HTTP_ALLOW_LOOPBACK: bool.default(false),
+    /**
+     * Sprint 32 (B-4101): the chain context. Every invocation (chat turn, agent run, workflow run, tool call, skill load,
+     * plugin action, app trigger) is a node in its root's chain; a chain is at most CHAIN_MAX_DEPTH deep across kinds,
+     * with WORKFLOW_MAX_DEPTH nested workflow runs and AGENT_MAX_DEPTH nested agent runs as per-kind caps (the plugin
+     * and app trigger depths stay as they are). A root without budgets of its own (a chat turn, a plugin action, an app
+     * trigger) gets CHAIN_MAX_TOKENS, CHAIN_MAX_STEPS, CHAIN_MAX_WALL_SECONDS and CHAIN_MAX_GPU_SECONDS (the cost meter).
+     */
+    CHAIN_MAX_DEPTH: z.coerce.number().int().min(2).max(32).default(8),
+    WORKFLOW_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    AGENT_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    CHAIN_MAX_TOKENS: z.coerce.number().int().min(1000).max(10_000_000).default(200_000),
+    CHAIN_MAX_STEPS: z.coerce.number().int().min(10).max(100_000).default(400),
+    CHAIN_MAX_WALL_SECONDS: z.coerce.number().int().min(10).max(7 * 86_400).default(7200),
+    CHAIN_MAX_GPU_SECONDS: z.coerce.number().int().min(1).max(10_000_000).default(3600),
 
     /** Media: ffmpeg and ffprobe binaries, encoder choice, caps, and whisper.cpp for transcripts. */
     MEDIA_FFMPEG: z.string().default('ffmpeg'),
@@ -563,6 +577,56 @@ const base = z.object({
     FIREHOSE_IDLE_MS: z.coerce.number().int().min(100).max(3_600_000).default(90_000),
     FIREHOSE_MAX_PER_TENANT: z.coerce.number().int().min(0).max(1000).default(10),
     /**
+     * Sprint 31 (B-3604, B-3001 to B-3003): a subscription audits at most FIREHOSE_REJECT_AUDITS relay commits that
+     * failed verification a minute (the rest are counted and summed in the next audit). A tenant has at most
+     * FEEDS_MAX_PER_TENANT feed generators, each keeping at most FEED_ITEMS_MAX posts; feed indexes are pruned to their
+     * retention every FEED_PRUNE_MINUTES (0: never).
+     */
+    FIREHOSE_REJECT_AUDITS: z.coerce.number().int().min(0).max(10_000).default(20),
+    FEEDS_MAX_PER_TENANT: z.coerce.number().int().min(0).max(1000).default(20),
+    FEED_ITEMS_MAX: z.coerce.number().int().min(10).max(10_000_000).default(50_000),
+    FEED_PRUNE_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /**
+     * 1.5.0, Sprint 31 (B-2901 to B-2906): the AT-Protocol personal data server. PDS_PUBLIC_URL is the PDS's public
+     * https base (default ATPROTO_PUBLIC_URL, then PUBLIC_URL): accounts' DID documents name it as their
+     * `#atproto_pds` and relays crawl it. Handles are `<name>.<tenant>.<PDS_HANDLE_DOMAIN>` (default the PDS host
+     * name; the operator points a wildcard DNS record for each tenant at the server). Hosting is enabled per tenant by
+     * a platform admin, in PDS_ZONE (the zone must have egress to the network: relays and the PLC directory).
+     * PDS_RELAYS (comma-separated https URLs) are asked to crawl the PDS (`requestCrawl`) at most every
+     * PDS_CRAWL_MINUTES after a change; subscribeRepos replays PDS_BACKFILL_HOURS of events to a cursor, with at most
+     * PDS_SUBSCRIBERS_MAX open streams per instance. Blobs are at most PDS_BLOB_MAX_BYTES (a tenant may lower it) and
+     * of the PDS_BLOB_TYPES MIME types. Access tokens last PDS_ACCESS_MINUTES, refresh tokens PDS_REFRESH_DAYS.
+     * XRPC calls are capped per address by PDS_RATE_PER_MINUTE and repo writes per account by PDS_WRITES_PER_HOUR. A
+     * repo imported by a migration (`importRepo`, read whole to verify it) is at most PDS_IMPORT_MAX_BYTES.
+     */
+    PDS_PUBLIC_URL: z.url().optional(),
+    PDS_HANDLE_DOMAIN: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .max(200)
+      .regex(/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/)
+      .optional(),
+    PDS_ZONE: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).default('edge'),
+    PDS_RELAYS: z
+      .string()
+      .default('')
+      .transform((v) => v.split(',').map((x) => x.trim()).filter(Boolean))
+      .pipe(z.array(z.url()).max(20)),
+    PDS_CRAWL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(20),
+    PDS_BACKFILL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(72),
+    PDS_SUBSCRIBERS_MAX: z.coerce.number().int().min(1).max(100_000).default(200),
+    PDS_BLOB_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(50 * 1024 * 1024),
+    PDS_BLOB_TYPES: z
+      .string()
+      .default('image/png,image/jpeg,image/webp,image/gif,video/mp4')
+      .transform((v) => v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)),
+    PDS_ACCESS_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60),
+    PDS_REFRESH_DAYS: z.coerce.number().int().min(1).max(365).default(60),
+    PDS_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(3000),
+    PDS_WRITES_PER_HOUR: z.coerce.number().int().min(1).max(1_000_000).default(5000),
+    PDS_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(64 * 1024 * 1024),
+    /**
      * Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions are limited per address to
      * APPS_PUBLIC_FORM_PER_MINUTE (each form also has its own limit). A CSV import is at most APPS_IMPORT_MAX_BYTES (it
      * travels in the JSON body, so within the API's 256 kB limit) and APPS_IMPORT_MAX_ROWS rows; an export at most
@@ -576,6 +640,15 @@ const base = z.object({
     APPS_BULK_MAX: z.coerce.number().int().min(1).max(1000).default(500),
     APPS_TRIGGER_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
     APPS_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
+     * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
+     * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of
+     * WORKFLOW_EVENT_MAX_DEPTH workflows is dropped (the cap B-4101's chain context keeps for this kind). Schedule
+     * triggers are checked every WORKFLOW_SCHEDULE_TICK_SECONDS (0 turns them off).
+     */
+    WORKFLOW_EVENT_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(100_000).default(60),
+    WORKFLOW_EVENT_MAX_DEPTH: z.coerce.number().int().min(1).max(10).default(3),
+    WORKFLOW_SCHEDULE_TICK_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
     /**
      * Sprint 27c (B-2501, B-2504): groups and events. Invitations expire after GROUP_INVITE_DAYS and join requests after
      * GROUP_REQUEST_DAYS. Signed calendar feeds are rate-limited per address (CALENDAR_FEED_PER_MINUTE) and show
@@ -632,8 +705,52 @@ const base = z.object({
     FEED_TRENDING_HOURS: z.coerce.number().int().min(1).max(30 * 24).default(72),
     FEED_DIGEST_PROFILE: z.string().trim().max(200).optional(),
     FEED_DIGEST_TOP: z.coerce.number().int().min(1).max(50).default(5),
-    FEED_DIGEST_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal')
+    FEED_DIGEST_MAX_LABEL: z.enum(['public', 'internal', 'confidential', 'restricted']).default('internal'),
+    /**
+     * 1.5.0, Sprint 30 (B-3801 to B-3803): imports from public repositories. IMPORT_CONNECTIVITY `bundle` marks an
+     * air-gapped instance: requests queue for the weekly signed bundle instead of reaching out. Outbound calls go
+     * through IMPORT_PROXY_URL (the staging proxy) when set, and only to the hosts of confirmed repositories plus
+     * IMPORT_ALLOWED_HOSTS (which, like SERVICE_ALLOWED_HOSTS, also admits a link-local host; metadata addresses never).
+     * Downloads are stored in parts of IMPORT_PART_BYTES so an interrupted one resumes; one import fetches at most
+     * IMPORT_MAX_BYTES. A harvest keeps at most IMPORT_HARVEST_MAX_ITEMS items per repository; due harvests are queued
+     * every IMPORT_HARVEST_TICK_MINUTES (0 turns schedules off) and promoted bundles are matched to queued requests
+     * every IMPORT_BUNDLE_POLL_MINUTES. A rate-limited source backs off up to IMPORT_BACKOFF_MAX_MINUTES. Dataset
+     * imports draw on a quota of IMPORT_DATASET_QUOTA_GB per tenant unless a system admin sets another.
+     */
+    IMPORT_CONNECTIVITY: z.enum(['direct', 'bundle']).default('direct'),
+    IMPORT_PROXY_URL: z.string().url().optional(),
+    IMPORT_ALLOWED_HOSTS: z.string().default(''),
+    IMPORT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(60_000),
+    IMPORT_PART_BYTES: z.coerce.number().int().min(1024).max(1024 * 1024 * 1024).default(64 * 1024 * 1024),
+    IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 ** 4).default(500 * 1024 ** 3),
+    IMPORT_HARVEST_MAX_ITEMS: z.coerce.number().int().min(10).max(1_000_000).default(20_000),
+    IMPORT_HARVEST_TICK_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(5),
+    IMPORT_BUNDLE_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    IMPORT_BACKOFF_MAX_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(360),
+    IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500),
+    // --- 1.6.0, Sprint 35c: storage and configuration (edit only inside this block) ---
+    /**
+     * B-4205: settings the Configuration screen may override from the database, each only after a second platform
+     * admin approves (off: settings are managed in the environment only). Every instance reports the values it reads
+     * every PLATFORM_INSTANCE_REPORT_SECONDS under INSTANCE_NAME (default the host name), so instances that disagree
+     * show as differing.
+     */
+    PLATFORM_SETTINGS_OVERRIDES: bool.default(true),
+    INSTANCE_NAME: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    PLATFORM_INSTANCE_REPORT_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
+    /**
+     * B-4204: the blob integrity check (ops.blobs.verify) runs every BLOBS_VERIFY_MINUTES (0 turns the schedule off;
+     * it can still be started from Storage). An object younger than BLOBS_ORPHAN_GRACE_HOURS is never an orphan (an
+     * upload may still be writing its row), and a dry run of orphan deletion stays valid for BLOBS_DRY_RUN_MINUTES.
+     */
+    BLOBS_VERIFY_MINUTES: z.coerce.number().int().min(0).max(30 * 24 * 60).default(24 * 60),
+    BLOBS_ORPHAN_GRACE_HOURS: z.coerce.number().int().min(1).max(24 * 365).default(24),
+    BLOBS_DRY_RUN_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(60)
+    // --- end Sprint 35c ---
   });
+
+/** B-4205: the fields of the environment schema, for the settings descriptor and for checking an override's value. */
+export const CONFIG_FIELDS = base.shape;
 
 /** Every variable the server reads for its own configuration (and the `<NAME>_FILE` forms of the secrets). */
 export const SERVER_ENV_NAMES: ReadonlySet<string> = new Set([...Object.keys(base.shape), ...FILE_VARS.map((n) => `${n}_FILE`)]);
@@ -772,6 +889,19 @@ function inlineKeyProblems(env: NodeJS.ProcessEnv): string[] {
   return out;
 }
 
+const CONFIG_ENV = Symbol.for('exprsn.config.env');
+
+/**
+ * B-4205: the configuration the environment gives with `overrides` (database overrides, as strings) on top, checked
+ * by the same schema and cross-field rules as at start. Errors are the schema's messages, one per problem.
+ */
+export function parseConfigWith(env: NodeJS.ProcessEnv, overrides: Record<string, string>): { ok: true; config: Config } | { ok: false; errors: string[] } {
+  const merged = { ...readEnv(env), ...overrides };
+  const parsed = schema.safeParse(merged);
+  if (parsed.success) return { ok: true, config: parsed.data };
+  return { ok: false, errors: parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`) };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(readEnv(env));
   const inline = inlineKeyProblems(env);
@@ -779,5 +909,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const lines = [...inline, ...(parsed.success ? [] : parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`))];
     throw new Error(`Invalid configuration:\n${lines.join('\n')}`);
   }
+  // B-4205: the environment the configuration came from, for the Configuration screen's sources and overrides.
+  Object.defineProperty(parsed.data, CONFIG_ENV, { value: env, enumerable: false });
   return parsed.data;
 }
+
+/** The environment a configuration was loaded from (process.env when it was not loaded by loadConfig). */
+export const envOf = (c: Config): NodeJS.ProcessEnv => ((c as unknown as Record<symbol, NodeJS.ProcessEnv>)[CONFIG_ENV] ?? process.env);

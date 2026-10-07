@@ -33,7 +33,7 @@ jobs:
   e2e:
     name: Console end-to-end (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -62,6 +62,45 @@ jobs:
             e2e/test-results
           retention-days: 14
 
+  interop:
+    # 1.5.0, Sprint 31 (B-2906): the PDS against the reference AT-Protocol development environment (@atproto/dev-env:
+    # the PLC directory and the Bluesky AppView with its data plane). A post written to Exprsn-AI's PDS must appear in
+    # the AppView, which reads the PDS's subscribeRepos and verifies every commit.
+    name: AT-Protocol interop (reference PLC and AppView)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: interop
+          POSTGRES_PASSWORD: interop
+          POSTGRES_DB: interop
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U interop"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            interop/package-lock.json
+      # The run starts the real server in-process (interop/run.ts through tsx), so it needs the workspace's modules.
+      - run: npm ci
+      - name: Install the reference environment
+        working-directory: interop
+        run: npm ci
+      - name: Run
+        env:
+          INTEROP_PG_URL: postgres://interop:interop@127.0.0.1:5432/interop
+        run: npx --prefix interop tsx interop/run.ts --base-port 55601
+
   integration:
     name: Integration against PostgreSQL, MySQL, OpenLDAP and Redis
     runs-on: ubuntu-latest
@@ -80,6 +119,11 @@ jobs:
         image: redis:7
         ports: ["6379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
+      mongodb:
+        image: mongo:8
+        env: { MONGO_INITDB_ROOT_USERNAME: root, MONGO_INITDB_ROOT_PASSWORD: root }
+        ports: ["27017:27017"]
+        options: --health-cmd "mongosh --quiet -u root -p root --eval 'db.runCommand({ping:1}).ok'" --health-interval 3s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -101,9 +145,16 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           for i in $(seq 1 40); do docker exec ${{ job.services.postgres.id }} pg_isready -U exprsn >/dev/null 2>&1 && exit 0; sleep 1; done
           exit 1
+      # B-3605: GreenMail as the email channel's IMAP server, with a throwaway CA and a certificate for localhost
+      # (the adapter requires TLS and verifies the host name); mail is delivered to it by SMTP during the test.
+      - name: Start GreenMail (IMAP) with a test certificate
+        run: server/test/integration/greenmail.sh "$RUNNER_TEMP/greenmail" greenmail
       - run: npm ci
       - run: npm run test:integration -w server
         env:
+          TEST_IMAP_URL: imaps://help%40shop.example:imap-pw@127.0.0.1:3993/INBOX
+          TEST_IMAP_SMTP_URL: smtp://127.0.0.1:3025
+          NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/greenmail/ca.pem
           TEST_PG_URL: postgres://exprsn:exprsn@127.0.0.1:5432/exprsn_test
           TEST_MYSQL_URL: mysql://exprsn:exprsn@127.0.0.1:3306/exprsn_test
           TEST_MYSQL_ADMIN_URL: mysql://root:root@127.0.0.1:3306/exprsn_test
@@ -111,6 +162,7 @@ jobs:
           TEST_LDAP_INSECURE: "true"
           TEST_LDAP_BIND_PW: dev-ldap-admin
           TEST_REDIS_URL: redis://127.0.0.1:6379
+          TEST_MONGODB_URL: mongodb://root:root@127.0.0.1:27017/?authSource=admin
 
   image:
     name: Container image
@@ -317,6 +369,27 @@ jobs:
       - name: Dashboards are valid JSON
         if: hashFiles('deploy/observability/grafana/*.json') != ''
         run: for f in deploy/observability/grafana/*.json; do jq -e '.uid and .title and (.panels | length > 0)' "$f" >/dev/null || { echo "$f"; exit 1; }; done
+
+  litmus:
+    name: WebDAV litmus (file store)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      # B-3203: litmus 0.17 from its release tarball (pinned by digest), built with its bundled neon and expat.
+      - name: Build litmus
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libexpat1-dev
+          curl -fsSL -o /tmp/litmus.tar.gz https://notroj.github.io/litmus/litmus-0.17.tar.gz
+          echo "686c272ce757cc9d9e83f07ae16ecc83393172b1205559765528d9755eb0221c  /tmp/litmus.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/litmus.tar.gz -C /tmp
+          cd /tmp/litmus-0.17 && ./configure --prefix=/tmp/litmus --with-included-neon --without-ssl && make && make install
+      # basic, copymove and locks are the done-when of B-3203; props and http run too.
+      - name: Run litmus against /dav/files
+        working-directory: server
+        run: npx tsx test/dav-litmus.ts --litmus /tmp/litmus/bin/litmus --tests "basic copymove props locks http"
 
   loadtest:
     name: Load tests (in-process)

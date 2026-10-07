@@ -10,6 +10,7 @@ import type { ShareAccessEvent } from '../chat/sharing.js';
 import { TOPICS, type MembershipEvent, type RolesChangedEvent } from '../platform/bus.js';
 import type { JobProgressEvent } from '../platform/jobs.js';
 import type { Services } from '../services.js';
+import { attachPresence } from './presence.js';
 import { attachRooms, type RoomSocketData } from './rooms.js';
 
 export interface SocketData {
@@ -22,6 +23,8 @@ export interface SocketData {
   watchingVia?: Map<string, string>;
   /** 1.4.0 (B-2101): domain rooms (conversation, group, feed, channel) this socket is in. */
   rooms?: RoomSocketData['rooms'];
+  /** 1.5.0 (B-5802): the people whose presence this socket hears, decided by the server. */
+  presenceWatch?: Set<string>;
 }
 
 export type Realtime = Server<Record<string, never>, Record<string, never>, Record<string, never>, SocketData>;
@@ -76,6 +79,8 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     pingInterval: 25_000,
     pingTimeout: 20_000
   });
+  // 1.6.0 (B-4202): the Overview counts the sockets of every instance through its heartbeat.
+  s.instances.sockets = () => io.engine.clientsCount;
 
   // More than one instance: rooms and broadcasts span instances through Redis.
   let pub: Redis | null = null;
@@ -92,9 +97,15 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
     try {
       const token = sessionTokenFrom(socket.handshake.headers.cookie, s.cfg.COOKIE_SECURE);
       const session = token ? await s.sessions.resolve(token) : null;
-      if (!token || !session || session.stage !== 'active') return next(new Error('unauthorized'));
+      if (!token || !session || session.stage !== 'active') {
+        s.rooms.stats.authFailed();
+        return next(new Error('unauthorized'));
+      }
       const principal = await loadPrincipal(s, session.tenant_id, session.user_id, { session });
-      if (!principal) return next(new Error('unauthorized'));
+      if (!principal) {
+        s.rooms.stats.authFailed();
+        return next(new Error('unauthorized'));
+      }
       socket.data = { principal, sessionId: session.id, token };
       next();
     } catch (err) {
@@ -106,9 +117,14 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
   // 1.4.0 (B-2101): the generic domain rooms, decided by the server like shared watches.
   const domainRooms = attachRooms(io as unknown as Parameters<typeof attachRooms>[0], s.rooms, s.bus, rooms.user, s.log, { signalsPerMinute: s.cfg.ROOM_SIGNALS_PER_MINUTE });
 
+  // 1.5.0 (B-5802): presence status over the same sockets.
+  const presence = attachPresence(io as unknown as Parameters<typeof attachPresence>[0], s, rooms.user);
+  s.presence.start();
+
   io.on('connection', (socket: Socket) => {
     const d = socket.data as SocketData;
     domainRooms.onConnection(socket);
+    presence.onConnection(socket);
     const permRooms = permRoomsOf(d.principal);
     void socket.join([rooms.user(d.principal.userId), rooms.tenant(d.principal.tenantId), rooms.session(d.sessionId), ...permRooms]);
     s.metrics.socketConnections.inc();
@@ -237,6 +253,18 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
   const offs = [
     s.bus.on<RolesChangedEvent>(TOPICS.rolesChanged, (e) => regrant(e)),
     ...domainRooms.offs,
+    ...presence.offs,
+    // 1.6.0 (B-4206): an admin closed a user's rooms: their sockets here disconnect; the session stays.
+    s.bus.on<{ tenantId: string; userId: string }>(TOPICS.roomsClose, (e) => {
+      for (const sid of io.of('/').adapter.rooms.get(rooms.user(e.userId)) ?? []) {
+        const socket = io.of('/').sockets.get(sid);
+        const d = socket?.data as SocketData | undefined;
+        if (socket && d?.principal.tenantId === e.tenantId) {
+          (socket as unknown as Socket).emit('rooms.closed');
+          socket.disconnect(true);
+        }
+      }
+    }),
     s.bus.on<string[]>(TOPICS.sessionsRevoked, (ids) => {
       for (const id of ids) {
         io.local.to(rooms.session(id)).emit('session.revoked' as never);
@@ -287,6 +315,7 @@ export function attachRealtime(server: HttpServer, s: Services): { io: Realtime;
       for (const off of offs) off();
       io.disconnectSockets(true);
       await new Promise<void>((resolve) => io.close(() => resolve()));
+      await s.presence.stop();
       await Promise.all([pub?.quit().catch(() => undefined), sub?.quit().catch(() => undefined)]);
     }
   };

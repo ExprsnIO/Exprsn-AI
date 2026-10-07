@@ -1,6 +1,461 @@
 # Changelog
 
-## 1.5.0 (in progress)
+## 1.6.0 (in progress)
+
+### Pinned models stay pinned while they serve
+
+- Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned
+  model, the instance's keep-alive for a warm one, none for a cold one (Ollama's default). Before, only explicit
+  loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
+  expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
+  instance poll.
+
+### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
+
+- The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
+  `models`, `loaded`, `show`, `load`, `unload`, `pull`, `delete`, `chat` and `embed`; `OllamaClient` implements it
+  unchanged and no gateway test changed. What a server cannot do throws `Unsupported`, which the gateway, placements
+  and the catalogue skip: nothing resident is reported, loads and unloads are recorded as `unsupported` instance
+  events, pulls onto a mixed pool and rolling upgrades skip the server.
+- `kind: openai` instances (B-4302): migration `037_model_servers` (`instances.kind` defaulting to `ollama`,
+  `socket_path`, `token_ref`, `token_tenant`, `token_owner`). A Chat Completions server on a URL (the egress check and
+  mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), with an optional bearer token stored in the
+  caller's vault (`model-servers/<id>#token`) or given as a vault reference, resolved as the person who saved it.
+  Health from `/health` or `/v1/models`; models from `/v1/models` (Apple's `pcc` listed but unavailable is not
+  offered); llama.cpp's `/props` context length. The new `instance.probe` job (`POST /api/admin/instances/:id/probe`,
+  run at registration) records whether tool calls and JSON schema output work; what the server reported is in
+  `settings.reported`. `GET /api/admin/model-servers` (`models:manage`) is the import picker's list. Audited
+  `instance.created {kind, socket, token}`, `instance.probe.started`.
+- Chat Completions mapped onto the gateway's chat (B-4303, `server/src/gateway/openai-server.ts`): messages, the
+  system prompt, tools and tool calls (ids kept, results paired with their calls), streamed deltas and reasoning,
+  `response_format` from a JSON schema (`format` on the gateway's chat request, also passed to Ollama), stop,
+  temperature, max tokens and usage (estimated when the server reports none). Ollama-only options are dropped and
+  noted once as a `dropped` instance event. The tool loop, guardrails, labels and metering are unchanged.
+  `server/test/fake-openai-server.ts` stands in for `fm serve`, `mlx_lm.server` and `llama-server` (TCP or socket).
+- Catalogue entries without a pull (B-4304): `POST /api/admin/models {serverInstanceId, serverModel}` registers a
+  listed model with `format: server`, no expected digest, `source: server:<instance>/<id>` (`models.server_instance_id`,
+  `server_model`), placed warm on the instance's pool. Licence, conformance (run on that instance; the tool-calling
+  test always runs and grants `tools`), label and dual-control approval apply; placements on a pool with such a
+  server are warm only; retiring deletes nothing on the server.
+- Embeddings and guard models (B-4305): a server that answers `/v1/embeddings` serves embedding models; one that
+  refuses is remembered and the request goes to another instance with the model, such as an Ollama pool, with no
+  change to the knowledge or guardrail code.
+- Docs (B-4306): `docs/deploy.md` on `fm serve --socket` under launchd beside Ollama on a `metal` pool, with
+  `mlx_lm.server` and `llama-server` as alternatives; `docs/security.md` on what the digest check cannot cover for
+  server-held models; `docs/api.md` and `docs/openapi.json`.
+- Console (B-4307): the Models screen gets Model servers (a drawer of the registered servers with what they report,
+  Register model server with the kind, the socket path or URL and the token, and Probe again), Request import gets
+  "Held by a model server" (the import picker of server-held models, unavailable ones disabled with the reason), and
+  a held model's inspector, approval and card say "held by the server, no digest" with the capabilities the server
+  reported. The prototype board first, then the live screen; `e2e/tests/models.spec.ts` registers an `fm serve`
+  socket (the e2e server starts the fake on one) and approves its model with axe-core and 320 px reflow checks. The
+  Pools screen's Load model offers Ollama instances only.
+
+### Social and messaging live (Sprint 35d, B-4206, with B-4207)
+
+- The Social and messaging screen is live (`#/social`, after Channels, its own sidebar icon; decision Q13), over
+  `GET`/`PUT` routes under `/api/admin/social/` (`docs/api.md`). Migration `037d_platform_social`
+  (`social_workspace_policies`, `social_tenant_settings`, `feed_trending_exclusions`, `messaging_exports`) and the
+  group state `archived`. `social:manage` now also governs these policies (decision Q4); held content stays under
+  `moderation:manage`.
+- Feed: per-workspace approval policy (whether posts pass `user-input` in full, with the platform baseline always
+  kept; who approves held posts; media allowed and their largest size), a per-tenant trending exclusion list honoured
+  at once and by the `feed.trending` job, Run trending now, and the weekly digest's profile, weekday and hour (UTC),
+  size and highest label per tenant, with a test digest sent to the requester alone.
+- Groups and events: per-workspace defaults (who may create groups, visibility, join mode, event capacity), groups
+  across workspaces with members, pending requests, upcoming events, open reports and feeds, Transfer ownership and
+  Archive (read only), and the tenant's calendar feeds with Revoke: a revoked feed answers 404 on its next fetch
+  (the item's "done when").
+- Messaging: retention, limits, search and the tenant's summary profile; legal-hold export of a conversation under
+  dual control (decision Q5): requested with a reason and a recent sign-in, approved by a second platform admin, then
+  written by the job `messaging.conversation.export` as a sealed CSV only the requester downloads. Audited
+  `messaging.export.*` and `messaging.conversation.exported`.
+- Realtime (`platform:manage`): this instance's rooms and sockets by kind, signals per minute and those refused by
+  `ROOM_SIGNALS_PER_MINUTE`, socket authentication failures, and Close a user's rooms on every instance
+  (`TOPICS.roomsClose`, audited `realtime.rooms.closed`).
+- Relations: follow, block, mute and list counts, the most blocked accounts (counts only), and contact rules per
+  workspace (anyone in the workspace, contacts only, admins only) enforced when a conversation is started or someone
+  added, on top of each person's own rule.
+- Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
+  `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
+  refused signals instead of a backlog, as the server reports them.
+
+### Tenant provisioning templates (Sprint 35d, B-4501)
+
+- Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system
+  admins), `POST /api/admin/tenants/from-template` and `exprsn-ai tenant:create --template <id>`. The first
+  templates are exprsn-platform's organisation types: **enterprise** (General, Finance, People, Engineering and Legal
+  workspaces up to confidential; Reader and Contributor roles; assistant, analyst and summariser profiles; an issuing
+  CA), **team** (Team and Projects workspaces; a Contributor role; an assistant profile; an issuing CA) and
+  **personal** (one confidential workspace; an assistant profile). `GET /api/admin/tenant-templates` lists what each
+  creates. No new permission (`tenant:manage` and the system-admin role) and no migration.
+- One step: the tenant, its local user store and data key, the workspaces, the custom roles (member-baseline
+  permissions only, version 1 applied), draft gateway profiles pinned to a pool in the template's zone (`inference`)
+  when one may process their label, the tenant's intermediate CA under the platform root when there is one (reported
+  as skipped otherwise), and the first admin: `tenant-admin`, cleared for the highest workspace ceiling, a member of
+  every workspace, with a single-use enrolment link by default or a password. Audited in both chains: the parts' own
+  events and `tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin}`.
+- `admin:create`'s `createAdmin` takes the audit actor, so the first admin's `user.created` names the provisioning
+  admin rather than the CLI.
+
+### Overview and Jobs and queues live (Sprint 35b, B-4202, B-4203, with B-4207)
+
+- The Overview screen is live, first in the Admin group (Q3): open alerts computed from the existing watches (an
+  instance behind the schema or not answering, the backup RPO, zone drift in the cluster, platform certificates and the
+  tenant's own certificates expiring within 7 days, the rate-limit probe), acknowledged tenant-wide and audited
+  `platform.alert.acknowledged` (Q15); counters for 1 h, 24 h or 7 d; every server instance with its `/readyz` checks,
+  schema, claimed jobs, sockets, rate-limit store, tracing and NTP offset; the next schedules; the recent audit; and
+  capacity (database size and pool, vectors, blob store). `GET /api/admin/overview`.
+- Instances register themselves: each server process beats into `platform_instances` every 30 seconds (migration
+  `037b_platform_ops`) with what `/readyz` answers, which now shares that code. Draining an instance from the screen
+  (Q14: a confirm and a recent sign-in, `platform:manage`) stops it claiming jobs and makes `/readyz` answer 503 with
+  `checks.shutdown: draining`; audited `platform.instance.drained`.
+- The Jobs and queues screen is live, with five tabs: Queues (every job type with queued, running, oldest, failed,
+  p50 and p95, and pause by type, which every instance honours within one poll: `jobs.type.paused`,
+  `jobs.type.resumed`), Jobs (filters by state, type, window, job id or trace id; cancel and retry, retry every failed
+  job: `jobs.cancelled`, `jobs.retried`), Schedules (last runs, run now, pause: `jobs.schedule.*`), Dead letters
+  (moderation jobs and workflow runs, redriven or discarded with a reason: `jobs.deadletter.discarded`) and Cache (the
+  tenant cache's namespaces with reads, hits and invalidations, and invalidate: `jobs.cache.invalidated`, Q1). System
+  admins see every tenant's jobs with a tenant filter, tenant admins their own (Q9). `JobQueue` gains pause by type
+  and `requeue`; `Scheduler` lists its schedules, runs one now and skips a paused one.
+- Both screens are in the accessibility and reflow checks (axe-core, Standard and Enhanced, light and dark, 320 and
+  640 px) through their own Playwright spec; `docs/accessibility.md` lists them.
+
+### Storage and Configuration live (Sprint 35c, B-4204, B-4205, with B-4207)
+
+- **Storage** (B-4204) is a live admin screen (`platform:manage`) with Stores, Usage, Quarantine, Integrity and Purges.
+  Stores: the blob store (health from `/readyz`, size and objects from the last verification, capacity from `statfs`),
+  the database (its own size and connections), the vector store, backups, the media work directory, training datasets
+  and model files, with daily growth samples (`ops.storage.sample`). Usage: bytes by workspace (files, versions,
+  trash, media, knowledge uploads, attachments) against the file quota (which counts files, versions and trash), by
+  user and by kind; quotas are set from the screen. Quarantine: what waits for its scan or was refused in the last 24
+  hours, the ClamAV scanner (`PING`, `VERSION`, counts today), Rescan (`503` while ClamAV does not answer) and Delete,
+  audited `file.quarantine.rescanned` and `file.quarantine.deleted`.
+- The integrity check `ops.blobs.verify` (every `BLOBS_VERIFY_MINUTES`, or from the screen, optionally comparing
+  checksums) lists the store and walks every row: **missing** objects a row names, **orphans** older than
+  `BLOBS_ORPHAN_GRACE_HOURS` that nothing references (never backups or mirror files), and **mismatches** (an object
+  whose SHA-256 changed without the server writing it). It never changes the store. Orphans are deleted after a dry
+  run that walks the references again, by one admin with a reason (decision Q10), within `BLOBS_DRY_RUN_MINUTES`;
+  audited `platform.blobs.orphans.dry-run` and `platform.blobs.orphans.deleted` with the list of objects. An expected
+  checksum change is accepted with a reason (`platform.blobs.checksum.accepted`).
+- Blob store migration (decision Q16) as a copy-then-switch job `ops.blobs.migrate`, started with a recent sign-in and
+  a reason: every instance also writes to the target while every object is copied and its SHA-256 checked, the target
+  is verified, then reads and writes switch, with reads of anything missed falling back to the old store until it is
+  retired. A failure puts every instance back on the old store. The store any process uses is now a switchable store
+  (`platform/blob-switch.ts`) that follows the shared mode.
+- **Configuration** (B-4205) is a live admin screen: every setting this build reads, from a descriptor generated from
+  `server/src/config/index.ts` (`npm run gen:settings -w server`; section, type, constraint, default, secret, hot or
+  restart, description), what each instance reads and where it came from (env, file, default or override), and
+  whether instances differ. Every instance reports under `INSTANCE_NAME` every `PLATFORM_INSTANCE_REPORT_SECONDS`;
+  secrets are reported as set or unset, their length, file and mode and a keyed fingerprint, never their value.
+  Export as `.env` (secrets masked, audited `platform.settings.exported`) and Diff against defaults.
+- Database overrides for every overridable setting under dual control (decision Q2): one platform admin proposes a
+  value with a reason, another approves (never the proposer). The value is checked against the field and the
+  configuration's cross-field rules. A hot setting applies on every instance at once; a restart setting at each
+  instance's next start (applied before the services are built), and the screen names the instances still waiting.
+  Secrets and the settings needed to reach the database are not overridable; `PLATFORM_SETTINGS_OVERRIDES=false` keeps
+  every setting in the environment. Audited `platform.setting.proposed`, `.approved`, `.rejected`, `.withdrawn`.
+- New routes under `/api/admin/storage/` and `/api/admin/platform/settings` (`docs/api.md`, `docs/openapi.json`,
+  `docs/permissions.md`); migration `037c_platform_storage`; new settings `PLATFORM_SETTINGS_OVERRIDES`,
+  `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`, `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`,
+  `BLOBS_DRY_RUN_MINUTES`. The boards (B-4201) follow what the server does: the migration and the verification are no
+  longer proposals, a checksum mismatch is accepted rather than re-sealed, the purge table lists the jobs the server
+  schedules, and Mark restarted became Check again (the banner clears itself as instances report).
+- Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
+  `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
+  and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
+
+## 1.5.0
+
+### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)
+
+- Built on the chain context of Sprint 32 (B-4101): every link is a node of the caller's chain, acts as the chain's
+  principal, runs at the chain's label within the callee's ceiling and is charged to the root's budgets. Migration
+  `036_chains` (`chain_nodes.decision` and `error_type`, two indexes). No new permission.
+- Agents delegate to agents (B-4102): an agent's `definition.agents` (up to 16) lists the agents it may call, each
+  offered to the model as the tool `agent:<name>`. A call passes the dispatcher like any tool call and starts a child
+  run of the published delegate as the same principal, at the chain's label, with budgets no larger than the
+  delegating run has left; the delegating run waits and continues with `{run, agent, answer}`, the answer typed by the
+  delegate's `outputSchema` when it declares one (agents take `inputSchema` and `outputSchema`). Audited
+  `agent.run.delegated`; cancelling a run cancels the runs it delegated to.
+- Skills compose (B-4103): a skill's `definition.skills` lists the skills it builds on; loading a skill loads its
+  closure once each, dependencies first (at most 32), and offers the tools of the whole closure, deduplicated. Every
+  skill of the closure is a `skill-load` node of the chain.
+- Workflows an agent lists (B-4104): `definition.workflows` (up to 16) are offered as `workflow:<name>` and run and
+  awaited as a workflow tool is (B-1006), without publishing one; a workflow the agent does not list is refused.
+  `GET /api/workflows/:id/callers` adds the agents that list the workflow.
+- Chain checks at publish (B-4105): the registry and workflow publish build the reference graph across agents, skills,
+  tools and workflows. A cycle made only of steps that always run is refused (the registry's **Chain references**
+  check; a workflow publish answers `422` with code `chain` and the path); a cycle through a model's choice is a
+  warning; references above the referrer's ceiling and unpublished references fail the check. "Used by" at
+  `GET /api/admin/registry/:id/used-by` and `GET /api/workflows/:id/used-by`; retiring the last callable version of an
+  entry something live uses, or deleting a workflow a published agent or workflow uses, is `409 Still in use`, naming
+  them.
+- Approvals and failures through the chain (B-4106): a call held anywhere pauses the chain. The root's run views list
+  the held calls (`held`, with the path), and `POST /api/chains/:id/held/:node/decision` decides one with the rules of
+  the place where it waits (audited `chain.held.decided`). A model step's skill call that needs approval now pauses the
+  step on an approval (`approverRole`, `approvalTimeoutMs`) instead of being reported to the model. A child's failure
+  reaches its parent typed (`failed`, `budget`, `cancelled`, `rejected`, `chain_limit`, `output`, `label`, `timeout`):
+  an agent sees a tool error starting `child_<type>:`, a workflow's failure edge receives `type`.
+- The chain view (B-4107): `GET /api/chains/:id`, the tree of invocations with timing, tokens, steps, wall and GPU
+  time, labels, guardrail decisions, audit links and held calls; its totals equal what was metered for the chain.
+  `POST /api/chains/:id/nodes/:node/replay` replays an agent-run or workflow-run node from a step as a new chain
+  (audited `chain.node.replayed`); `GET /api/admin/audit` takes a `target` filter.
+
+### The chain tree and registry fields in the console (Sprint 34d, B-4108, B-4109)
+
+- Prototype boards (B-4108): Runs gains the chain tree with a node inspector (usage and subtree, label, guardrail
+  decisions, typed error, audit link, replay from a node) and held calls decided from the root with their path;
+  the registry editor gains agent delegates, listed workflows, input and output schemas, skill dependencies with the
+  loaded closure, the Chain references check and a "used by" view before deprecating or retiring; Workflows gains
+  "used by" before deleting and a Chain tree button on runs. The smoke run is clean in light and dark.
+- Live screens (B-4109): the tree comes from `GET /api/chains/:id` and opens from a run, a workflow run or
+  `#/runs?chain=<id>&node=`; held calls are decided through `POST /api/chains/:id/held/:node/decision` and nodes
+  replayed through the chain replay route; Retire and Delete are disabled while an entry is still used.
+  `e2e/tests/runs-chain.spec.ts` opens a three-level chain (planner, broker, clerk) as a tree from its root run with
+  no axe-core, in-page checker or reflow finding, and approves a `feed.post` call held three levels down from the root.
+  The fake model in `e2e/server.ts` makes the tool call named on an `E2E-CALL` line of an agent's prompt; the reflow
+  check is shared from `e2e/tests/support/reflow.ts`.
+- Fixed on Runs: a run with its own error text no longer shows "The run could not be loaded", and route parameters
+  no longer cause a re-fetch loop.
+- Known limit: the registry editor cannot clear an agent's input schema once set (the PATCH schema does not take
+  `null`).
+
+### Profiles and presence (Sprint 34c, B-5801, B-5802)
+
+- Migration `036b_profiles` (`user_profiles`, `user_presence`, `presence_connections`). Routes `/api/people` and
+  `/api/presence` under `social:read` and `social:write` (an avatar also needs `files:write`), answered with
+  `Cache-Control: no-store`.
+- Profiles (B-5801): pronouns (up to 40 characters) and a bio (up to 500) screened at the `user-input` guardrail; an
+  avatar (PNG, JPEG, WebP or GIF, at most 2 MiB) uploaded into the file store of the caller's current workspace
+  through its quarantine and served only while its pinned version is a ready image, not in the trash, within the
+  viewer's clearance; a version that fails its scan is never shown. A profile is known to people who share a workspace
+  with its owner (anyone else gets `404`); the pronouns, bio and avatar further need the viewer's clearance to reach
+  the profile's label and, when the owner narrowed it, a shared workspace among those named. Two people in a block see
+  each other's name only. Audited `profile.updated` (the fields, never the text), `profile.avatar.set`,
+  `profile.avatar.removed`.
+- Presence (B-5802): available, away, busy or offline, chosen or `auto` (away while every socket the person holds
+  reports idle); without a connected socket a person reads offline. `PUT /api/presence/me` is audited
+  `presence.status.updated`. On the console's socket, `presence.watch`, `presence.unwatch`, `presence.idle` and
+  `presence.changed`: each change is published once and relayed by every instance without the sockets of people in a
+  block with the person, and a new block takes each out of the other's presence room at once. Connections are kept per
+  instance with a 30-second heartbeat and swept after 90 seconds.
+- Console: a Profile page opened from people's names on Messages, the feed and Groups, with a People directory; the
+  public profile (pronouns, bio, picture) and status in Settings; the console reports idle after five minutes without
+  input or while the page is hidden. Fixed: the feed's Post handler matched any click inside a post.
+
+### The IMAP channel adapter against a real IMAP server (Sprint 34b, B-3605)
+
+- `server/test/integration/imap.test.ts` (gated on `TEST_IMAP_URL` and `TEST_IMAP_SMTP_URL`): mail delivered by SMTP
+  to a GreenMail mailbox becomes a channel thread through the `channels.imap-poll` job and imapflow, is answered
+  through the outbox, a reply in the thread joins the session, nothing is marked seen, and a wrong password is
+  recorded on the cursor and audited once. `server/test/integration/greenmail.sh` starts GreenMail 2.1.5 (pinned by
+  digest) with a throwaway CA; the CI integration job runs it.
+- CI: the MongoDB service's health command no longer has a `: ` in a plain YAML scalar.
+
+### WebDAV for the file store (Sprint 34b, B-3201 to B-3203)
+
+- Migration `036c_dav_files` (WebDAV locks). Described in `docs/dav.md`.
+- B-24 workspaces, folders and files as WebDAV collections under `/dav/files/` (and `~shared` for files shared with
+  the caller): PUT through quarantine, the type check and ClamAV, scanned before it answers and unreadable until it
+  passes; every PUT a new version; DELETE to the trash; Finder's AppleDouble files dropped (B-3201).
+- COPY and MOVE for files and folders (MOVE keeps ids, so versions and shares stay; COPY scans again), LOCK and UNLOCK
+  (class 2, exclusive and shared, depth 0 and infinity, lock-null resources, the If header with lock tokens) (B-3202).
+- Quota properties (RFC 4331) and 507 over a limit; the `litmus` suite (basic, copymove, props, locks, http) in CI,
+  all passing (B-3203). `JobQueue.runNow` and `FileService.scanNow` run a version's scan job before answering.
+
+### Workflows 2 and the chain context (Sprint 32, B-3901 to B-3910, B-4101)
+
+- Migrations `034_workflows2` (`chains`, `chain_nodes`, `workflow_items`; the chain on agent and workflow runs),
+  `034b_workflow_triggers` (`workflow_triggers`, `workflow_trigger_firings`, `workflow_dead_letters`) and
+  `034c_workflow_steps` (the domain built-in tools, a feed post's source, approval forms and answers). New settings
+  `CHAIN_MAX_DEPTH`, `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`, `CHAIN_MAX_WALL_SECONDS`, `CHAIN_MAX_GPU_SECONDS`,
+  `WORKFLOW_MAX_DEPTH`, `AGENT_MAX_DEPTH`, `WORKFLOW_EVENT_RATE_PER_MINUTE`, `WORKFLOW_EVENT_MAX_DEPTH`,
+  `WORKFLOW_SCHEDULE_TICK_SECONDS`. No new permission.
+- The chain context (B-4101): every invocation (a chat turn whose answer calls a tool, an agent run, a workflow run, a
+  tool call, a skill load, a plugin action that starts a workflow, an app trigger) is a node of its root's chain. A
+  child acts as the root's principal, its label is at least the chain's high-water mark, and depth is capped by one
+  `CHAIN_MAX_DEPTH` (default 8) across kinds, with `WORKFLOW_MAX_DEPTH` and `AGENT_MAX_DEPTH` (3 each) as per-kind caps;
+  tokens, steps, wall time and GPU time are charged atomically to the root's budgets. Nodes are unique by kind and
+  reference, so a job retried on another instance resumes its node. Refusals are audited `chain.refused`, a budget stop
+  `chain.stopped`; a refused tool call reaches the model as a `chain_limit` tool error. Run views carry `chain` and
+  `caller`, and workflow runs their `children` and map and loop `items`.
+- Sub-workflow, agent, `map` and `loop` steps and skills on model steps (B-3901, B-3902, B-3905): a `sub` step runs a
+  published workflow as a child under the parent's owner and label, and the child's approvals pause the parent; an
+  `agent` step runs a published agent and waits without a worker; `skills` (up to 8) on a `model` step load published
+  skills' instructions and tools through the dispatcher, so every call passes the tool's ceiling, schema, the
+  `tool-call` checkpoint and its rate limit; `map` fans out over up to 200 items (`maxParallel` up to 20) with each
+  item's result checkpointed, and `loop` iterates up to 40 times with an optional `while`. `GET /api/workflow-callees`
+  lists what the new steps may call.
+- Triggers on the workflow itself (B-3903): source `event` (a catalogue event or group, with the plugin fan-out rules:
+  workspace, label, `WORKFLOW_EVENT_RATE_PER_MINUTE`, no loops through the chain of workflows) and source `schedule`
+  (a five-field UTC cron, each due time claimed once across instances). Runs start as the version's publisher with
+  what they hold at that moment, or are skipped with the reason. `GET` and `PATCH /api/workflows/:id/triggers`;
+  audited `workflow.trigger.*`.
+- Failure handling (B-3906): a per-step `retry` (up to 5, fixed or exponential, waiting durably), an on-failure edge
+  (`branch: failure`) whose steps receive `{error, step}`, and dead letters for runs that fail for good, with redrive
+  from the failed step (`/api/workflow-dead-letters`, audited `workflow.run.dead_lettered` and
+  `workflow.dead_letter.redriven`).
+- Bundles (B-3909): signed `exprsn-workflow/1` export (`GET /api/workflows/:id/bundle`) and import
+  (`POST /api/workflows/import`) with tool, profile, app, vault and trigger references re-bound; a bundle changed after
+  signing is refused with `422 Bundle refused`.
+- Domain built-in tools (B-3904): `messages.send`, `feed.post`, `files.write_version`, `groups.create_event` and
+  `channels.answer` (`impl: builtin`, published to every tenant, all `write`), acting as the caller through the domain
+  services and called the same way from chat, agents and workflows; a post made by a built-in or a plugin records its
+  `source`. The plugin broker's `records.read`, `records.write`, `files.read`, `groups.read` and `posts.write` calls are
+  live, acting as the installing user within the plugin's max label.
+- Approval forms (B-3907): an `approval` step names an app form; the approver's answers are validated like a
+  submission, sealed with the approval, become the step's output and are audited with the decision. `notify` and
+  `webhook` steps (B-3908): in-app and email notices to cleared recipients (`workflow.step.notified`); one signed
+  delivery per run and step through the tenant's webhook path, with the endpoint checked against the outbound host rules
+  when the graph is saved (`422 Workflow invalid` otherwise).
+- Console (B-3910): the live Workflows screen edits every step kind the server has, sets event and schedule triggers,
+  per-step retries and failure edges, and has the run history (with chain, caller, children and items), Triggers and
+  callers (`GET /api/workflows/:id/callers`), versions with bundle export and import, approvals and dead letters with
+  redrive; a New workflow button in the toolbar. The event catalogue is also readable with `workflows:manage`.
+
+### App passwords for DAV clients in Settings (Sprint 32, B-3415)
+
+- `GET /api/me/dav`: the CalDAV, CardDAV and WebDAV discovery URLs, the username to type into a client, which scopes
+  the caller's roles make usable, and how long the session's second-factor confirmation still counts for creating an
+  app password. The create response also names the WebDAV URL (`/dav/files/`, B-32).
+- Settings has a panel under Security with each device's app password (scopes, creation, last use with time, address
+  and client, expiry) and Revoke; creating one asks for an authenticator code or a passkey first when the second factor
+  is older than the step-up window (the password does not count), and the password is shown once. The step-up dialog
+  takes a factor-only mode, used whenever the server answers `step_up` with `factor`.
+
+### Console screens for the 1.4.0 domains (Sprints 29 to 31, B-3401 to B-3414)
+
+- Prototype boards in `design/prototype/` for every new screen and the identity additions (B-3401), with the Workflows
+  board realigned on the server's step kinds.
+- Live screens: Certificates (B-3402), Vault (B-3403), Plugins and events (B-3404), Apps (B-3407), Files (B-3408) and
+  the identity additions on Identity, User stores, Settings and Sign in (B-3413); Moderation (B-3405), Groups and events
+  (B-3409), Channels (B-3410), Messages and feed (B-3411) and Roles and access (B-3412); and AT-Protocol (B-3406,
+  Sprint 31), with the read endpoints and fields they need on the server. Each joined the Playwright suite with
+  axe-core (Standard and Enhanced, light and dark) and the reflow checks for its dialogs and drawers, described in
+  `docs/accessibility.md` (B-3414).
+
+### Custom feed generators, relay commit verification and the RSVP race (Sprint 31b, B-3001 to B-3003, B-3604, B-3603)
+
+- Feed generators (B-3001): a tenant's feeds are served by its own AT-Protocol identity, whose DID document gains a
+  `#bsky_fg` `BskyFeedGenerator` service (did:web computed; did:plc through a signed PLC operation, audited
+  `atproto.identity.service-added`). Public XRPC `app.bsky.feed.describeFeedGenerator` and
+  `app.bsky.feed.getFeedSkeleton` at `/xrpc/…` and `/atproto/<key>/xrpc/…`; an inter-service JWT (ES256K or ES256)
+  is verified against the issuer's `#atproto` key, its audience, expiry and `lxm`, and a bad one is refused with `401`.
+- Feeds as rules over the firehose (B-3002) under `/api/atproto/feeds` (`firehose:manage`, audited
+  `atproto.feed.*`): authors, collections, keywords and labels (in force from the tenant's labeler and trusted
+  labelers, or the check's verdict; `!hide` excluded by default), checked again when served; optional ranking by
+  embedding similarity through a gateway profile or by a classifier's score. Posts reach the feeds after the
+  moderation check; deletes leave them.
+- The feed index (B-3003): keyset cursor pagination by (sort, id), retention and a size cap pruned by
+  `atproto.feeds.prune` every `FEED_PRUNE_MINUTES`, and a per-feed rate limit on getFeedSkeleton. Migration
+  `033b_feeds` (`atproto_feeds`, `atproto_feed_items`, `firehose_subscriptions.rejected`). New settings
+  `FEEDS_MAX_PER_TENANT`, `FEED_ITEMS_MAX`, `FEED_PRUNE_MINUTES`, `FIREHOSE_REJECT_AUDITS`.
+- B-3004 (publishing the `app.bsky.feed.generator` record) has its interface: the feed view's `record` (naming the
+  generator's service DID) and `PUT`/`DELETE /api/atproto/feeds/{id}/publication`.
+- Relay commit verification (B-3604): subscribeRepos commits are checked against the repo's `#atproto` key (DID
+  documents through the service URL checks, cached, refreshed once on a failed signature) and each record used is
+  proven against the signed Merkle search tree; a commit that fails is dropped, counted (`counts.rejected`) and
+  audited `atproto.firehose.commit.rejected` (rate-limited). Tested against the AT-Protocol interop vectors (MST key
+  layers, commit proofs, signature fixtures) in `server/test/fixtures/atproto/`.
+- RSVP capacity (B-3603): the event row is locked (`SELECT … FOR UPDATE` on PostgreSQL and MySQL) while the places are
+  counted; fifty simultaneous RSVPs for one place leave one attendee on SQLite, PostgreSQL and MySQL.
+
+### The AT-Protocol personal data server (Sprint 31, B-2901 to B-2906, B-3004)
+
+- Exprsn-AI hosts AT-Protocol repositories, described in `docs/pds.md`. Hosting is off until a platform admin enables
+  it per tenant (`PUT /api/admin/pds/tenants/{tid}`), and is refused in an air-gapped deployment or a PDS zone without
+  egress: repositories are public by protocol. New permission `pds:manage` (tenant admins); members keep their own
+  account under `atproto:link`. Migration `033_pds`; new settings `PDS_*`; the event catalogue (version 7) lists a
+  `pds.*` group.
+- Accounts are tied to Exprsn-AI users: a did:plc whose repo and rotation keys live in the signer or OpenBao, a handle
+  `<name>.<tenant>.<PDS_HANDLE_DOMAIN>` that resolves to it (`/.well-known/atproto-did`, `resolveHandle`), created from
+  the console or by `com.atproto.server.createAccount`, which follows the tenant's sign-up policy with invite codes
+  for closed and approval policies (B-1801). Bluesky clients sign in with app passwords made in the console; the
+  Exprsn-AI password never works over XRPC. Sessions are refresh-once token pairs (B-2901).
+- Repositories: the Merkle search tree, signed version 3 commits, DAG-CBOR and CAR, matched byte for byte against the
+  AT-Protocol interop fixtures and the reference implementation; `com.atproto.repo` writes (`createRecord`,
+  `putRecord`, `deleteRecord`, `applyWrites`) validated against the bundled Bluesky lexicons; reads and the
+  `com.atproto.sync` exports (`getRepo`, `getRecord`, `getBlocks`, `listBlobs`, `getBlob`, `getLatestCommit`,
+  `getRepoStatus`, `listRepos`) (B-2902).
+- Blobs stream through the attachment quarantine, typed from their bytes, limited per tenant, scanned by ClamAV and
+  sealed at rest; a blob that fails the scan is never served (B-2903).
+- The firehose: a sequencer whose seq is taken in each commit's transaction, `com.atproto.sync.subscribeRepos` with
+  cursors, a backfill window and sync 1.1 commit proofs, and `requestCrawl` to the relays in `PDS_RELAYS` (B-2904).
+- Deactivation, takedowns as moderation actions on `pds-repo` objects (`RepoTakendown`, `!takedown` published by the
+  tenant's labeler, appealable), and account migration into and out of Exprsn-AI with signed PLC operations (B-2905).
+- Interop: `interop/run.ts` and the CI `interop` job run the PDS against the reference development environment's PLC
+  directory and Bluesky AppView; a post written to Exprsn-AI's PDS appears in the AppView (B-2906).
+- `app.bsky.feed.generator` records published to a hosted repo or an external account
+  (`POST /api/admin/pds/feed-generators`), naming the feed generator's service DID (B-3004).
+- Moderation gains `takeDown` and `reverse` for direct admin actions; self-registration takes an AT-Protocol invite
+  code in place of an invitation.
+
+### Model-based memory management (Sprint 30, B-3701 to B-3703)
+
+- Per-tenant memory settings under `GET`/`PUT /api/memory/settings` (`knowledge:manage`, audited as
+  `memory.settings.updated`). Migration `032c_memory` (`memory_settings`; `memories.superseded_by` and
+  `memories.expiry_proposal`).
+- A tenant `memory` profile extracts proposals from chat turns and, under an agent's memory policy, from succeeded
+  agent runs (`memory.extract`). The text goes to the model as JSON data and its answer must be one JSON object that
+  a zod schema accepts; with no profile, or when the model fails or answers anything else, the rules extract as before
+  (`memory.extraction.fallback` records why). Every proposal still passes the `memory` checkpoint, the credential ban
+  and the rejection list, and carries its source's label (B-3701).
+- Consolidation (`memory.consolidate`, daily and `POST /api/memory/consolidate`): near-duplicates found by embedding
+  similarity and confirmed by the profile become one merge proposal (keeping both sources); stale and contradicted
+  memories get expiry proposals, decided with `POST /api/memory/{id}/expiry/accept|reject`. Nothing changes until a
+  person accepts; accepting a merge activates the new memory and retires both (`superseded`, `supersededBy`, audited
+  as `memory.merged`) (B-3702).
+- The memory embedding model is a tenant setting (unset: the first approved embedding model by name, as before).
+  Changing it starts `memory.reindex` (also `POST /api/memory/reindex`), which re-embeds every active memory; recall is
+  by recency while it runs, and only vectors of the query's model are compared (B-3703).
+- The event catalogue lists a `memory.*` group for the memory audit actions.
+
+### CalDAV and CardDAV (Sprint 30, B-3101 to B-3104)
+
+- New permissions `calendars:read`, `calendars:write`, `contacts:read` and `contacts:write` (members and tenant
+  admins). Migration `032_dav`. Described in `docs/dav.md`.
+- App passwords for DAV clients under `/api/me/app-passwords` (list, create, revoke): per device, shown once, with
+  DAV-only scopes (`caldav`, `carddav`, `webdav`) and an optional expiry; creating one needs a second factor confirmed
+  within the step-up window (a TOTP or passkey step-up now records the factor on the session); the list shows the last
+  use. They authenticate `/dav` only (HTTP Basic over TLS) and are refused by `/api`, `/v1` and the console (B-3101).
+- The WebDAV core at `/dav` with `/.well-known/caldav` and `/.well-known/carddav` discovery: PROPFIND, PROPPATCH (all
+  or nothing; dead properties sealed), REPORT, ETags with `If-Match`, `If-None-Match` and the If header (a stale ETag is
+  412), `sync-collection` (RFC 6578), strict XML parsing (no DOCTYPE or entities, size and depth caps), its own rate
+  limit and failed-credential limits (B-3101).
+- CalDAV over personal calendars (MKCALENDAR, validated objects stored sealed with indexed time spans) and the
+  calendars of one's groups: `calendar-query` with every RFC 4791 filter operator, `calendar-multiget`,
+  `free-busy-query`; answering a group event from a client (its `PARTSTAT`) is written back as the RSVP, and
+  moderators' edits and cancellations go through the groups service (B-3102). The iCalendar writer of B-2504 renders
+  organisers and attendees and a METHOD-less object form.
+- CardDAV: the directory as a read-only address book filtered by clearance (a contact above the caller's clearance is
+  never returned), and personal address books (extended MKCOL, vCard 3.0 and 4.0), `addressbook-query` with every RFC
+  6352 operator and `addressbook-multiget` (B-3103).
+- A conformance run of Apple Calendar and Contacts, Thunderbird and DAVx5 exchanges (`server/test/fixtures/dav/`),
+  replayed by the test suite; it fails when a filter operator is not exercised (B-3104).
+- B-3104 stays partial: the fixtures were written from the clients' documented requests. Capturing real traffic
+  (B-3606) was dropped by the owner on 2026-10-06 (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS
+  needs a per-host certificate trust on the capturing Mac that was not approved.
+
+### Import repositories and model import (Sprint 30, B-3801 to B-3803)
+
+- New permissions `imports:run`, `imports:repositories` and `imports:review`, and a fourteenth built-in role,
+  `legal-review` (granted only by a system admin), which decides licence exceptions and keeps the tenant's licence
+  allow-list; tenant admins can request exceptions but not decide them. Migration `033c_imports`.
+- Repository registry under `/api/imports/repositories`: Hugging Face compatible hubs, Ollama compatible registries,
+  CKAN, DCAT-AP, SDMX, OpenML, InvenioRDM, Kaggle and the signed bundle share. A repository is proposed by one admin
+  and confirmed by another before its hosts join the staging-proxy allow-list and it is harvested; credentials are
+  vault references sent only to the repository's own host; harvests run on a schedule and back off when the source
+  rate-limits. `GET /api/imports/proxy-allowlist` exports the allow-list for the staging proxy (B-3801).
+- Catalogue browse with classification, licence, format and other facets from each source's own taxonomy; a facet's
+  count is exactly what its filter returns; live search through the proxy when the source can be searched, the
+  snapshot otherwise and while a source backs off (B-3802).
+- Model import: plan (every check, nothing written), gate acceptance with the recorded token, format and pickle checks
+  by name and by content, digests pinned at request time and checked after resumable downloads, licence policy with
+  exceptions, GGUF conversion or packaging on the training pool (`POST /v1/convert` gains `source`), draft registration
+  with the digest pinned and a signed import manifest; air-gapped instances queue requests for the weekly bundle and
+  continue them when a promoted bundle carries the files. The Imports queue with cancel and resumable retry; a 500 GB
+  dataset import quota per tenant, metered beside model imports (B-3803).
 
 ### Permission matrices and custom roles (Sprint 29, B-3301 to B-3305)
 
@@ -44,6 +499,25 @@
 - Platform load test on PostgreSQL: records query p95 65 and 62 ms in two full runs (732 ms at release), every target
   met; 67 ms with autovacuum off. The records scenario reports each query body's p95 and signs in 128 users (64 hit
   the per-user API limit once queries got faster). `docs/loadtest.md`.
+
+### MongoDB data connections (Sprint 30, B-3602)
+
+- `engine: mongodb` on `POST /api/admin/connections`, merged from `feat/mongodb-connections`. Reads are `find` and
+  `aggregate` only, written as JSON; writes, DDL, `$out`, `$merge`, server-side JavaScript (`$where`, `$function`,
+  `$accumulator`, Code values, `mapReduce`) and stages off a read-only list are refused before anything is sent and
+  checked again in the driver. Collections read through `$lookup`, `$graphLookup` and `$unionWith` must be on the
+  allow-list (names or patterns such as `orders_*`); `system.*` and other databases are refused. Reads use the
+  connection's row limit (plus one, to report capping) and timeout (`maxTimeMS`), mask personal fields inside
+  sub-documents too, and are audited as for the other engines.
+- One direct connection to the checked address (no replica-set discovery or SRV), no retries, credentials as options
+  (sealed, or a `vault:` reference). The account authenticates against the connection's database unless the
+  username is `<authdb>/<user>`. Test connection reports an account with write privileges, or a server without
+  authentication, as `degraded`. OpenBao dynamic credentials stay PostgreSQL and MySQL only (`409`).
+- Collections as knowledge sources (`kind: database`): `fields` to index (by default the text fields of the sampled
+  schema), `idColumn` (`_id`), a watermark field (`updatedAt` or `updated_at` when sampled), and an access field as for
+  B-1002. No migration; the metadata is tested on SQLite, PostgreSQL and MySQL (`TEST_MONGODB_URL` gates the
+  real-server test; CI runs a `mongo:8` service).
+- Dependency: the official `mongodb` driver 7.7.0 (pinned).
 
 ## 1.4.0
 

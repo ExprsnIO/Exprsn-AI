@@ -2,7 +2,8 @@
  * The server the end-to-end suite drives: the real application (services, routes, Socket.io, job workers, the
  * gateway poller and the static console from web/) on a temporary SQLite file, with the test fakes from server/test
  * standing in for Ollama, the MCP server, the script sandbox, ffmpeg, the image workers, the safety classifier, the
- * GPU trainer and the ACME directory. Nothing here changes server code; it only wires what the unit tests use.
+ * GPU trainer and the ACME directory; an in-process signer holds the keys. Nothing here changes server code; it only
+ * wires what the unit tests use.
  *
  *   npx tsx e2e/server.ts [--port 0] [--state e2e/.state/server.json]
  *
@@ -25,15 +26,19 @@ import { createLogger, Metrics } from '../server/src/observability/index.js';
 import { createServices } from '../server/src/services.js';
 import { bootstrap } from '../server/src/bootstrap.js';
 import { attachRealtime } from '../server/src/realtime/socket.js';
+import { InstanceRegistry } from '../server/src/ops/instances.js';
 import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
 import { FakeOllama } from '../server/test/fake-ollama.js';
+import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
+import { FakePlcDirectory } from '../server/test/sprint25b-fakes.js';
+import { startSigner } from '../server/src/signer/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const { values: opt } = parseArgs({ options: { port: { type: 'string', default: process.env.E2E_PORT ?? '0' }, state: { type: 'string', default: path.join(here, '.state', 'server.json') } } });
@@ -56,14 +61,35 @@ async function main() {
   for (const d of ['blobs', 'media', 'drills']) mkdirSync(path.join(dir, d));
 
   // ---- fakes that the configuration has to name ----
+  // B-43: Apple's fm serve on a Unix socket (the on-device model, and Private Cloud Compute listed but refused), for
+  // the Models screen's model servers. Nothing is registered on it: the Models spec does that through the console.
+  const fm = new FakeOpenAIServer();
+  fm.add({ id: 'system', ownedBy: 'Apple' }).add({ id: 'pcc', ownedBy: 'Apple', available: false, reason: 'PCC inference is not available in this context.' });
+  await fm.start({ socketPath: path.join(tmpdir(), `exprsn-e2e-fm-${process.pid}.sock`) });
   const ollama = await new FakeOllama().start();
   ollama.chatDelayMs = 15;
-  ollama.reply = (messages) => ({ thinking: 'Reading the question first. ', content: `Fake answer to: ${messages[messages.length - 1]?.content ?? ''}` });
+  // An agent whose system prompt holds "E2E-CALL <function> [json arguments]" makes that tool call first (the runs
+  // chain spec builds a three-level chain of delegating agents this way), then answers with what the tool returned.
+  ollama.reply = (messages) => {
+    const system = messages[0]?.role === 'system' ? messages[0].content : '';
+    const call = /E2E-CALL (\S+)(?: (\{.*\}))?/.exec(system);
+    const last = messages[messages.length - 1];
+    if (call && last?.role !== 'tool') return { content: '', toolCall: { name: call[1]!, arguments: call[2] ? (JSON.parse(call[2]) as Record<string, unknown>) : { task: 'Carry on with the September close.' } } };
+    if (call && last?.role === 'tool') return { content: `Done: ${String(last.content).slice(0, 160)}` };
+    return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
+  };
   const mcp = await new FakeMcp().start();
   mcp.tools = [
     { name: 'lookup_invoice', description: 'Looks up an invoice by number.', inputSchema: { type: 'object', properties: { number: { type: 'string' } }, required: ['number'] }, annotations: { readOnlyHint: true }, run: (a) => ({ invoice: a.number, total: 1200 }) },
     { name: 'send_reminder', description: 'Sends a payment reminder.', inputSchema: { type: 'object', properties: { to: { type: 'string' } } }, annotations: { destructiveHint: true }, run: () => ({ sent: true }) }
   ];
+  // The signer process (Sprint 20) in-process: it holds the key-encryption key and the certificate authority's issuer
+  // keys, so the Certificates screen can create issuers and issue (without it key-making routes answer 409 custody).
+  const signerToken = randomBytes(24).toString('base64url') + 'e2e-signer';
+  const signer = await startSigner({ socketPath: path.join(dir, 'signer', 's.sock'), key: randomBytes(32).toString('base64'), token: signerToken });
+  // A PLC directory (Sprint 25): did:plc identities and the PDS accounts' DIDs (Sprint 31) are registered here.
+  const plc = new FakePlcDirectory();
+  await plc.start();
   let baseUrl = url;
   const acme = await startFakeAcme(async (_domain, token) => {
     const r = await fetch(`${baseUrl}/.well-known/acme-challenge/${token}`);
@@ -81,7 +107,8 @@ async function main() {
     DB_CLIENT: 'sqlite',
     SQLITE_FILENAME: path.join(dir, 'exprsn.sqlite'),
     SESSION_SECRET: randomBytes(32).toString('hex'),
-    DATA_KEY: randomBytes(32).toString('base64'),
+    SIGNER_SOCKET: signer.socketPath,
+    SIGNER_TOKEN: signerToken,
     BLOB_DIR: path.join(dir, 'blobs'),
     MEDIA_WORK_DIR: path.join(dir, 'media'),
     PLATFORM_DRILL_DIR: path.join(dir, 'drills'),
@@ -94,6 +121,9 @@ async function main() {
     ACME_DIRECTORY_URL: acme.directory,
     ACME_POLL_MS: '20',
     ACME_CONTACT: 'pki@example.internal',
+    // AT-Protocol (Sprints 25 and 31): the PLC directory double, and a handle domain for the PDS (the AT-Protocol screen).
+    ATPROTO_PLC_URL: plc.url,
+    PDS_HANDLE_DOMAIN: 'pds.example.test',
     // Every browser test signs in from 127.0.0.1; the per-address limiter must not throttle the suite.
     LOCKOUT_MAX_ATTEMPTS: '50',
     ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('E2E_ENV_')).map(([k, v]) => [k.slice(8), v]))
@@ -112,6 +142,9 @@ async function main() {
     trainer
   });
   s.scripts.runner = runner;
+  // The deployment stays air-gapped for the other screens; only the PDS may treat its zone as having egress, so the
+  // AT-Protocol screen can switch hosting on (in production the zone's egress decides, docs/pds.md).
+  s.pds.zoneProblem = async () => null;
   await bootstrap(s);
   const tenant = (await s.tenants.bySlug(cfg.DEFAULT_TENANT))!;
   const tenantId = tenant.id;
@@ -190,6 +223,11 @@ async function main() {
   const realtime = attachRealtime(server, s);
   s.jobs.start();
   s.gateway.start();
+  // 1.6.0 (B-4202): this server's heartbeat for the Overview, and a second instance beside it (a registry of its own
+  // in this process, with its own row), so the Overview spec can drain an instance without stopping this one's jobs.
+  s.instances.start();
+  const peer = new InstanceRegistry(() => s, s.bus, { heartbeatMs: 30_000, id: 'e2e-peer:2' });
+  peer.start();
   await new Promise<void>((r) => server.listen(port, '127.0.0.1', r));
   baseUrl = url;
 
@@ -199,8 +237,10 @@ async function main() {
     tenant: cfg.DEFAULT_TENANT,
     workspace: { id: workspace.id, name: workspace.name },
     totp,
-    fakes: { ollama: ollama.url, mcp: mcp.url, acme: acme.directory },
-    users: ['root', 'root2', 'ops', 'mladmin', 'member', 'enrol']
+    fakes: { ollama: ollama.url, mcp: mcp.url, acme: acme.directory, fmSocket: fm.socketPath },
+    users: ['root', 'root2', 'ops', 'mladmin', 'member', 'enrol'],
+    // 1.6.0 (B-4204): the Storage spec leaves an old object here for the integrity check to find as an orphan.
+    blobDir: cfg.BLOB_DIR
   };
   mkdirSync(path.dirname(opt.state!), { recursive: true });
   writeFileSync(opt.state!, JSON.stringify(state, null, 2));
@@ -215,11 +255,15 @@ async function main() {
     try {
       server.closeAllConnections();
       await realtime.close();
+      await peer.stop();
       await s.close();
       await db.destroy();
       await ollama.stop();
+      await fm.stop();
       await mcp.stop();
       await acme.close();
+      await signer.close();
+      await plc.stop();
     } catch {
       /* best effort */
     }

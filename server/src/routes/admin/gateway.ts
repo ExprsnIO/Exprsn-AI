@@ -1,11 +1,14 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { ulid } from 'ulid';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
 import { clears, labelRank, LABELS } from '../../authz/labels.js';
+import { effectivePermissions } from '../../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../../http/problem.js';
-import { THINK_LEVELS, type ModelRow, type ProfileRow, type ThinkLevel } from '../../gateway/repo.js';
+import { THINK_LEVELS, type InstanceRow, type ModelRow, type ProfileRow, type ThinkLevel } from '../../gateway/repo.js';
+import { SERVER_KINDS } from '../../gateway/server.js';
+import { parseVaultRef } from '../../vault/policy.js';
 import type { Services } from '../../services.js';
 import { checkServiceUrl, servicePolicy, ServiceUrlRefused } from '../../platform/egress.js';
 import { evalRoutes } from './evals.js';
@@ -27,6 +30,11 @@ const settingsSchema = z
   .strict();
 const tlsSchema = z.object({ caFile: secretPath.optional(), certFile: secretPath.optional(), keyFile: secretPath.optional() }).strict().nullable();
 const urlSchema = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http:// or https:// URL');
+/** B-4302: a Unix socket a Chat Completions server listens on (`fm serve --socket`). */
+const socketSchema = z.string().regex(/^\/[^\0]+$/, 'An absolute path on the server').max(300);
+const tokenSchema = z.string().min(1).max(4096);
+/** A server's model id: what `/v1/models` lists, such as `system`, `mlx-community/Qwen3-4B-4bit` or `qwen2.5-7b.gguf`. */
+const serverModelSchema = z.string().trim().regex(/^[\w./:@+-]{1,200}$/, 'A model id as the server lists it');
 const thinkRank = (t: ThinkLevel) => THINK_LEVELS.indexOf(t);
 
 export const modelView = (m: ModelRow) => ({
@@ -53,6 +61,10 @@ export const modelView = (m: ModelRow) => ({
   approvedAt: m.approved_at,
   retireAt: m.retire_at,
   notes: m.notes,
+  // B-4304: held by a Chat Completions server: no pull, no digest.
+  held: m.format === 'server',
+  serverInstanceId: m.server_instance_id,
+  serverModel: m.server_model,
   createdAt: m.created_at,
   updatedAt: m.updated_at
 });
@@ -83,7 +95,7 @@ export const profileView = (p: ProfileRow) => ({
 export function gatewayAdminRoutes(s: Services): Router {
   const r = Router();
   const g = s.gateway;
-  r.use(['/pools', '/instances', '/models', '/placements', '/profiles'], noStore, requireAuth());
+  r.use(['/pools', '/instances', '/models', '/model-servers', '/placements', '/profiles'], noStore, requireAuth());
   const pools = requirePermission(s, 'pools:manage');
   const models = requirePermission(s, 'models:manage');
   const readModels = requirePermission(s, 'models:read');
@@ -150,19 +162,65 @@ export function gatewayAdminRoutes(s: Services): Router {
   r.post('/pools/:id/instances', pools, async (req, res) => {
     const pool = await g.repo.pool(String(req.params.id));
     if (!pool) throw notFound('Pool');
-    const body = parseBody(z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9./-]{0,99}$/), url: urlSchema, deploy: z.enum(['docker', 'baremetal']), tls: tlsSchema.default(null), settings: settingsSchema.default({}) }), req.body);
-    if (body.tls && !body.url.startsWith('https://')) throw badRequest('Mutual TLS needs an https:// URL.');
-    await checkInstanceUrl(body.url);
+    const body = parseBody(
+      z.object({ name: z.string().trim().regex(/^[a-z0-9][a-z0-9./-]{0,99}$/), kind: z.enum(SERVER_KINDS as [string, ...string[]]).default('ollama'), url: urlSchema.optional(), socketPath: socketSchema.nullable().default(null), token: tokenSchema.optional(), tokenRef: z.string().max(500).nullable().optional(), deploy: z.enum(['docker', 'baremetal']), tls: tlsSchema.default(null), settings: settingsSchema.default({}) }),
+      req.body
+    );
+    const kind = body.kind as InstanceRow['kind'];
+    const url = serverTarget(kind, body.url, body.socketPath, body.tls);
+    if (!body.socketPath) await checkInstanceUrl(url);
+    if ((await g.repo.instances(pool.id)).some((i) => i.name === body.name)) throw conflict('An instance with that name exists in the pool.');
+    const token = kind === 'openai' ? await saveToken(req, body.token, body.tokenRef) : rejectToken(body.token, body.tokenRef);
     try {
-      const inst = await g.repo.createInstance({ poolId: pool.id, ...body });
-      await audit(req, 'instance.created', { instance: inst.id, name: inst.name, pool: pool.name }, { url: inst.url, deploy: inst.deploy, mtls: !!body.tls });
+      const inst = await g.repo.createInstance({ poolId: pool.id, name: body.name, url, kind, socketPath: body.socketPath, token: token ?? null, deploy: body.deploy, tls: body.tls, settings: body.settings });
+      const probe = kind === 'openai' ? await s.jobs.enqueue({ tenantId: principalOf(req).tenantId, type: 'instance.probe', payload: { instanceId: inst.id }, createdBy: principalOf(req).userId, maxAttempts: 1 }) : null;
+      await audit(req, 'instance.created', { instance: inst.id, name: inst.name, pool: pool.name }, { kind, url: inst.url, socket: inst.socket_path, deploy: inst.deploy, mtls: !!body.tls, token: token ? token.ref : null, probeJob: probe?.id ?? null });
       await g.pollOne(inst.id);
-      res.status(201).json((await g.snapshot()).flatMap((p) => p.instances).find((i) => i.id === inst.id));
+      res.status(201).json({ ...(await g.snapshot()).flatMap((p) => p.instances).find((i) => i.id === inst.id), probeJobId: probe?.id ?? null });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('An instance with that name exists in the pool.');
       throw err;
     }
   });
+
+  /**
+   * B-4302: where requests go. An Ollama instance and a Chat Completions server on a port need an http(s) URL that
+   * passes the egress check; a server on a Unix socket needs no URL (requests carry `http://localhost`) and no TLS.
+   */
+  const serverTarget = (kind: InstanceRow['kind'], url: string | undefined, socketPath: string | null, tls: unknown): string => {
+    if (socketPath) {
+      if (kind !== 'openai') throw badRequest('A Unix socket is for Chat Completions servers (kind openai); Ollama listens on a URL.');
+      if (tls) throw badRequest('A Unix socket is local to this host: mutual TLS does not apply.');
+      return 'http://localhost';
+    }
+    if (!url) throw badRequest('Give the server\'s URL, or for a Chat Completions server its Unix socket path.');
+    if (tls && !url.startsWith('https://')) throw badRequest('Mutual TLS needs an https:// URL.');
+    return url;
+  };
+
+  /** B-4302: a raw token goes into the caller's vault (shown once, never returned); a reference is checked as readable. */
+  const saveToken = async (req: Request, token: string | undefined, tokenRef: string | null | undefined): Promise<{ ref: string; tenantId: string; ownerId: string } | null | undefined> => {
+    const p = principalOf(req);
+    if (token && tokenRef) throw badRequest('Give either a token or a vault reference, not both.');
+    if (token) {
+      // The token is read at use as the person who saved it, so they need secrets:read as well as the write.
+      const perms = effectivePermissions(p);
+      if (!perms.has('secrets:write') || !perms.has('secrets:read')) throw forbidden('Storing a server token in the vault needs secrets:write and secrets:read; or give a vault reference someone with them saved.', { step: 'role', action: 'secrets:write' });
+      const c = await s.vault.callerFor(p, { ip: ip(req), traceId: req.traceId });
+      const path = `model-servers/${ulid().toLowerCase()}`;
+      await s.vault.write(c, path, { token }, { label: 'confidential' });
+      return { ref: `vault:${path}#token`, tenantId: p.tenantId, ownerId: p.userId };
+    }
+    if (tokenRef === undefined) return undefined;
+    if (tokenRef === null) return null;
+    if (!parseVaultRef(tokenRef)) throw badRequest('A token reference looks like vault:<path>#<key>.');
+    await s.vault.assertRefsReadable(p, [tokenRef], { ip: ip(req), traceId: req.traceId });
+    return { ref: tokenRef, tenantId: p.tenantId, ownerId: p.userId };
+  };
+  const rejectToken = (token: unknown, tokenRef: unknown) => {
+    if (token || tokenRef) throw badRequest('A bearer token is for Chat Completions servers (kind openai); Ollama takes mutual TLS.');
+    return null;
+  };
 
   /** B-901: link-local, metadata and unspecified addresses are refused; the poller's connections re-check at dial time. */
   const checkInstanceUrl = async (url: string) => {
@@ -182,10 +240,26 @@ export function gatewayAdminRoutes(s: Services): Router {
 
   r.patch('/instances/:id', pools, async (req, res) => {
     const inst = await loadInstance(req);
-    const body = parseBody(z.object({ url: urlSchema.optional(), tls: tlsSchema.optional(), settings: settingsSchema.optional(), state: z.enum(['active', 'disabled']).optional() }).strict(), req.body);
+    const body = parseBody(z.object({ url: urlSchema.optional(), socketPath: socketSchema.nullable().optional(), token: tokenSchema.optional(), tokenRef: z.string().max(500).nullable().optional(), tls: tlsSchema.optional(), settings: settingsSchema.optional(), state: z.enum(['active', 'disabled']).optional() }).strict(), req.body);
     if (body.url) await checkInstanceUrl(body.url);
-    await g.repo.updateInstance(inst.id, body);
-    await audit(req, 'instance.updated', { instance: inst.id, name: inst.name }, { after: { ...body, tls: body.tls === undefined ? undefined : !!body.tls } });
+    const socketPath = body.socketPath === undefined ? inst.socket_path : body.socketPath;
+    // A socket instance's stored URL is only the origin: dropping the socket needs a real URL.
+    const nextUrl = body.url ?? (inst.socket_path ? undefined : inst.url);
+    if (body.socketPath !== undefined || body.url !== undefined || body.tls !== undefined) serverTarget(inst.kind, socketPath ? undefined : nextUrl, socketPath, body.tls === undefined ? inst.tls : body.tls);
+    const token = inst.kind === 'openai' ? await saveToken(req, body.token, body.tokenRef) : rejectToken(body.token, body.tokenRef);
+    const patch: Parameters<typeof g.repo.updateInstance>[1] = {};
+    if (body.url !== undefined) patch.url = body.url;
+    if (body.socketPath !== undefined) {
+      patch.socket_path = body.socketPath;
+      if (body.socketPath) patch.url = 'http://localhost';
+    }
+    if (body.tls !== undefined) patch.tls = body.tls;
+    if (body.state !== undefined) patch.state = body.state;
+    // What the server reported stays with the instance when its recorded settings change.
+    if (body.settings !== undefined) patch.settings = { ...body.settings, ...(inst.settings.reported ? { reported: inst.settings.reported } : {}) };
+    if (token !== undefined) Object.assign(patch, { token_ref: token?.ref ?? null, token_tenant: token?.tenantId ?? null, token_owner: token?.ownerId ?? null });
+    await g.repo.updateInstance(inst.id, patch);
+    await audit(req, 'instance.updated', { instance: inst.id, name: inst.name }, { after: { ...body, token: body.token ? 'stored in the vault' : undefined, tokenRef: token === undefined ? undefined : (token?.ref ?? null), tls: body.tls === undefined ? undefined : !!body.tls } });
     await g.pollOne(inst.id);
     res.json((await g.snapshot()).flatMap((p) => p.instances).find((i) => i.id === inst.id));
   });
@@ -209,12 +283,22 @@ export function gatewayAdminRoutes(s: Services): Router {
     res.json(await g.repo.events(inst.id, 50));
   });
 
+  /** B-4302: asks a Chat Completions server whether tool calls and JSON schema output work (a job). */
+  r.post('/instances/:id/probe', pools, async (req, res) => {
+    const p = principalOf(req);
+    const inst = await loadInstance(req);
+    if (inst.kind !== 'openai') throw conflict(`${inst.name} is an Ollama instance; its models are evaluated one by one in the catalogue.`);
+    const job = await s.jobs.enqueue({ tenantId: p.tenantId, type: 'instance.probe', payload: { instanceId: inst.id }, createdBy: p.userId, maxAttempts: 1 });
+    await audit(req, 'instance.probe.started', { instance: inst.id, name: inst.name }, { job: job.id });
+    res.status(202).json({ jobId: job.id });
+  });
+
   r.post('/instances/:id/load', pools, async (req, res) => {
     const p = principalOf(req);
     const inst = await loadInstance(req);
     const body = parseBody(z.object({ model: z.string().min(1).max(200), pinned: z.boolean().default(false) }), req.body);
     const out = await g.load(inst.id, body.model, { pinned: body.pinned, actor: p.username });
-    await audit(req, body.pinned ? 'model.pinned' : 'model.loaded', { instance: inst.id, name: inst.name, model: body.model }, { evicted: out.evicted });
+    await audit(req, body.pinned ? 'model.pinned' : 'model.loaded', { instance: inst.id, name: inst.name, model: body.model }, { evicted: out.evicted, ...(out.unsupported ? { unsupported: true } : {}) });
     res.json(out);
   });
 
@@ -222,9 +306,9 @@ export function gatewayAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const inst = await loadInstance(req);
     const body = parseBody(z.object({ model: z.string().min(1).max(200) }), req.body);
-    await g.unload(inst.id, body.model, p.username);
-    await audit(req, 'model.unloaded', { instance: inst.id, name: inst.name, model: body.model });
-    res.json({ ok: true });
+    const out = await g.unload(inst.id, body.model, p.username);
+    await audit(req, 'model.unloaded', { instance: inst.id, name: inst.name, model: body.model }, out.unsupported ? { unsupported: true } : undefined);
+    res.json({ ok: true, ...(out.unsupported ? { unsupported: true } : {}) });
   });
 
   r.post('/instances/:id/drain', pools, async (req, res) => {
@@ -253,16 +337,34 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (model.state === 'retired') throw conflict('A retired model cannot be placed.');
     if (labelRank(model.label) > labelRank(pool.label_ceiling)) throw forbidden(`${model.name} is approved for ${model.label} data but ${pool.name}'s ceiling is ${pool.label_ceiling}.`, { step: 'zone' });
     await s.zones.assertAdmits(pool, model.label);
+    const held = await placementRules(model, pool.id, body.residency);
     const pl = await g.repo.place(model.id, pool.id, body.residency, p.userId);
-    const job = body.pull ? await s.jobs.enqueue({ tenantId: p.tenantId, type: 'model.pull', payload: { modelId: model.id, poolId: pool.id }, createdBy: p.userId, maxAttempts: 1 }) : null;
+    const job = body.pull && !held ? await s.jobs.enqueue({ tenantId: p.tenantId, type: 'model.pull', payload: { modelId: model.id, poolId: pool.id }, createdBy: p.userId, maxAttempts: 1 }) : null;
     await audit(req, 'model.placed', { model: model.name, pool: pool.name }, { residency: body.residency, pullJob: job?.id ?? null });
     res.status(201).json({ ...pl, jobId: job?.id ?? null });
   });
+
+  /**
+   * B-4304: a server-held model goes only where an instance lists it; a pool with Chat Completions servers takes
+   * warm placements only (the server decides what stays in memory); an Ollama model cannot be pulled onto a pool whose
+   * instances are all such servers. Returns whether the model is server-held (no pull).
+   */
+  const placementRules = async (model: ModelRow, poolId: string, residency: string): Promise<boolean> => {
+    const insts = await g.repo.instances(poolId);
+    const servers = insts.filter((i) => i.kind === 'openai');
+    const held = model.format === 'server';
+    if ((held || servers.length) && residency !== 'warm') throw conflict(held ? `${model.name} is held by its server, which decides what stays in memory: place it warm.` : 'This pool has Chat Completions servers, which decide what stays in memory: placements on it are warm only.');
+    if (held && !(await g.listedOn(poolId, model.server_model ?? model.name)).length) throw conflict(`No instance in this pool lists ${model.server_model ?? model.name}. A server-held model is placed where its server is.`);
+    if (!held && insts.length && servers.length === insts.length) throw conflict(`Every instance in this pool is a Chat Completions server, which holds its own models: ${model.name} cannot be pulled onto it.`);
+    return held;
+  };
 
   r.patch('/placements/:id', pools, async (req, res) => {
     const pl = (await g.repo.placements()).find((x) => x.id === req.params.id);
     if (!pl) throw notFound('Placement');
     const body = parseBody(z.object({ residency: z.enum(['pinned', 'warm', 'cold']) }), req.body);
+    const pm = await g.repo.model(pl.model_id);
+    if (pm) await placementRules(pm, pl.pool_id, body.residency);
     await g.repo.place(pl.model_id, pl.pool_id, body.residency, principalOf(req).userId);
     await audit(req, 'model.placement.updated', { placement: pl.id }, { residency: body.residency });
     res.json({ ...pl, residency: body.residency });
@@ -279,7 +381,7 @@ export function gatewayAdminRoutes(s: Services): Router {
   // ---------- model catalogue ----------
 
   r.get('/models', readModels, async (_req, res) => {
-    const [list, placements, pools, profiles] = await Promise.all([g.repo.models(), g.repo.placements(), g.repo.pools(), s.db('profiles').select('id', 'name', 'model_id', 'tenant_id')]);
+    const [list, placements, pools, profiles, instances] = await Promise.all([g.repo.models(), g.repo.placements(), g.repo.pools(), s.db('profiles').select('id', 'name', 'model_id', 'tenant_id'), g.repo.instances()]);
     const people = [...new Set(list.flatMap((m) => [m.requested_by, m.approved_by]).filter((u): u is string => !!u))];
     const names = new Map((await s.db('users').whereIn('id', people).select('id', 'display_name')).map((u: { id: string; display_name: string }) => [u.id, u.display_name]));
     res.json(
@@ -288,7 +390,43 @@ export function gatewayAdminRoutes(s: Services): Router {
         requestedByName: m.requested_by ? (names.get(m.requested_by) ?? null) : null,
         approvedByName: m.approved_by ? (names.get(m.approved_by) ?? null) : null,
         pools: placements.filter((x) => x.model_id === m.id).map((x) => ({ placementId: x.id, poolId: x.pool_id, pool: pools.find((p) => p.id === x.pool_id)?.name, residency: x.residency })),
-        profiles: profiles.filter((x: { model_id: string | null }) => x.model_id === m.id).length
+        profiles: profiles.filter((x: { model_id: string | null }) => x.model_id === m.id).length,
+        server: m.format === 'server' ? serverOf(m, instances) : null
+      }))
+    );
+  });
+
+  /** B-4304: the server a held model was registered from, and what that server reported (no URL or token). */
+  const serverOf = (m: ModelRow, instances: InstanceRow[]) => {
+    const i = instances.find((x) => x.id === m.server_instance_id);
+    const rep = i?.settings.reported ?? {};
+    return { instanceId: m.server_instance_id, instance: i?.name ?? null, model: m.server_model, health: i?.health ?? null, reported: { server: rep.server ?? null, contextLength: rep.contextLength ?? null, tools: rep.tools ?? null, jsonSchema: rep.jsonSchema ?? null, embeddings: rep.embeddings ?? null, probedAt: rep.probedAt ?? null } };
+  };
+
+  /**
+   * B-4304: the import picker's server-held models: every Chat Completions instance with the models it lists, which
+   * are available, and which are in the catalogue already.
+   */
+  r.get('/model-servers', models, async (_req, res) => {
+    const [list, pools, catalogue] = await Promise.all([g.serverCandidates(), g.repo.pools(), g.repo.models()]);
+    res.json(
+      list.map(({ instance: i, report }) => ({
+        instanceId: i.id,
+        instance: i.name,
+        poolId: i.pool_id,
+        pool: pools.find((p) => p.id === i.pool_id)?.name ?? null,
+        poolCeiling: pools.find((p) => p.id === i.pool_id)?.label_ceiling ?? null,
+        transport: i.socket_path ? 'socket' : 'url',
+        token: !!i.token_ref,
+        state: i.state,
+        health: i.health,
+        healthDetail: i.health_detail,
+        version: i.version,
+        reported: { server: report.server ?? null, contextLength: report.contextLength ?? null, tools: report.tools ?? null, jsonSchema: report.jsonSchema ?? null, embeddings: report.embeddings ?? null, probedAt: report.probedAt ?? null, probedModel: report.probedModel ?? null, probeDetail: report.probeDetail ?? null },
+        models: (report.models ?? []).map((m) => {
+          const c = catalogue.find((x) => x.name === m.id);
+          return { id: m.id, available: m.available, reason: m.reason ?? null, ownedBy: m.ownedBy ?? null, catalogued: c ? { id: c.id, state: c.state, held: c.format === 'server' } : null };
+        })
       }))
     );
   });
@@ -298,7 +436,10 @@ export function gatewayAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const body = parseBody(
       z.object({
-        name: z.string().trim().regex(/^[a-zA-Z0-9][\w./:-]{0,199}$/, 'An Ollama model name such as llama3.1:8b or hf.co/org/repo:Q4_K_M'),
+        name: z.string().trim().regex(/^[a-zA-Z0-9][\w./:-]{0,199}$/, 'An Ollama model name such as llama3.1:8b or hf.co/org/repo:Q4_K_M').optional(),
+        // B-4304: a model a Chat Completions server holds, registered from its /v1/models listing instead of pulled.
+        serverInstanceId: z.string().length(26).optional(),
+        serverModel: serverModelSchema.optional(),
         source: z.string().trim().min(1).max(500).default('Ollama library'),
         expectedDigest: z.string().trim().regex(/^(sha256:)?[a-f0-9]{64}$/i).nullable().default(null),
         license: z.object({ name: z.string().trim().max(200), url: z.string().url().max(500).optional(), notes: z.string().max(1000).optional() }).nullable().default(null),
@@ -308,14 +449,17 @@ export function gatewayAdminRoutes(s: Services): Router {
       }),
       req.body
     );
-    if (PICKLE.test(body.name) || PICKLE.test(body.source)) {
-      await audit(req, 'model.import.refused', { model: body.name }, { reason: 'pickle' });
+    if (body.serverInstanceId || body.serverModel) return importHeld(req, res, body);
+    if (!body.name) throw badRequest('Give the model and tag to pull, or a server and the model it holds.');
+    const name = body.name;
+    if (PICKLE.test(name) || PICKLE.test(body.source)) {
+      await audit(req, 'model.import.refused', { model: name }, { reason: 'pickle' });
       throw new HttpProblem(422, 'Import refused', 'The source is a pickle checkpoint (.bin, .pt, .pth, .pkl, .ckpt). Only GGUF and safetensors are accepted.', { extensions: { reason: 'pickle' } });
     }
     if (!clears(p.clearance, body.label)) throw forbidden('You cannot approve a model for data above your clearance.', { step: 'clearance' });
     let m: ModelRow;
     try {
-      m = await g.repo.createModel({ name: body.name, source: body.source, expectedDigest: body.expectedDigest, license: body.license?.name ? { ...body.license, recordedBy: p.username, recordedAt: Date.now() } : null, label: body.label, notes: body.notes, requestedBy: p.userId, requestedTenant: p.tenantId });
+      m = await g.repo.createModel({ name, source: body.source, expectedDigest: body.expectedDigest, license: body.license?.name ? { ...body.license, recordedBy: p.username, recordedAt: Date.now() } : null, label: body.label, notes: body.notes, requestedBy: p.userId, requestedTenant: p.tenantId });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('That model is already in the catalogue.');
       throw err;
@@ -338,6 +482,47 @@ export function gatewayAdminRoutes(s: Services): Router {
     await audit(req, 'model.import.requested', { model: m.name }, { source: m.source, expectedDigest: m.expected_digest, label: m.label, pullJob: jobId });
     res.status(201).json({ ...modelView(m), jobId });
   });
+
+  /**
+   * B-4304: registers a model a Chat Completions server lists: `format` `server`, no expected digest (the server's
+   * model id stands in for it), placed warm on the instance's pool, nothing pulled. The licence, the evaluation and
+   * dual-control approval apply as for any model.
+   */
+  const importHeld = async (req: Request, res: Response, body: { serverInstanceId?: string | undefined; serverModel?: string | undefined; expectedDigest: string | null; license: { name: string; url?: string | undefined; notes?: string | undefined } | null; label: (typeof LABELS)[number]; notes: string | null; poolId?: string | undefined }) => {
+    const p = principalOf(req);
+    if (!body.serverInstanceId || !body.serverModel) throw badRequest('Give both the server instance and the model id it lists.');
+    if (body.expectedDigest) throw badRequest('A server-held model has no digest to pin: the server reports its model id instead.');
+    const inst = await g.repo.instance(body.serverInstanceId);
+    if (!inst) throw notFound('Instance');
+    if (inst.kind !== 'openai') throw conflict(`${inst.name} is an Ollama instance; request an import by name to pull onto it.`);
+    if (body.poolId && body.poolId !== inst.pool_id) throw badRequest('A server-held model is placed on its server\'s pool.');
+    const modelId = body.serverModel;
+    if (PICKLE.test(modelId)) {
+      await audit(req, 'model.import.refused', { model: modelId }, { reason: 'pickle', server: inst.name });
+      throw new HttpProblem(422, 'Import refused', 'The model id names a pickle checkpoint (.bin, .pt, .pth, .pkl, .ckpt). Only GGUF and safetensors are accepted.', { extensions: { reason: 'pickle' } });
+    }
+    if (!clears(p.clearance, body.label)) throw forbidden('You cannot approve a model for data above your clearance.', { step: 'clearance' });
+    const candidates = (await g.serverCandidates()).find((c) => c.instance.id === inst.id);
+    const listed = candidates?.report.models?.find((m) => m.id === modelId);
+    if (!listed) throw conflict(`${inst.name} does not list ${modelId}. Check the server's /v1/models.`);
+    if (!listed.available) throw conflict(`${inst.name} lists ${modelId} as unavailable: ${listed.reason ?? 'the server refuses it'}.`);
+    const pool = await g.repo.pool(inst.pool_id);
+    if (!pool) throw notFound('Pool');
+    if (labelRank(body.label) > labelRank(pool.label_ceiling)) throw forbidden(`${modelId} is labelled ${body.label} but ${pool.name}'s ceiling is ${pool.label_ceiling}.`, { step: 'zone' });
+    await s.zones.assertAdmits(pool, body.label);
+    const report = candidates!.report;
+    const caps = /embed/i.test(modelId) ? ['embedding'] : ['completion', ...(report.tools ? ['tools'] : [])];
+    let m: ModelRow;
+    try {
+      m = await g.repo.createModel({ name: modelId, source: `server:${inst.name}/${modelId}`, expectedDigest: null, license: body.license?.name ? { ...body.license, recordedBy: p.username, recordedAt: Date.now() } : null, label: body.label, notes: body.notes, requestedBy: p.userId, requestedTenant: p.tenantId, server: { instanceId: inst.id, model: modelId, capabilities: caps, contextLength: report.contextLength ?? null, family: listed.ownedBy ?? null } });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw conflict('That model is already in the catalogue.');
+      throw err;
+    }
+    await g.repo.place(m.id, pool.id, 'warm', p.userId);
+    await audit(req, 'model.import.requested', { model: m.name }, { source: m.source, format: 'server', server: inst.name, serverModel: modelId, expectedDigest: null, label: m.label, pool: pool.name, pullJob: null });
+    res.status(201).json({ ...modelView(m), jobId: null });
+  };
 
   const loadModel = async (req: Request) => {
     const m = await g.repo.model(String(req.params.id));

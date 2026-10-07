@@ -7,13 +7,15 @@
   const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
   const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const size = (n) => (n == null ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table or view', web: 'Internal web site' };
+  const KIND = { upload: 'Upload', s3: 'S3 prefix', git: 'Git repository', database: 'Database table, view or collection', web: 'Internal web site' };
+  const ENGINE = { postgres: 'PostgreSQL', mysql: 'MySQL', mongodb: 'MongoDB' };
+  const csvList = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
   const REPL = { starting: 'starting', streaming: 'streaming changes', fallback: 'watermarks (replication unavailable)', stopped: 'stopped' };
   const SCHED = { '15m': 'every 15 min, incremental', hourly: 'hourly', daily: 'daily', manual: 'manual' };
   const BUSY_DOC = ['quarantined', 'scanning', 'queued', 'indexing'];
   const STORE = { db: 'table scan with cosine similarity in the database', pgvector: 'pgvector on PostgreSQL' };
 
-  const srcName = (s) => (s.kind === 'upload' ? 'Uploads' : s.kind === 'git' ? 'git: ' + s.location : s.kind === 'database' ? (s.config.engine === 'mysql' ? 'mysql: ' : 'pg: ') + (s.config.object || s.location) : s.location);
+  const srcName = (s) => (s.kind === 'upload' ? 'Uploads' : s.kind === 'git' ? 'git: ' + s.location : s.kind === 'database' ? (s.config.engine === 'mysql' ? 'mysql: ' : s.config.engine === 'mongodb' ? 'mongo: ' : 'pg: ') + (s.config.object || s.location) : s.location);
   const syncText = (s) => {
     if (s.kind === 'upload') return 'manual';
     if (s.state === 'syncing') return 'running';
@@ -112,7 +114,7 @@
       const kbList = bases.filter((k) => !st.filter || k.name.toLowerCase().indexOf(st.filter.toLowerCase()) >= 0);
       const subOf = (k) => k.documents + ' document' + (k.documents === 1 ? '' : 's') + (k.building ? ', index swap pending' : k.lastSyncAt ? ', synced ' + ago(k.lastSyncAt) : '') + (k.status === 'draft' ? ', draft' : '');
 
-      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or internal web site.' });
+      const sourcesTable = () => UI.table(['Source', 'Type', 'Sync', 'Documents', 'Status'], sources.map((s) => ({ cells: [s.kind === 'upload' ? 'Uploads' : '<span class="mono">' + esc(srcName(s)) + '</span>', esc(KIND[s.kind]), esc(syncText(s)), String(s.documents), statePill(srcStatus(s, quarantinedDocs.length))], attrs: 'data-src="' + esc(s.id) + '"' })), { minWidth: '0', emptyTitle: 'No sources yet', emptyText: 'Add an upload, S3 prefix, Git repository, database view or collection, or internal web site.' });
       const docsTable = (list) => UI.table(['Document', 'Label', 'Label origin', 'Chunks', 'State'], list.map((d) => ({ cells: [esc(d.name), UI.label(d.label, { sm: true }), esc(origin(d)), String(d.chunks), statePill(docState(d))], attrs: 'data-doc="' + esc(d.id) + '"', selected: st.failedOpen && d.state === 'failed' })), { minWidth: '0', emptyTitle: docs.length ? 'No documents match' : 'No documents yet', emptyText: docs.length ? 'Try another word.' : 'Add a source or upload a file. Documents appear as they are extracted.' });
       const failedDoc = docs.find((d) => d.state === 'failed');
       const failedPanel = st.failedOpen && failedDoc ? '<div class="problem"><div class="ptitle">Extraction failed for ' + esc(failedDoc.name) + '</div><div class="ptext">' + esc(failedDoc.error || 'The document could not be read.') + ' The document keeps its label and stays out of retrieval until a retry succeeds.</div><div class="trace"><span>Trace</span><span class="mono">' + esc(failedDoc.traceId || 'none') + '</span>' + (failedDoc.traceId ? UI.btn('Copy', { kind: 'ghost', size: 'sm', attrs: 'data-copy="' + esc(failedDoc.traceId) + '"' }) : '') + '<span class="right"></span>' + (manage ? UI.btn('Retry extraction', { size: 'sm', icon: 'refresh', attrs: 'data-retry="' + esc(failedDoc.id) + '"' }) : '') + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissfail' }) + '</div></div>' : '';
@@ -202,6 +204,7 @@
             .concat(s.kind === 's3' ? [['Endpoint', s.config.endpoint ? '<span class="mono">' + esc(s.config.endpoint) + '</span> with its own keys (sealed)' : 'the platform\'s S3 storage'], ['Include', s.config.include && s.config.include.length ? s.config.include.map((g) => '<span class="mono">' + esc(g) + '</span>').join(', ') : 'every indexable file under the prefix']] : [])
             .concat(s.kind === 'web' ? [['Crawl', 'up to ' + esc(String(s.config.maxPages)) + ' pages, ' + esc(String(s.config.maxDepth)) + ' link' + (s.config.maxDepth === 1 ? '' : 's') + ' deep' + (s.config.pathPrefix ? ', under <span class="mono">' + esc(s.config.pathPrefix) + '</span>' : '') + (s.config.sitemap ? ', with the sitemap' : '')], ['Rules', 'stays on this site, follows robots.txt, re-checks pages by ETag or Last-Modified']] : [])
             .concat(s.kind === 'database' && s.config.roleMappings ? [['Row security', 'read as ' + s.config.roleMappings.map((m) => '<span class="mono">' + esc(m.role) + '</span> for ' + esc(m.group)).join(', ') + '; the database\'s policies decide which group retrieves each row']] : [])
+            .concat(s.kind === 'database' && s.config.fields ? [['Indexed fields', s.config.fields.map((f) => '<span class="mono">' + esc(f) + '</span>').join(', ') + '; id <span class="mono">' + esc(s.config.idColumn || '_id') + '</span>']] : [])
             .concat(s.kind === 'database' && s.config.accessColumn ? [['Row access', 'column <span class="mono">' + esc(s.config.accessColumn) + '</span> names the ' + (s.config.accessKind === 'user' ? 'users' : 'directory groups') + ' who may retrieve each row']] : [])
             .concat(s.kind === 'database' && s.replication ? [['Replication', esc(REPL[s.replication.state] || s.replication.state) + (s.replication.lsn ? ', at <span class="mono">' + esc(s.replication.lsn) + '</span>' : '')], ['Slot and publication', '<span class="mono">' + esc(s.replication.slot || '') + '</span>, <span class="mono">' + esc(s.replication.publication || '') + '</span>']] : []), 2)
           + (s.replication && s.replication.error ? UI.notice('<b>Replication is not running;</b> the source syncs by watermark on its schedule. ' + esc(s.replication.error), 'warn') : '')
@@ -275,7 +278,7 @@
       ctx.on('click', '[data-addsource]', () => openAdd());
       function openAdd() {
         const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
-        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table or view' }, { value: 'web', label: 'Internal web site' }], 's3', 'data-type'))
+        ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table, view or collection' }, { value: 'web', label: 'Internal web site' }], 's3', 'data-type'))
           + '<div data-loc-wrap>' + UI.field('Location', UI.input('', { placeholder: 's3://bucket/prefix/', attrs: 'data-loc' }), '<span data-loc-hint>The platform\'s S3 storage, or a bucket on its own endpoint below.</span>') + '</div>'
           + '<div data-s3-wrap>' + UI.field('Include', UI.input('', { placeholder: '**/*.md, policies/*.pdf', attrs: 'data-incl' }), 'Optional. Patterns relative to the prefix, comma separated: * within a folder, ** across folders.')
             + UI.field('Endpoint', UI.input('', { placeholder: 'https://minio.example.internal (empty: the platform\'s storage)', attrs: 'data-ep' }), 'An S3-compatible endpoint on the internal network, or one an operator allows.')
@@ -287,7 +290,9 @@
             + UI.check('Also read the pages the sitemap lists', true, 'data-sitemap')
             + '<div class="fg2">The crawl stays on the start page\'s site, follows robots.txt, and fetches only internal addresses (or hosts an operator allows). Unchanged pages are recognised by ETag or Last-Modified.</div></div>'
           + '<div data-git-wrap hidden>' + UI.field('Ref', UI.input('', { placeholder: 'main (default branch when empty)', attrs: 'data-ref' })) + UI.field('Path', UI.input('', { placeholder: 'docs/ (whole repository when empty)', attrs: 'data-path' })) + '</div>'
-          + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn aria-label="Connection"><option value="">Loading…</option></select>', 'PostgreSQL and MySQL connections registered on the Connections screen.') + UI.field('View or table', '<select class="select" data-obj aria-label="View or table"></select>', 'Only objects on the connection\'s allow-list.')
+          + '<div data-db-wrap hidden>' + UI.field('Connection', '<select class="select" data-conn aria-label="Connection"><option value="">Loading…</option></select>', 'PostgreSQL, MySQL and MongoDB connections registered on the Connections screen.') + UI.field('View, table or collection', '<select class="select" data-obj aria-label="View, table or collection"></select>', 'Only objects on the connection\'s allow-list.')
+            + '<div data-mongo-wrap hidden>' + UI.field('Fields to index', UI.input('', { placeholder: 'title, body, customer.name', attrs: 'data-fields' }), 'Comma separated; dotted paths reach into sub-documents. Only these fields become document text; empty indexes the text fields of the sampled schema.')
+            + '<div class="knowledge-two">' + UI.field('Id field', UI.input('_id', { attrs: 'data-idf' })) + UI.field('Watermark field', UI.input('', { placeholder: 'updatedAt', attrs: 'data-wmf' }), 'Optional. A date or number that grows on every change; without one each sync reads the collection again.') + '</div></div>'
             + UI.field('Row access column', '<select class="select" data-acol aria-label="Row access column"></select>', 'Optional. Each row lists who may retrieve it; readers not on a row\'s list never get its text. An empty value lets nobody read the row.')
             + UI.field('The column names', UI.select([{ value: 'group', label: 'directory groups' }, { value: 'user', label: 'users (username or email)' }], 'group', 'data-akind aria-label="What the access column names"'))
             + '<div data-roles-wrap>' + UI.field('Row security by role', UI.textarea('', { placeholder: 'finance = kb_finance\nops = kb_ops', rows: 3, attrs: 'data-roles' }), 'Optional, PostgreSQL. One group = database role per line: rows are read as each role, so the table\'s row security policies decide which group retrieves each row. Instead of an access column; the source then syncs by full reads.') + '</div>'
@@ -300,22 +305,35 @@
             const q = (s) => d.querySelector(s);
             const connOf = () => (st.conns || []).find((x) => x.id === q('[data-conn]').value);
             const fillCols = () => { const c = connOf(); const cols = c && c.columns ? c.columns[q('[data-obj]').value] || [] : []; q('[data-acol]').innerHTML = '<option value="">none: the base\'s access decides</option>' + cols.map((x) => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join(''); };
-            const fillObjs = () => { const c = connOf(); q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : ''; q('[data-repl-wrap]').hidden = !c || c.engine !== 'postgres'; q('[data-roles-wrap]').hidden = !c || c.engine !== 'postgres'; fillCols(); };
+            const fillObjs = () => {
+              const c = connOf(); const mongo = !!c && c.engine === 'mongodb';
+              q('[data-obj]').innerHTML = c ? c.objects.map((o) => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('') || '<option value="">No allow-listed objects</option>' : '';
+              q('[data-repl-wrap]').hidden = !c || c.engine !== 'postgres'; q('[data-roles-wrap]').hidden = !c || c.engine !== 'postgres';
+              q('[data-mongo-wrap]').hidden = !mongo;
+              if (mongo) { const cols = c.columns[q('[data-obj]').value] || []; const wm = q('[data-wmf]'); if (!wm.value) wm.value = cols.indexOf('updatedAt') >= 0 ? 'updatedAt' : cols.indexOf('updated_at') >= 0 ? 'updated_at' : ''; }
+              fillCols();
+            };
             const sync = () => {
               const t = q('[data-type]').value;
               q('[data-loc-wrap]').hidden = t === 'upload' || t === 'database'; q('[data-git-wrap]').hidden = t !== 'git'; q('[data-db-wrap]').hidden = t !== 'database'; q('[data-file-wrap]').hidden = t !== 'upload'; q('[data-sched-wrap]').hidden = t === 'upload'; q('[data-s3-wrap]').hidden = t !== 's3'; q('[data-web-wrap]').hidden = t !== 'web';
               q('[data-loc]').placeholder = t === 'git' ? 'https://git.example.internal/org/repo.git' : t === 'web' ? 'https://intranet.example.internal/' : 's3://bucket/prefix/';
               q('[data-loc-hint]').textContent = t === 'git' ? 'An https:// repository the server may read.' : t === 'web' ? 'The start page of an internal site.' : 'The platform\'s S3 storage, or a bucket on its own endpoint below.';
-              if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(c.engine === 'mysql' ? 'MySQL' : 'PostgreSQL') + ', ' + esc(c.label) + ')</option>').join('') : '<option value="">No PostgreSQL or MySQL connection registered</option>'; fillObjs(); });
+              if (t === 'database') needConns().then((cs) => { q('[data-conn]').innerHTML = cs.length ? cs.map((c) => '<option value="' + esc(c.id) + '">' + esc(c.name) + ' (' + esc(ENGINE[c.engine] || c.engine) + ', ' + esc(c.label) + ')</option>').join('') : '<option value="">No database connection registered</option>'; fillObjs(); });
             };
-            q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); q('[data-obj]').addEventListener('change', fillCols); sync();
+            q('[data-type]').addEventListener('change', sync); q('[data-conn]').addEventListener('change', fillObjs); q('[data-obj]').addEventListener('change', () => { const c = connOf(); if (c && c.engine === 'mongodb') { q('[data-wmf]').value = ''; fillObjs(); } else fillCols(); }); sync();
             q('[data-go]').addEventListener('click', async () => {
               const t = q('[data-type]').value; const floor = q('[data-floor]').value;
               const showErr = (e2) => { q('[data-err]').innerHTML = UI.notice('<b>' + esc((e2.problem && e2.problem.title) || 'Refused') + '.</b> ' + esc(e2.message), 'danger'); };
               if (t === 'upload') { const files = q('[data-files]').files; if (!files || !files.length) { toast('Choose at least one file.'); return; } App.closeOverlay(); uploadFiles(files, floor); return; }
               const body = { kind: t, labelFloor: floor, schedule: q('[data-sched]').value };
               if (t === 'database') {
-                body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view.'); return; }
+                body.connectionId = q('[data-conn]').value; body.location = q('[data-obj]').value; if (!body.connectionId || !body.location) { toast('Pick a connection and an allow-listed view or collection.'); return; }
+                const mc = connOf();
+                if (mc && mc.engine === 'mongodb') {
+                  const fields = csvList(q('[data-fields]').value); if (fields.length) body.fields = fields;
+                  const idf = q('[data-idf]').value.trim(); if (idf) body.idColumn = idf;
+                  const wmf = q('[data-wmf]').value.trim(); body.watermarkColumn = wmf || null;
+                }
                 if (q('[data-acol]').value) { body.accessColumn = q('[data-acol]').value; body.accessKind = q('[data-akind]').value; }
                 const c = connOf(); if (c && c.engine === 'postgres' && q('[data-repl]').checked) { body.replication = true; body.publication = q('[data-pub]').value.trim() || 'exprsn_knowledge'; }
                 if (c && c.engine === 'postgres' && q('[data-roles]').value.trim()) {

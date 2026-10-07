@@ -52,7 +52,8 @@ export interface GroupRow {
   visibility: Visibility;
   join_mode: JoinMode;
   label: Label;
-  state: 'active' | 'hidden' | 'deleted';
+  /** 1.6.0 (B-4206): `archived` is read only: members keep reading, nothing new is posted, joined or scheduled. */
+  state: 'active' | 'hidden' | 'archived' | 'deleted';
   created_by: string | null;
   created_at: number;
   updated_at: number;
@@ -244,14 +245,19 @@ export class GroupService {
     return a;
   }
 
-  /** Access with a right (by the acting role); a reader without it gets 403, anyone else 404. */
-  async require(p: Principal, id: string, right: GroupRight): Promise<Access> {
+  /**
+   * Access with a right (by the acting role); a reader without it gets 403, anyone else 404. `reading` marks a call that
+   * only lists what the right shows (requests, cases, invite candidates), which an archived group still answers.
+   */
+  async require(p: Principal, id: string, right: GroupRight, opts: { reading?: boolean } = {}): Promise<Access> {
     const a = await this.access(p, id);
     if (right === 'read') {
       if (!a.read) throw forbidden(clears(p.clearance, a.group.label) ? 'Join the group to see its content.' : `The group is labelled ${a.group.label}, above your clearance of ${p.clearance}.`, { step: clears(p.clearance, a.group.label) ? 'group' : 'clearance' });
       return a;
     }
     if (!a.read || !roleHas(a.acting, right)) throw forbidden(a.acting ? `Your role in this group (${a.acting}) does not allow this.` : 'Join the group first.', { step: 'group-role', right });
+    // 1.6.0 (B-4206): an archived group is read only; its owners may still delete it.
+    if (a.group.state === 'archived' && right !== 'delete' && !opts.reading) throw conflict('The group is archived; it is read only.');
     return a;
   }
 
@@ -318,19 +324,24 @@ export class GroupService {
     return groupView(a.group, a.read ? await this.openDescription(a.group) : null, a, { members: counts.get(id) ?? 0 });
   }
 
-  async create(ctx: Ctx, input: { workspaceId?: string | null | undefined; name: string; description?: string | null | undefined; visibility: Visibility; joinMode: JoinMode; label?: Label | undefined }) {
+  async create(ctx: Ctx, input: { workspaceId?: string | null | undefined; name: string; description?: string | null | undefined; visibility?: Visibility | undefined; joinMode?: JoinMode | undefined; label?: Label | undefined }) {
     const s = this.s();
     const p = ctx.p;
     const wsId = input.workspaceId ?? p.workspaceId ?? null;
     if (!wsId) throw new HttpProblem(422, 'No workspace', 'Name the workspace the group belongs to.');
     const w = (await workspacesFor(s, p)).find((x) => x.id === wsId);
     if (!w) throw notFound('Workspace');
+    // 1.6.0 (B-4206): the workspace's group defaults and who may create groups there (Social and messaging).
+    const pol = await s.socialAdmin.policy(p.tenantId, w.id);
+    const perms = effectivePermissions(p);
+    if (pol.groupCreate === 'admins' && !perms.has('groups:manage') && !perms.has('social:manage')) throw forbidden('In this workspace only admins create groups.', { step: 'workspace-policy' });
+    input = { ...input, visibility: input.visibility ?? pol.groupVisibility, joinMode: input.joinMode ?? pol.groupJoin };
     const label = input.label ?? (labelRank(w.label_ceiling) < labelRank('internal') ? w.label_ceiling : 'internal');
     if (labelRank(label) > labelRank(w.label_ceiling)) throw new HttpProblem(422, 'Label above the workspace ceiling', `The workspace allows content up to ${w.label_ceiling}.`);
     if (!clears(p.clearance, label)) throw forbidden(`You are not cleared for ${label}.`, { step: 'clearance' });
     const id = ulid();
     const t = Date.now();
-    const row: GroupRow = { id, tenant_id: p.tenantId, workspace_id: w.id, name: input.name, description: input.description ? await s.keys.seal(p.tenantId, input.description, `group:${id}`) : null, visibility: input.visibility, join_mode: input.joinMode, label, state: 'active', created_by: p.userId, created_at: t, updated_at: t };
+    const row: GroupRow = { id, tenant_id: p.tenantId, workspace_id: w.id, name: input.name, description: input.description ? await s.keys.seal(p.tenantId, input.description, `group:${id}`) : null, visibility: input.visibility!, join_mode: input.joinMode!, label, state: 'active', created_by: p.userId, created_at: t, updated_at: t };
     await s.db.transaction(async (trx) => {
       await trx('social_groups').insert(row);
       await trx('group_members').insert({ group_id: id, tenant_id: p.tenantId, user_id: p.userId, role: 'owner', added_by: p.userId, joined_at: t });
@@ -385,6 +396,60 @@ export class GroupService {
     return { id: g.id, state: 'deleted' as const };
   }
 
+  // ---------- administration (1.6.0, B-4206: Social and messaging) ----------
+
+  /**
+   * A group as an administrator holding social:manage sees it: in a workspace they may act in, at a label they are
+   * cleared for (else 404, as if it did not exist). Hidden and archived groups included; deleted ones are gone.
+   */
+  async adminRow(p: Principal, id: string): Promise<GroupRow> {
+    const g = await this.row(p.tenantId, id);
+    if (!g || g.state === 'deleted' || !clears(p.clearance, g.label) || !(await this.workspaceIds(p)).includes(g.workspace_id)) throw notFound('Group');
+    return g;
+  }
+
+  /** Makes `userId` (a member) the owner; the previous owners become moderators. The members are told. */
+  async transferOwnership(ctx: Ctx, id: string, userId: string) {
+    const s = this.s();
+    const g = await this.adminRow(ctx.p, id);
+    if (g.state === 'archived') throw conflict('The group is archived; it is read only.');
+    const m = await this.member(g.id, userId);
+    if (!m) throw new HttpProblem(422, 'Not a member', 'The new owner must be a member of the group.', { extensions: { step: 'member' } });
+    const before = ((await this.db('group_members').where({ group_id: g.id, role: 'owner' }).select('user_id')) as { user_id: string }[]).map((r) => r.user_id);
+    await s.db.transaction(async (trx) => {
+      await trx('group_members').where({ group_id: g.id, role: 'owner' }).whereNot({ user_id: userId }).update({ role: 'moderator' });
+      await trx('group_members').where({ group_id: g.id, user_id: userId }).update({ role: 'owner' });
+    });
+    await this.audit(ctx, 'group.ownership.transferred', { group: g.id, workspace: g.workspace_id, user: userId }, { before, after: [userId] }, g.label);
+    this.event(g.tenant_id, 'group.updated', g.label, { group: g.id, workspace: g.workspace_id, actor: ctx.p.userId });
+    for (const u of [...before.filter((x) => x !== userId), userId]) this.room(g, 'group.member.role', { userId: u, role: u === userId ? 'owner' : 'moderator' });
+    const members = ((await this.db('group_members').where({ group_id: g.id }).select('user_id')) as { user_id: string }[]).map((r) => r.user_id);
+    const who = (await this.db('users').where({ tenant_id: g.tenant_id, id: userId }).first('display_name')) as { display_name: string } | undefined;
+    await s.notifications.notify({ tenantId: g.tenant_id, userIds: members, kind: 'group', title: `${who?.display_name ?? 'A member'} now owns ${g.name}`, route: `groups?id=${g.id}`, label: g.label });
+    return { id: g.id, owners: [userId], moderators: before.filter((x) => x !== userId) };
+  }
+
+  /**
+   * Archives a group: read only from now on (members keep reading its posts and events; nothing is posted, joined or
+   * scheduled), pending requests and invitations cancelled, reminders cancelled. Calendar feeds keep the past events.
+   */
+  async archive(ctx: Ctx, id: string) {
+    const s = this.s();
+    const g = await this.adminRow(ctx.p, id);
+    if (g.state === 'archived') return { id: g.id, state: 'archived' as const };
+    if (g.state !== 'active') throw conflict(`The group is ${g.state}; moderation decides on it.`);
+    const n = await s.db('social_groups').where({ id: g.id, state: 'active' }).update({ state: 'archived', updated_at: Date.now() });
+    if (!n) throw conflict('The group changed meanwhile.');
+    const cancelledRequests = await s.db('group_requests').where({ group_id: g.id, state: 'pending' }).update({ state: 'cancelled', pending_key: null, decided_by: ctx.p.userId, decided_at: Date.now() });
+    const cancelledReminders = await s.calendar.cancelRemindersForGroup(g.tenant_id, g.id);
+    const members = ((await this.db('group_members').where({ group_id: g.id }).select('user_id')) as { user_id: string }[]).map((r) => r.user_id);
+    await this.audit(ctx, 'group.archived', { group: g.id, workspace: g.workspace_id }, { name: g.name, members: members.length, requestsCancelled: cancelledRequests, remindersCancelled: cancelledReminders }, g.label);
+    this.event(g.tenant_id, 'group.updated', g.label, { group: g.id, workspace: g.workspace_id, actor: ctx.p.userId });
+    this.room(g, 'group.updated', { state: 'archived' });
+    await s.notifications.notify({ tenantId: g.tenant_id, userIds: members, kind: 'group', title: `${g.name} was archived`, body: 'You can still read its posts and events; nothing new can be posted or scheduled.', route: `groups?id=${g.id}`, label: g.label });
+    return { id: g.id, state: 'archived' as const, members: members.length };
+  }
+
   // ---------- members ----------
 
   async members(p: Principal, id: string) {
@@ -396,6 +461,23 @@ export class GroupService {
   private async owners(groupId: string): Promise<number> {
     const r = (await this.db('group_members').where({ group_id: groupId, role: 'owner' }).count({ n: '*' })) as { n: number | string }[];
     return Number(r[0]?.n ?? 0);
+  }
+
+  /**
+   * People a moderator may invite (Sprint 30, the console's invitation picker): active users of the group's workspace,
+   * cleared for its label, not members and without a pending request or invitation. At most 50, matched on the name.
+   */
+  async candidates(p: Principal, id: string, q?: string) {
+    const a = await this.require(p, id, 'invite', { reading: true });
+    const g = a.group;
+    const like = q ? `%${q.toLowerCase().replace(/[%_\\]/g, '')}%` : null;
+    const rows = (await this.db('workspace_members as wm').join('users as u', 'u.id', 'wm.user_id')
+      .where({ 'wm.workspace_id': g.workspace_id, 'u.tenant_id': g.tenant_id, 'u.state': 'active' })
+      .whereNotIn('u.id', this.db('group_members').where({ group_id: g.id }).select('user_id'))
+      .whereNotIn('u.id', this.db('group_requests').where({ group_id: g.id, state: 'pending' }).andWhere('expires_at', '>', Date.now()).select('user_id'))
+      .modify((qb) => { if (like) qb.andWhere((w) => { void w.whereRaw('lower(u.username) like ?', [like]).orWhereRaw('lower(u.display_name) like ?', [like]); }); })
+      .distinct('u.id', 'u.username', 'u.display_name', 'u.clearance').orderBy('u.display_name').limit(200)) as { id: string; username: string; display_name: string | null; clearance: string }[];
+    return rows.filter((u) => isLabel(u.clearance) && clears(u.clearance, g.label)).slice(0, 50).map((u) => ({ userId: u.id, username: u.username, displayName: u.display_name ?? u.username }));
   }
 
   private async addMember(g: GroupRow, userId: string, role: GroupRole, by: string | null): Promise<boolean> {
@@ -516,7 +598,7 @@ export class GroupService {
 
   /** Pending requests and invitations of a group (moderators). */
   async requests(p: Principal, id: string, state?: RequestRow['state']) {
-    await this.require(p, id, 'decide');
+    await this.require(p, id, 'decide', { reading: true });
     const rows = ((await this.db('group_requests as r').join('users as u', 'u.id', 'r.user_id').where({ 'r.group_id': id, 'r.state': state ?? 'pending' }).orderBy('r.created_at', 'desc').limit(500).select('r.*', 'u.display_name')) as Record<string, unknown>[]);
     const out = [];
     for (const raw of rows) {
@@ -655,7 +737,7 @@ export class GroupService {
 
   /** Flags raised on the group's content (reports and moderation checks through B-19), for its moderators. */
   async cases(p: Principal, id: string, state?: string) {
-    await this.require(p, id, 'cases');
+    await this.require(p, id, 'cases', { reading: true });
     const s = this.s();
     const posts = s.db('group_posts').where({ group_id: id }).select('id');
     const events = s.db('group_events').where({ group_id: id }).select('id');

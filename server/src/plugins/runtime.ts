@@ -16,6 +16,7 @@ import { RunnerUnavailable, type RunResult } from '../scripts/runner.js';
 import type { Services } from '../services.js';
 import { auditData, matchesEvent } from '../webhooks/service.js';
 import { ACTION_CAPABILITY, ACTION_WITH, type Manifest } from './manifest.js';
+import { domainCall, isDomainCall } from './broker-calls.js';
 import { handlerProgram, isCall, isDone } from './sandbox.js';
 import type { PluginRow } from './service.js';
 
@@ -58,8 +59,7 @@ export const CALL_CAPABILITY: Record<string, string> = {
   'groups.read': 'read:groups',
   'posts.write': 'write:posts'
 };
-/** Calls whose domain has not shipped: granted calls answer 501 until it does. */
-const NOT_YET = new Set(['records.read', 'records.write', 'files.read', 'groups.read', 'posts.write']);
+// B-3904 (1.5.0): the domain calls (records, files, groups, posts) are live; they answered 501 in 1.4.0.
 
 export interface EventEnvelope {
   id: string;
@@ -336,7 +336,7 @@ export class PluginRuntime {
       await s.audit.append({ tenantId: p.tenant_id, action: via === 'action' ? 'plugin.action.refused' : 'plugin.call.refused', kind: 'system', actor: { service: `plugin:${p.plugin_key}` }, target: { plugin: p.id, key: p.plugin_key, invocation: ctx.invocation.id }, label: 'internal', detail: { [via]: api, capability: cap, granted: grants, event: ctx.event.type } });
       throw forbidden(`${p.plugin_key} is not granted ${cap}, which ${via === 'action' ? `a ${api} action` : `the ${api} call`} needs.`, { step: 'capability', capability: cap });
     }
-    if (NOT_YET.has(api)) throw new HttpProblem(501, 'Not implemented', `${api} is reserved for a domain that has not shipped yet.`);
+    if (isDomainCall(api)) return domainCall(s, p, api, args, ctx.event.label);
     const schema = ACTION_WITH[api];
     if (schema) {
       const parsed = schema.safeParse(args);
@@ -414,7 +414,8 @@ export class PluginRuntime {
     }
     const input = { ...(plain(args.input) ? args.input : {}), ...(args.includeEvent ? { event: ctx.event } : {}) };
     const chain = pluginCause.getStore()?.chain ?? [...ctx.invocation.chain, p.id];
-    const run = await s.workflows.start(who, String(args.workflow), { input, dry: false, trigger: `plugin:${chain.join(',')}` });
+    // B-4101: the plugin action is a node of the chain the run joins (a new chain rooted at the action).
+    const run = await s.workflows.start(who, String(args.workflow), { input, dry: false, trigger: `plugin:${chain.join(',')}`, chain: { via: { kind: 'plugin-action', ref: `${ctx.invocation.id}:${ctx.seq.n++}`, callee: p.plugin_key } } });
     await s.audit.append({ tenantId: p.tenant_id, action: 'workflow.run.started', kind: 'system', actor: { service: `plugin:${p.plugin_key}`, user: p.installed_by }, target: { workflow: run.workflow_id, run: run.id }, label: run.label, detail: { version: run.version, plugin: p.plugin_key, event: ctx.event.type } });
     return { run: run.id };
   }

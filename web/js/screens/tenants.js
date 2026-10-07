@@ -302,6 +302,8 @@
       };
       if (node && st.nodeKey !== st.node && st.nodeLoading !== st.node) loadNode();
       const nd = node && st.nodeKey === st.node ? st.nodeData : null;
+      // B-4501: the result of Create from template opens once the tree and the new tenant's data have loaded (a re-render closes a dialog).
+      if (st.justCreated && nd && !st.nodeLoading) { const made = st.justCreated; st.justCreated = null; setTimeout(() => createdModal(made), 0); }
 
       const roleName = (id) => ((st.roles || []).find((r) => r.id === id) || { name: id }).name;
       const storeName = (id) => (id ? ((st.providers || []).find((p) => p.id === id) || { name: 'removed store' }).name : 'Any store');
@@ -314,7 +316,7 @@
           + t.workspaces.map((w) => UI.listItem(esc(w.name) + (w.state !== 'active' ? ' ' + UI.pill(w.state, 'outline') : ''), 'workspace, ' + num(w.members) + (w.members === 1 ? ' member' : ' members'), { active: st.node === 'w:' + w.id, attrs: 'data-node="w:' + esc(w.id) + '" style="padding-left:22px"' })).join('')).join('')
         + '<div class="divider"></div>'
         + (tenants.some((t) => t.state === 'active') ? UI.btn('New workspace', { size: 'sm', icon: 'plus', cls: 'block', attrs: 'data-newws' }) : '')
-        + (isSys() ? UI.btn('New tenant', { size: 'sm', kind: 'ghost', icon: 'plus', cls: 'block', attrs: 'data-newtenant' }) : '')
+        + (isSys() ? UI.btn('New tenant', { size: 'sm', kind: 'ghost', icon: 'plus', cls: 'block', attrs: 'data-newtenant' }) + UI.btn('Create from template', { size: 'sm', kind: 'ghost', icon: 'plus', cls: 'block', attrs: 'data-fromtemplate' }) : '')
         + '</div>';
 
       // ---------- effective permission ----------
@@ -600,6 +602,62 @@
         });
       }
 
+      /** 1.6.0 (B-4501): a tenant from a template (enterprise, team, personal) with its first admin in one step. */
+      async function templateModal() {
+        let list;
+        try { list = st.templates || (st.templates = await App.get('/api/admin/tenant-templates')); } catch (err) { App.fail(err); return; }
+        const local = { pick: (list.find((x) => x.id === 'team') || list[0]).id, mode: 'link' };
+        const what = (x) => [x.workspaces.length + (x.workspaces.length === 1 ? ' workspace' : ' workspaces') + ' up to ' + x.adminClearance, x.roles.length ? x.roles.map((r) => r.name).join(' and ') + (x.roles.length === 1 ? ' role' : ' roles') : 'no custom roles', x.profiles.length + ' draft ' + (x.profiles.length === 1 ? 'profile' : 'profiles') + ' in zone ' + x.zone, x.issuer ? 'its own issuing CA' : 'no CA'].join(', ');
+        const cards = () => '<fieldset class="tn-tpls"><legend class="eyebrow">Template</legend>' + list.map((x) => '<label class="tn-tpl' + (x.id === local.pick ? ' on' : '') + '"><input type="radio" name="tn-tpl" value="' + esc(x.id) + '"' + (x.id === local.pick ? ' checked' : '') + ' data-tpl><span><b>' + esc(x.name) + '</b><span class="fg2">' + esc(x.description) + '</span><span class="muted">' + esc(what(x)) + '</span></span></label>').join('') + '</fieldset>';
+        const detail = () => { const x = list.find((t) => t.id === local.pick); return UI.kv([['Workspaces', x.workspaces.map((w) => esc(w.name) + ' ' + UI.label(w.label, { sm: true })).join(', ')], ['Roles', x.roles.length ? x.roles.map((r) => esc(r.name)).join(', ') : 'none'], ['Profiles', x.profiles.map((p) => '<span class="mono">' + esc(p.name) + '</span>').join(', ') + ' (drafts)'], ['Zone', '<span class="mono">' + esc(x.zone) + '</span>'], ['Issuer', x.issuer ? 'an intermediate under the platform root, when there is one' : 'none'], ['First admin', 'tenant-admin, cleared for ' + esc(x.adminClearance) + ', a member of every workspace']], 1); };
+        ctx.modal({
+          title: 'Create a tenant from a template',
+          body: cards() + '<div data-tpldetail>' + detail() + '</div>'
+            + '<div class="formgrid">' + UI.field('Slug', UI.input('', { attrs: 'data-fslug maxlength="63" autocomplete="off"', placeholder: 'contoso' }), 'Lowercase letters, digits and hyphens.')
+            + UI.field('Name', UI.input('', { attrs: 'data-fname maxlength="200"', placeholder: 'Contoso Freight' }))
+            + UI.field('First admin username', UI.input('', { attrs: 'data-fuser maxlength="63" autocomplete="off"', placeholder: 'ada' }))
+            + UI.field('First admin display name', UI.input('', { attrs: 'data-fdisplay maxlength="200"', placeholder: 'Ada Brennan' }))
+            + UI.field('First admin email', UI.input('', { attrs: 'data-femail maxlength="320" type="email"', placeholder: 'ada@contoso.example' }), 'Optional.') + '</div>'
+            + '<fieldset class="tn-tpls"><legend class="eyebrow">How the first admin signs in</legend>'
+            + '<label class="tn-role"><input type="radio" name="tn-mode" value="link" checked data-fmode><span>Single-use enrolment link: it sets the password and the second factor together</span></label>'
+            + '<label class="tn-role"><input type="radio" name="tn-mode" value="password" data-fmode><span>Set a password now; the second factor is enrolled at first sign-in</span></label></fieldset>'
+            + '<div data-fpwwrap hidden>' + UI.field('Password', UI.input('', { attrs: 'data-fpw type="password" maxlength="256" autocomplete="new-password"' }), 'At least 12 characters, not containing the username.') + '</div>'
+            + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create tenant', { kind: 'primary', attrs: 'data-fsave' }),
+          onMount(m) {
+            m.querySelectorAll('[data-tpl]').forEach((r) => r.addEventListener('change', () => { local.pick = r.value; m.querySelectorAll('.tn-tpl').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked)); m.querySelector('[data-tpldetail]').innerHTML = detail(); }));
+            m.querySelectorAll('[data-fmode]').forEach((r) => r.addEventListener('change', () => { local.mode = r.value; m.querySelector('[data-fpwwrap]').hidden = local.mode !== 'password'; }));
+            const save = m.querySelector('[data-fsave]');
+            save.addEventListener('click', async () => {
+              m.querySelector('[data-err]').innerHTML = '';
+              const v = (sel) => m.querySelector(sel).value.trim();
+              const body = { template: local.pick, slug: v('[data-fslug]'), name: v('[data-fname]'), admin: { username: v('[data-fuser]'), displayName: v('[data-fdisplay]'), email: v('[data-femail]') || null, password: local.mode === 'password' ? m.querySelector('[data-fpw]').value : null } };
+              save.disabled = true;
+              let r;
+              try { r = await App.post('/api/admin/tenants/from-template', body); } catch (err) { save.disabled = false; errorBox(m, err); return; }
+              App.closeOverlay();
+              st.node = 't:' + r.tenant.id;
+              ctx.toast('Tenant ' + esc(r.tenant.name) + ' created from the ' + esc(local.pick) + ' template. Audit events written.', 'ok', 5000);
+              st.justCreated = r;
+              reload();
+            });
+          }
+        });
+      }
+
+      function createdModal(r) {
+        const a = r.applied, link = r.admin.enrolLink;
+        const issuer = a.issuer.state === 'created' ? 'issuing CA created' : a.issuer.state === 'skipped' ? 'skipped: ' + a.issuer.reason : 'not in the template';
+        ctx.modal({
+          title: esc(r.tenant.name) + ' is ready',
+          body: UI.kv([['Workspaces', a.workspaces.map((w) => esc(w.name)).join(', ')], ['Custom roles', a.roles.length ? a.roles.map((x) => esc(x.name)).join(', ') : 'none'], ['Draft profiles', a.profiles.map((x) => '<span class="mono">' + esc(x.name) + '</span>').join(', ')], ['Zone', '<span class="mono">' + esc(a.zone.id) + '</span>, ' + esc(a.zone.state) + (a.zone.poolName ? ' (pool ' + esc(a.zone.poolName) + ')' : '')], ['Issuer', esc(issuer)], ['First admin', '<span class="mono">' + esc(r.admin.username) + '</span>, tenant-admin, cleared for ' + esc(r.admin.clearance)]], 1)
+            + (link ? UI.notice('<b>Copy the enrolment link now; it is not shown again.</b> It works once, for ' + esc(String(r.admin.enrolHours)) + ' hours, and sets the password and the second factor together. Give it to ' + esc(r.admin.username) + ' over a trusted channel.', 'warn') + '<div data-enrollink>' + UI.code(link).replace('class="codebox"', 'class="codebox wrap"') + '</div>'
+              : UI.notice(esc(r.admin.username) + ' signs in to tenant <span class="mono">' + esc(r.tenant.slug) + '</span> with the password you set and enrols a second factor at first sign-in.', 'info')),
+          actions: (link ? UI.btn('Copy link', { attrs: 'data-cplink' }) : '') + UI.btn('Done', { kind: 'primary', attrs: 'data-close' }),
+          onMount(m) { const b = m.querySelector('[data-cplink]'); if (b) b.addEventListener('click', () => { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(() => ctx.toast('Enrolment link copied.'), () => ctx.toast('The browser refused clipboard access.', 'warn')); }); }
+        });
+      }
+
       /** Conversation retention (Sprint 12): conversations idle for longer than N days are deleted by a scheduled job. */
       function retentionPanel(r) {
         if (!r) return '';
@@ -770,6 +828,7 @@
       ctx.on('click', '[data-editws]', () => editWorkspaceModal());
       ctx.on('click', '[data-edittenant]', () => tenantModal(tenant));
       ctx.on('click', '[data-newtenant]', () => tenantModal(null));
+      ctx.on('click', '[data-fromtemplate]', () => templateModal());
       ctx.on('click', '[data-raise]', () => limitsModal('workspace'));
       ctx.on('click', '[data-traise]', () => limitsModal('tenant'));
       ctx.on('click', '[data-retention]', () => retentionModal());
@@ -819,7 +878,7 @@
       integWire(st, ctx);
 
       const style = document.createElement('style');
-      style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}.tn-pick{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin:8px 0}.tn-pickrow{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line)}.tn-pickrow:last-child{border-bottom:0}';
+      style.textContent = '.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}.tn-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;max-height:260px;overflow:auto;padding:4px 0}.tn-role{display:flex;gap:8px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px}.tn-role:hover{background:var(--sel)}.tn-role input{margin:3px 0 0;accent-color:var(--accent)}.tn-pick{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin:8px 0}.tn-pickrow{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line)}.tn-pickrow:last-child{border-bottom:0}.tn-tpls{border:0;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}.tn-tpl{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px}.tn-tpl > span{display:flex;flex-direction:column;gap:2px;min-width:0}.tn-tpl.on{border-color:var(--accent);background:var(--sel)}.tn-tpl input{margin:3px 0 0;accent-color:var(--accent)}';
       root.prepend(style);
     }
   });

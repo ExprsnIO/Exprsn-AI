@@ -24,6 +24,15 @@ export interface IcsEvent {
   /** PUBLIC or PRIVATE (RFC 5545 3.8.1.3). */
   klass: 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL';
   categories?: string[];
+  /** 1.5.0 (B-3102): the organiser and attendees with their participation, for CalDAV clients. */
+  organizer?: IcsPerson | null;
+  attendees?: (IcsPerson & { partstat: 'ACCEPTED' | 'TENTATIVE' | 'DECLINED' | 'NEEDS-ACTION'; rsvp?: boolean })[];
+}
+
+/** A calendar user: `mailto:` address or another URI, and a display name. */
+export interface IcsPerson {
+  address: string;
+  name: string;
 }
 
 export interface IcsCalendar {
@@ -32,6 +41,11 @@ export interface IcsCalendar {
   /** X-WR-TIMEZONE when every event shares one zone (a display hint only; the times are UTC). */
   timeZone?: string | null;
   events: IcsEvent[];
+  /**
+   * 1.5.0 (B-3102): a CalDAV calendar object resource rather than a feed: no METHOD (RFC 4791 4.1), no feed headers
+   * (calendar name, refresh interval).
+   */
+  object?: boolean;
 }
 
 const CRLF = '\r\n';
@@ -84,6 +98,11 @@ function nextDate(yyyymmdd: string): string {
   return `${pad(d.getUTCFullYear(), 4)}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`;
 }
 
+/** A parameter value (RFC 5545 3.2): quoted, without the characters a quoted value cannot hold. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const cn = (v: string): string => `"${v.replace(/["\u0000-\u001f\u007f]/g, '')}"`;
+const uri = (v: string): string => v.replace(/[\r\n]/g, '');
+
 function eventLines(e: IcsEvent, stamp: number): string[] {
   const lines = ['BEGIN:VEVENT', `UID:${escapeText(e.uid)}`, `DTSTAMP:${utcStamp(stamp)}`];
   if (e.allDay) {
@@ -99,12 +118,21 @@ function eventLines(e: IcsEvent, stamp: number): string[] {
   if (e.location) lines.push(`LOCATION:${escapeText(e.location)}`);
   if (e.url) lines.push(`URL:${e.url.replace(/[\r\n]/g, '')}`);
   if (e.categories?.length) lines.push(`CATEGORIES:${e.categories.map(escapeText).join(',')}`);
+  if (e.organizer) lines.push(`ORGANIZER;CN=${cn(e.organizer.name)}:${uri(e.organizer.address)}`);
+  for (const a of e.attendees ?? []) lines.push(`ATTENDEE;CN=${cn(a.name)};CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=${a.partstat}${a.rsvp ? ';RSVP=TRUE' : ''}:${uri(a.address)}`);
   lines.push(`STATUS:${e.status}`, `SEQUENCE:${Math.max(0, Math.floor(e.sequence))}`, `CLASS:${e.klass}`, `CREATED:${utcStamp(e.created)}`, `LAST-MODIFIED:${utcStamp(e.updated)}`, 'TRANSP:OPAQUE', 'END:VEVENT');
   return lines;
 }
 
 /** A VCALENDAR with its events, folded, CRLF line ends. */
 export function renderCalendar(c: IcsCalendar, now = Date.now()): string {
+  if (c.object) {
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Exprsn-AI//CalDAV 1.5//EN', 'CALSCALE:GREGORIAN'];
+    // DTSTAMP is the last change, so the same event renders the same bytes (and the same ETag) on every fetch.
+    for (const e of c.events) lines.push(...eventLines(e, e.updated));
+    lines.push('END:VCALENDAR');
+    return lines.map(foldLine).join(CRLF) + CRLF;
+  }
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Exprsn-AI//Groups and events 1.4//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${escapeText(c.name)}`];
   if (c.description) lines.push(`X-WR-CALDESC:${escapeText(c.description)}`);
   if (c.timeZone) lines.push(`X-WR-TIMEZONE:${escapeText(c.timeZone)}`);

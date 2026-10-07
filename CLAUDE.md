@@ -38,11 +38,15 @@ Sprints 24 to 28 (`Backlog-1.4.0.md`: exprsn-platform's server features: a certi
 ACME server, a secrets vault with leases, the event catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and
 firehose ingest; moderation actions and appeals, the file store, low-code data apps, groups and events,
 customer-service channels, messaging and the workspace feed, and a platform load test) made version `1.4.0`; they are
-server-only, and their console screens are planned in `Backlog-1.5.0.md`.
-Every console screen is live. Sprint 29 (B-3401, `Backlog-1.5.0.md`) added the prototype boards for the 1.4.0 domains
-(`files`, `apps`, `groups`, `messages`, `moderation`, `channels`, `roles`, `certificates`, `vault`, `plugins`, `atproto`,
-plus identity additions to `signin`, `settings` and `identity`); they exist only in `design/prototype/` until their sprint
-makes them live in `web/`. Check `Sprints.md` and the known gaps in `docs/security.md` before starting work.
+server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1.4.0 domains, permission matrices,
+custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
+connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
+context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 37 are planned in
+`Backlog-1.6.0.md`, Sprint 38 in `Backlog-1.7.0.md`.
+Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
+`design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
+gaps in `docs/security.md` before starting work.
 
 ## Commands
 
@@ -56,14 +60,16 @@ npm run typecheck            # tsc --noEmit
 npm test                     # vitest: unit and API tests on in-memory SQLite
 npm test -w server -- test/policy.test.ts   # one test file (add -t "<name>" for one test)
 npm run build                # tsc to server/dist
-npm run cli -w server -- <migrate [--check] | admin:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
+npm run cli -w server -- <migrate [--check] | admin:create | tenant:create | audit:verify | kms:rotate | kms:rewrap | kms:escrow |
                              kms:recover | signer | backup:create | backup:restore-drill | backup:restore>
 npm run test:integration -w server           # each block runs when its variable is set: TEST_PG_URL, TEST_MYSQL_URL,
-                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL
+                                             # TEST_LDAP_URL (+ TEST_LDAP_INSECURE, TEST_LDAP_BIND_PW), TEST_REDIS_URL,
+                                             # TEST_MONGODB_URL (an account that may create users)
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done   # console scripts must parse (CI checks this)
 npx tsx server/loadtest/stream.ts --help   # streaming load test (docs/loadtest.md)
 npm run loadtest:platform -- --help        # webhook, records, OCSP and firehose load test (docs/loadtest.md)
 helm lint deploy/helm/exprsn-ai            # the chart (CI also renders it with kubeconform)
+INTEROP_PG_URL=postgres://… npx --prefix interop tsx interop/run.ts   # the PDS against the reference AppView (cd interop && npm ci first)
 cd e2e && npm ci && CHROME=/opt/pw-browsers/chromium npx playwright test   # console end-to-end suite across every screen
                                            # (starts its own server on SQLite with the test fakes; see e2e/README.md)
 ```
@@ -128,7 +134,7 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   workspace memberships from group mappings), directory sync (`sync.ts`), sessions, MFA, lockout, API keys;
   `account.ts` (password change, reset tokens, forced change, step-up freshness, preferences), `breached.ts` (HIBP range
   API and offline file), `security-alerts.ts` (security notices).
-- **`authz/`**: `permissions.ts` (catalogue and the 13 built-in roles), `labels.ts`, `policy.ts` (the single decision
+- **`authz/`**: `permissions.ts` (catalogue and the 14 built-in roles), `labels.ts`, `policy.ts` (the single decision
   pipeline: role → scopes → tenant → clearance → zone ceiling, plus `explain` for the step-by-step view).
 - **`audit/`**: `chain.ts` (append-only per-tenant SHA-256 hash chain, `onAppend` listeners), `checkpoints.ts`
   (KMS-signed checkpoints, verification), `exports.ts` (clearance-gated CSV by job), `siem.ts`.
@@ -154,14 +160,20 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `linear.ts`, `flags.ts` (the review queue, including held answers), `stream.ts` (sentence-by-sentence screening of
   streamed output).
 - **`knowledge/`** (sources, extraction, chunking, keyword terms, hybrid search with RRF, blue/green reindex),
-  **`memory/`** (scopes, proposals, forget, export), **`connections/`** (PostgreSQL, MySQL and OpenSearch drivers,
-  query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
+  **`memory/`** (scopes, proposals, forget, export; since 1.5.0 the tenant's memory settings, consolidation and
+  reindex jobs, and `model.ts`: the memory profile's prompts and strict JSON parsing), **`connections/`** (PostgreSQL,
+  MySQL and OpenSearch drivers, query classification, masking, `dynamic.ts` for OpenBao dynamic database credentials) and
   **`platform/vectors.ts`** (`VectorStore`: table scan or pgvector).
 - **`registry/`** (entries, checks, schemas, `dispatch.ts`: the one tool dispatcher for chat, agents, workflows and
   the test harness), **`mcp/`** (streamable HTTP client, internal-host checks, schema hashing), **`agents/`** (runs
   with lanes, approvals, budgets, checkpoints and replay), **`scripts/`** (`ScriptRunner`: docker or podman sandbox).
 - **`workflows/`** (`graph.ts` publish validation, `service.ts` durable checkpointed runs, `http.ts` internal-only HTTP
-  step), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
+  step; since Sprint 32 `steps/`: the Workflows 2 kinds, `kinds.ts` their publish-time definitions registered in
+  `STEP_KINDS`, `registry.ts` their runners in `STEP_RUNNERS`, `host.ts` what a runner gets from the service), **`chain/`**
+  (`context.ts`: the chain context, B-4101, `s.chains`; since Sprint 34a `refs.ts`, the reference graph checked at
+  publish and "used by", `s.chainRefs`, B-4105, and `view.ts`, the chain tree, held calls and replay from a node behind
+  `routes/chains.ts`, B-4106, B-4107; delegation to agents is `AgentService.runAsTool`, B-4102, and a skill's closure
+  `registry/skills.ts`, B-4103), **`media/`** (presets as argument arrays, `MediaRunner` over ffmpeg, `origin.ts` for the sandbox CSP and signed
   URLs on `MEDIA_ORIGIN`), **`images/`** (`ImageBackend` for ComfyUI and diffusers, safety classifier, signed
   provenance in the PNG).
 - **`training/`** (datasets with PII scrub, jobs driven by the `training.tick` orchestrator, windows, evals, GGUF to a
@@ -190,6 +202,48 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `migrate --check`); `platform/shamir.ts` and `platform/escrow.ts` (`kms:escrow`, `kms:recover`); `zones/kube.ts` and
   `zones/cluster.ts` (`ZONES_APPLY=kubernetes`); `knowledge/crawl.ts` (the internal web crawler). Prometheus rules and
   Grafana dashboards are in `deploy/observability/`.
+- 1.5.0 modules: **`dav/`** (CalDAV, CardDAV and WebDAV at `/dav`, `docs/dav.md`: `handler.ts` the router and methods,
+  `auth.ts` app-password Basic auth, `tree.ts` the namespace, `caldav.ts`, `carddav.ts`, `filters.ts` the query
+  operators, `sync.ts`, `store.ts` personal collections and dead properties, `props.ts`, `xml.ts` (the strict parser),
+  `ics.ts` (iCalendar and vCard), `if.ts` (the If header), `service.ts` `s.dav`, `passwords.ts` and `routes.ts` for
+  `/api/me/app-passwords` and `GET /api/me/dav` (B-3415); since Sprint 34b `files.ts`, the file store under
+  `/dav/files/`, and `locks.ts`, class 2 locks (B-3201 to B-3203); the conformance fixtures are in
+  `server/test/fixtures/dav/`). **`registry/builtin/`** (Sprint 32c, B-3904: `catalog.ts` the domain built-in tools
+  seeded by `034c_workflow_steps`, `index.ts` `BuiltinTools`, which run them as the caller through the dispatcher).
+  Sprint 31b added to `atproto/`: `commit.ts` (relay commit and Merkle search tree verification, B-3604),
+  `service-jwt.ts` (inter-service JWTs) and `feeds.ts` (feed generators over the firehose, `s.feedGenerators`), with
+  `routes/atproto-feeds.ts` and the public XRPC in `routes/atproto-feeds-public.ts`; the AT-Protocol interop vectors
+  are in `server/test/fixtures/atproto/`, and `test/sprint31b-fakes.ts` has an MST writer and repos that sign commits.
+- 1.5.0 Sprint 31: **`atproto/pds/`** (the AT-Protocol PDS, `docs/pds.md`: `service.ts` hosting, accounts, sessions
+  and state, `repo-store.ts` commits and reads, `mst.ts`, `car.ts`, `repo.ts`, `tid.ts` the repository format, `lexicon.ts` with `lexicon-docs.ts` and
+  `lexjson.ts`, `syntax.ts`, `blobs.ts`, `sequencer.ts` (subscribeRepos), `migration.ts`, `feeds.ts`, `tokens.ts`;
+  routes in `routes/pds-xrpc.ts` at `/xrpc` and `routes/pds.ts` under `/api`; interop fixtures in
+  `server/test/fixtures/atproto-interop/` and `atproto-ref/`; `interop/run.ts` runs it against the reference AppView).
+- 1.5.0 modules: **`imports/`** (Sprint 30: `repositories.ts` the dual-controlled repository registry and harvests,
+  `catalog.ts` the snapshot with facets and live search, `fetcher.ts` the allow-listed import egress, `formats.ts`
+  format, pickle and licence checks, `service.ts` model import jobs, licence exceptions and bundle mode, `adapters/`
+  one per repository type); its fakes are `server/test/sprint30-imports-fakes.ts`.
+- 1.5.0 Sprint 32b additions to **`workflows/`**: `trigger-config.ts` (the trigger step's `event` and `schedule` +
+  `cron` sources and their publish checks), `triggers.ts` (event fan-out with the workspace, label, rate and loop
+  rules, the cron tick claimed once across instances, `workflowCause` the chain of workflows), `retry.ts` (per-step
+  retry policies and `branch: failure` edges), `dead-letters.ts` (failed runs and their redrive), `bundles.ts` (signed
+  `exprsn-workflow/1` export and import with re-bound references), hooked into `service.ts` through `useLifecycle`;
+  routes in `routes/workflow-operations.ts`.
+- 1.5.0 Sprint 34c: **`profiles/`** (`service.ts` `s.people`: pronouns and bio through the `user-input` guardrail, the
+  avatar as a file-store upload served only once its pinned version passed the scan, visibility by workspace and
+  clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
+  publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
+  `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
+- 1.6.0 Sprint 35d: `social/admin.ts` (`s.socialAdmin`, B-4206: workspace policies the feed, groups and social
+  relations read, the tenant's digest and summary settings, trending exclusions, legal-hold conversation exports under
+  dual control as the job `messaging.conversation.export`, realtime counts from `RoomStats` in `realtime/rooms.ts`)
+  with `routes/admin/social.ts`; `tenancy/templates.ts` (B-4501: tenant provisioning templates).
+
+- 1.6.0 Sprint 35b: `ops/instances.ts` (`s.instances`: every server process's heartbeat row in `platform_instances`, the
+  `readiness` checks `/readyz` shares, drain), `ops/overview.ts` (`s.overview`: computed alerts, acknowledgements,
+  counters, recent audit, capacity) and `ops/jobs-admin.ts` (`s.jobsAdmin`: job types, jobs, schedules, dead letters,
+  the cache), behind `routes/admin/operations.ts`; `JobQueue` pauses by type (`pausesLoader`) and `requeue`s, and the
+  `Scheduler` lists its schedules, runs one now and skips a paused one (`isPaused`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -239,7 +293,8 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) or of axe-core (`e2e/tests/support/axe.ts`, Standard
   and Enhanced, light and dark), and on sideways scrolling at 320 and 640 px, for screens and, through
   `e2e/tests/y-reflow-overlays.spec.ts`, their dialogs and drawers.
-- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`).
+- `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`); `person.js` (1.5.0) is the
+  Profile page (`#/person?user=<id>`), not in the sidebar, opened from people's names and swept like Settings.
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route
   changes; they don't re-render while a modal or drawer is open (a re-render closes it) and throttle re-renders while
   streaming. Uploads (`PUT /api/attachments`) use `fetch` directly, because `App.api` always sends JSON.

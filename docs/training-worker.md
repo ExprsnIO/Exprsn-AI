@@ -32,6 +32,7 @@ All bodies are JSON. Errors are any non-2xx status with `{error}` or `{detail}`.
 | `POST /v1/runs/:id/cancel` | `{}` | anything; stops after the current step and keeps the last checkpoint |
 | `POST /v1/evals` | `{model, base, checkpoint, suite, hardware}` | `{score, base, passed, total}` |
 | `POST /v1/convert` | `{job, name, checkpoint, baseModel, quantization}` | `{name, artifact, digest, sizeBytes, quantization, tool}`: the GGUF pushed to the registry the pools pull from (and, in v2, uploaded to the platform) |
+| `POST /v1/convert` for an import (1.5.0, B-3803) | `{job, name, checkpoint, baseModel, quantization, source: {kind: import, repository, item, revision, files: [{name, artifact, sha256, bytes, format}], artifacts: {url, token, expiresAt}}}` | As above. The worker reads each staged file with `GET <artifacts.url>/<artifact>` (the grant's bearer), checks its `sha256`, converts the safetensors (or, with `quantization: as-is`, packages the published GGUF unchanged), pushes the model where the pools pull from and may upload the GGUF with `PUT <artifacts.url>/<name>?kind=gguf`. `digest` is what the pools will report for the pushed model; the platform pins it on the draft |
 
 `spec` is `{job, name, baseModel, baseDigest, method, trainer, hardware, steps, checkpointEvery, dataset: {id, name,
 version, hash, rows, splits}, resumeFrom: {step, ref, at} | null}`. A run resumes from `resumeFrom` when it is set.

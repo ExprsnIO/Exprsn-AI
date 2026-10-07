@@ -95,8 +95,8 @@ Pools, instances and the model catalogue are shared by every tenant; profiles be
 | `POST /admin/pools` `{name, accelerator: cuda\|rocm\|metal\|cpu, zone, labelCeiling, description?}` | Creates a pool |
 | `PATCH /admin/pools/:id`, `DELETE /admin/pools/:id` | Edits; deletes an empty pool |
 | `POST /admin/pools/:id/upgrade` `{targetVersion, waitMinutes}` | Rolling Ollama upgrade job (`202 {jobId}`): drains one instance at a time, waits for it to report the target version, reloads pinned models |
-| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive` |
-| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes |
+| `POST /admin/pools/:id/instances` `{name, url, deploy: docker\|baremetal, tls?: {caFile, certFile, keyFile}, settings}` | Registers an Ollama endpoint; `settings`: `memoryBytes, hardware, node, device, parallel, maxLoaded, numCtx, kvCacheType, keepAlive`. Since 1.6.0 also `kind`, `socketPath`, `token`, `tokenRef` for Chat Completions servers (see Sprint 35a below) |
+| `PATCH /admin/instances/:id` `{url?, tls?, settings?, state?: active\|disabled}`, `DELETE /admin/instances/:id` | Edits, removes. Since 1.6.0 also `socketPath`, `token`, `tokenRef` (Sprint 35a) |
 | `GET /admin/instances/:id/plan?model=<name>` | Memory planner: `{fits, resident, needBytes, freeBytes, evict: [names], reason}` |
 | `GET /admin/instances/:id/events` | Load, unload, eviction and pull history `[{model, event, reason, actor, ts}]` ("why is this cold?") |
 | `POST /admin/instances/:id/load` `{model, pinned}` | Loads (evicting warm models if the plan says so). `409 No spare memory` with `plan`; `429` with `limit: anti_thrash` |
@@ -123,7 +123,7 @@ Lifecycle: `draft → evaluated → approved → deprecated → retired`.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/models` | Models with `pools: [{placementId, poolId, pool, residency}]` and `profiles` (count) |
-| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled |
+| `POST /admin/models` `{name, source, expectedDigest?, license?: {name, url?, notes?}, label, notes?, poolId?}` | Import request. Pickle sources are refused (`422 Import refused`, `reason: pickle`); with `poolId` it is placed and pulled. Since 1.6.0 `{serverInstanceId, serverModel, …}` registers a model a server holds instead (Sprint 35a) |
 | `PATCH /admin/models/:id` `{license?, label?, notes?}` | Records the licence and so on |
 | `POST /admin/models/:id/pull` `{poolId}` | Pulls again (job). A digest mismatch or a non-GGUF/safetensors format deletes the blob and fails the import |
 | `POST /admin/models/:id/evaluate` | Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated |
@@ -446,13 +446,13 @@ started a dry run), with clearance for the run's label.
 | `GET /workflow-approvals` | Approvals waiting on the caller: `[{id, runId, nodeId, role, state, shown, dueAt, canDecide, workflow, step, label, mode}]` |
 | `POST /workflow-approvals/:id` `{decision: approve\|reject, reason?}` | Decides; the run resumes (approve) or ends `rejected`. Undecided approvals expire at `dueAt` and the run fails |
 
-A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?}], edges: [{from, to,
-branch?: true|false}], limits: {timeoutMs?, tokens?}}`. `input` and `output` are port schemas
+A graph: `{nodes: [{id, kind, title, x, y, config, input?, output?, ceiling?, raises?, timeoutMs?, retry?}], edges: [{from,
+to, branch?: true|false|failure}], limits: {timeoutMs?, tokens?}}` (`retry` and `failure`: Sprint 32b, below). `input` and `output` are port schemas
 `{type: string|number|integer|boolean|array|object|any, properties?, required?, items?}`. Step kinds:
 
 | Kind | Config | Output |
 | --- | --- | --- |
-| `trigger` | `{source: manual\|api}` | the run input (checked against `output`) |
+| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, cron?}` (`event` and `cron`: Sprint 32b, below) | the run input (checked against `output`) |
 | `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
 | `transform` | `{fields: {name: template}}` | the fields |
 | `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
@@ -609,12 +609,57 @@ working on…"); accepted memories of the user and the current workspace go into
 (each through the `memory` checkpoint), recalled by vector similarity when an embedding model is approved, else by
 recency. Expired memories are purged hourly from every backend.
 
+#### Model-based memory management (1.5.0, Sprint 30: B-3701 to B-3703)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /memory/settings` | `knowledge:manage`. `{profile, embedModel, effectiveEmbedModel, similarity, staleDays, reindex: {state: idle\|running\|done\|failed, model, jobId, done, total, error, startedAt, finishedAt}, updatedBy, updatedAt, embeddingModels: [{name, label, state}]}` for the tenant |
+| `PUT /memory/settings` `{profile?: name\|null, embedModel?: name\|null, similarity?: 0.5-0.99, staleDays?: 1-3650\|null}` | `knowledge:manage`. `422` for a profile that does not resolve or a model that is not an approved embedding model. When the embedding model in effect changes, `memory.reindex` starts (`reindex.state: running`). Audited (`memory.settings.updated`, `memory.reindex.started`) |
+| `POST /memory/consolidate` | `knowledge:manage`. `202 {jobId}`: a `memory.consolidate` run now (it also runs daily for every tenant) |
+| `POST /memory/reindex` | `knowledge:manage`. `202` with the settings: re-embeds every active memory with the model in effect (memories already embedded with it are skipped). `409` without an embedding model |
+| `POST /memory/:id/expiry/accept` | `memory:write`, the owner (a curator for workspace and agent memories). The memory expires at the proposed time (a day after the proposal) and is purged; a new version notes why. `409` without a proposal |
+| `POST /memory/:id/expiry/reject` | Clears the proposal; the memory is not proposed for expiry again for the same reason, and a contradicting pair is not judged again |
+
+- **The memory profile** (`profile`): a published model profile of the tenant. After a chat answer completes,
+  `memory.extract` asks it for proposals from the user's message; after an agent run succeeds under a memory policy
+  that allows proposals (`memory.write: propose`), it asks it for `progress` or `quirk` proposals from the run's task
+  and answer, within what `maxPerRun` still allows after the `remember` tool's proposals. The text goes to the model
+  as a JSON string and the prompt says nothing in it is an instruction; the answer must be one JSON object matching
+  `{memories: [{text, type?}]}` (at most 5, each 4 to 300 characters), else it counts as a failure. With no profile, or
+  when the profile fails (it does not resolve, its model is not approved, the text's label is above the profile's,
+  the call fails or times out, or the answer is not that JSON), the rules extract as before and
+  `memory.extraction.fallback` records the reason. Either way every proposal passes the `memory` checkpoint (tenant
+  policy, the credential ban, the guardrail rules; refusals are audited as `memory.proposal.refused`), is skipped when
+  it is held already or was rejected before (the rejection list compares one-line, lower-case text), and carries the
+  label of its source (the message's, or the run's). The memory's first version notes which extracted it.
+- **Consolidation** (`memory.consolidate`, daily and on request; nothing changes until a person accepts):
+  episodic and progress memories untouched for `staleDays` get an expiry proposal (`reason: stale`). With a profile and
+  an embedding model, the active memories of each owner (up to 300, most recent first) are embedded and every pair at
+  least `similarity` alike (cosine) is judged by the profile (at most 50 pairs per run), which answers
+  `{relation: same|contradicts|distinct, merged?, outdated?: a|b}` strictly. `same` becomes a **merge proposal**: a new
+  proposed memory (`origin: consolidation`) with the merged text, labelled as high as the two, whose `source` keeps both
+  memories' ids, versions, origins and sources; `contradicts` becomes an expiry proposal (`reason: contradicted, by`)
+  on the outdated one. Memories in a pending proposal are left out, and a pair whose proposal was rejected is not
+  judged again. Accepting a merge (`POST /memory/:id/accept`, as for any proposal) activates the new memory and
+  retires both: `state: superseded`, `supersededBy`, a version noting `merged into <id>`, their vectors deleted;
+  `409` when either changed or was forgotten since the proposal. Audit: `memory.merge.proposed`,
+  `memory.expiry.proposed`, `memory.consolidated`, `memory.merged`, `memory.expiry.accepted`, `memory.expiry.rejected`.
+- **The embedding model** (`embedModel`): memories are embedded with it when it is an approved embedding model
+  cleared for their label (else they are recalled by recency); unset, the first approved embedding model by name, as
+  before. `memory.reindex` re-embeds every active memory in batches per label and reports progress; while it is
+  `running`, recall is by recency (the vectors are of two models), and afterwards only vectors of the model the query
+  was embedded with are compared. A later model change supersedes a running reindex.
+
+A memory view also carries `embedModel`, `merge: {memories: [id, id], similarity} | null`, `supersededBy` and
+`expiryProposal: {expiresAt, reason: stale|contradicted, by, similarity, proposedAt} | null`; `origin` may be `agent` or
+`consolidation`.
+
 ### Data connections (`connections:manage`)
 
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/connections` | `[connection]` |
-| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
+| `POST /admin/connections` `{name, engine: postgres\|mysql\|opensearch\|mongodb, endpoint, database?, zone, label, rowLimit, timeoutS, tls, username?, password?, baoRole?}` | Registers; the credential is sealed with the tenant key and never returned. With `baoRole` (PostgreSQL and MySQL; needs `OPENBAO_ADDR` and `OPENBAO_TOKEN`) no credential is stored: each instance takes a short-lived account from OpenBao's database engine (`GET <OPENBAO_DATABASE_MOUNT>/creds/<role>`), renews its lease while in use and revokes it when dropped. Once zones are defined, `422 step: zone` for a zone that is not defined and `403 step: zone` for the external zone or a label above the zone's ceiling (audited as `connection.register.refused`). Other engines are refused |
 | `GET /admin/connections/:id` | One connection |
 | `PATCH /admin/connections/:id` `{endpoint?, database?, zone?, label?, rowLimit?, timeoutS?, tls?}` | New version of the settings; `ops: write` is refused; a new zone or label is checked against the zones as on registration |
 | `PUT /admin/connections/:id/credential` `{username, password}` or `{baoRole}` | Replaces the credential with a sealed account, or switches to OpenBao dynamic credentials for that role; any OpenBao lease this instance holds for the connection is revoked |
@@ -1333,7 +1378,7 @@ body through the `user-input` checkpoint: a block, hold or redaction refuses wit
 
 | Route | Notes |
 | --- | --- |
-| `GET /knowledge/connections` | PostgreSQL and MySQL connections: `[{id, name, engine, label, objects, columns}]` |
+| `GET /knowledge/connections` | PostgreSQL, MySQL and MongoDB connections: `[{id, name, engine, label, objects, columns}]` |
 | `POST /knowledge/bases/:id/sources` `{kind: database, location: "pg: …" \| "mysql: …", connectionId, idColumn?, watermarkColumn?, accessColumn?, accessKind?: group \| user, replication?, publication?}` | MySQL tables and views sync by watermark like PostgreSQL (names default to the connection's database). `accessColumn` (B-1002) names who may retrieve each row: a list of directory groups (`accessKind: group`, the default) or usernames, emails or user ids (`user`), as a comma or semicolon list, a JSON array or a PostgreSQL array. The list is carried onto the row's document and chunks; search, chat context and the document list for members drop rows that do not name the reader or one of their groups (matched case-insensitively against the groups of the user's identities); an empty value admits nobody. `replication: true` (B-1003, PostgreSQL tables only, `409` for views and MySQL) streams changes through logical replication (`publication` defaults to `exprsn_knowledge`) |
 | `GET /knowledge/bases/:id` | Each database source carries `replication: {state: starting \| streaming \| fallback \| stopped, slot, publication, lsn, lastChangeAt, changes, error}` when it asked for it |
 | `DELETE /knowledge/sources/:id` | Also stops the source's stream and drops its replication slot |
@@ -1849,7 +1894,7 @@ The complete route list, with request and response schemas for the routes below,
 no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes with their summary from this
 file.
 
-### Event catalogue (`webhooks:manage` or `plugins:manage`)
+### Event catalogue (`webhooks:manage`, `plugins:manage` or, since 1.5.0, `workflows:manage`)
 
 | Route | Notes |
 | --- | --- |
@@ -2022,12 +2067,13 @@ grants at that moment, allows `PLUGIN_MAX_CALLS` calls and is revoked when the h
 against the token's grants and the plugin's grants now: an ungranted call answers `403` (the handler sees an error
 with `status` 403) and is audited `plugin.call.refused`. Calls: `log`, `audit`, `notify`, `flag`, `webhook`
 (`args.data` as the body), `workflow` (as the actions above), and `records.read`, `records.write`, `files.read`,
-`groups.read`, `posts.write` (`501` until their domains ship). The handler's output and return value go to the
+`groups.read`, `posts.write` (live since 1.5.0, B-3904: they act as the user who installed the plugin; see Sprint 32c
+below). The handler's output and return value go to the
 plugin's log.
 
 | Route | Notes |
 | --- | --- |
-| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `501` |
+| `POST /plugin-broker/v1/calls/:api` | Outside `/api`, no session: `Authorization: Bearer xpt_…` only. The same broker for a sandbox that can reach the server. `200` with the call's result; `401` (unknown, expired or revoked token), `403` (not granted, or the plugin is no longer enabled), `404` (no such call), `429` (`PLUGIN_MAX_CALLS`), `400` (a domain call's arguments) |
 
 ### Plugins from signed import bundles (B-2005)
 
@@ -2392,7 +2438,7 @@ notifies. The sweep (`MODERATION_SWEEP_SECONDS`) ends sanctions whose time is up
 | `GET /api/moderation/queues` | `moderation:review` or `moderation:manage`. `{items: [{id, name, workspaceId, rules, labels, kinds, priority, slaMinutes, escalateTo, escalationSlaMinutes, enabled, createdAt, updatedAt}]}` |
 | `POST /api/moderation/queues` `{name, workspaceId?, rules?, labels?, kinds?, priority?, slaMinutes, escalateTo: workspace \| tenant \| platform, escalationSlaMinutes?, enabled?}` | `moderation:manage`. B-1905. A new flag goes to the first enabled queue (lowest `priority`) whose workspace, rules (rule ids or names), labels and kinds (flag kind, object type or checkpoint) all match; its timer becomes the queue's SLA. The sweep escalates a routed flag past its timer to `escalateTo` with a fresh `escalationSlaMinutes` timer and notifies that level (event `flag.escalated`, audit `moderation.queue.escalated`). `409` for a name in use. Audited `moderation.queue.created` |
 | `PATCH /api/moderation/queues/:id`, `DELETE /api/moderation/queues/:id` | `moderation:manage`. Audited `moderation.queue.updated`, `moderation.queue.deleted` (its flags become unrouted); `204` on delete |
-| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt]}`, the flags the reviewer may work |
+| `GET /api/moderation/queues/:id/flags` | `moderation:review`. `{queue, open, overdue, escalated, items: [flag as in /api/flags, queueId, escalatedAt, object]}`, the flags the reviewer may work. Since 1.5.0 `object` is `{type, id, hideable}` (whether "Hide object" applies), or null for a flag above the reviewer's clearance or without an object |
 | `GET /api/moderation/dead-letters[?state]` | `moderation:manage`. Moderation jobs (`moderation.provider`) that failed their last attempt: `{items: [{id, jobId, type, error, attempts, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveJobId}]}`. Audited `moderation.job.dead_lettered` when one lands |
 | `POST /api/moderation/dead-letters/:id/redrive` | `moderation:manage`. Queues the job again with its payload (texts in it stay sealed); `409` when already redriven. Audited `moderation.job.redriven`. `201 {…, jobId}` |
 
@@ -2447,6 +2493,9 @@ verified addresses and the local account has an unproven one (a new link is sent
 when the second factor was skipped. `POST /api/auth/mfa/totp`, `/mfa/recovery` and `/mfa/webauthn` take
 `rememberDevice: true` (not for recovery codes) and then answer `trustedDevice: {until}` (or `null` when the tenant
 allows no trusted devices). `GET /api/auth/sign-in-options` adds `signup: false | {approval, verifyEmail}`.
+Since Sprint 30 (B-3413) the session body at the `mfa` stage also carries `mfa.trustedDeviceDays`: the tenant's
+period, or `0` when the account may not have a trusted device (admin roles, accounts marked as needing a factor), so the
+sign-in page offers "trust this browser" only when it applies. `GET /api/me` adds `user.email` and `user.emailVerified`.
 
 ### Invitations by workspace admins (`members:invite`)
 
@@ -2540,6 +2589,9 @@ for other records) goes through the moderation check (B-1901) as an `atproto-pos
 with the subscription's workspace and label: a verdict of flag or worse raises the post's one flag in that workspace's
 queue, and a verdict of warn or worse becomes signed labels on the post's URI from the tenant's labeler (B-1610; the
 platform's when the tenant has none). Deletes and records without text advance the cursor and are not checked.
+Since 1.5.0 (B-3604) a subscribeRepos commit is believed only when it verifies against the repo's DID key (see
+[Sprint 31](#sprint-31-150-custom-feed-generators-b-3001-to-b-3003-and-relay-commit-verification-b-3604)); posts that pass
+the check also go on to the tenant's feed generators.
 
 The consumer runs on one worker instance at a time: every `FIREHOSE_TICK_MS` each instance claims or renews a lease on
 the running subscriptions, and only the holder connects (a lease lasts three ticks; a stopping instance gives its leases
@@ -2556,7 +2608,7 @@ at every connection. Metrics: `exprsn_firehose_events_total{result}`, `exprsn_fi
 
 A subscription is `{id, name, protocol: jetstream | subscribe-repos, endpoint, collections, dids, sampleRate, workspaceId,
 label, state: running | stopped, status: idle | waiting | connecting | streaming | backoff | error, held, cursor,
-cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed}, reconnects, rev, live,
+cursorAt, lastEventAt, lastError, counts: {received, checked, flagged, labelled, failed, rejected}, reconnects, rev, live,
 createdAt, updatedAt}`. `held` says whether an instance holds its lease now (`waiting`: running but not yet taken);
 `live` is `{connected, paused, queue, pauses, cursor}` when the instance answering is the holder, else null. Counts are
 stored with the cursor. Subscriptions labelled above the caller's clearance are not shown (`404`).
@@ -2743,6 +2795,7 @@ webhooks and plugins (ids only).
 | `DELETE /api/groups/:id/members/:userId` | Leave (one's own id) or remove (moderators remove members, owners anyone). The last owner cannot leave (`409`). The member's sockets leave the group's room at once |
 | `POST /api/groups/:id/join` | `open`: `200 {joined: true, role}`. `request`: `202 {requested: true, request}` (the same pending request again if there is one; moderators are notified). `invite`: `403` (`step: join-mode`) unless the caller holds an invitation, which this accepts. Outside the workspace or below the label: `404` |
 | `POST /api/groups/:id/invites` `{userId, role?: member}` | Moderators (owners for `moderator` and `owner`). The invitee must be active, in the group's workspace and cleared for its label (`422`, `step: workspace`); one pending invitation or request per user (`409`). Expires after `GROUP_INVITE_DAYS`. `201` with the invitation; the invitee is notified |
+| `GET /api/groups/:id/candidates?q=` | Since 1.5.0. Moderators (the invite right). Up to 50 people the caller may invite: active members of the group's workspace cleared for its label, not members, without a pending request or invitation. `[{userId, username, displayName}]` |
 | `GET /api/groups/:id/requests?state=` | Moderators. Requests and invitations (default `pending`; expired ones are marked so) |
 | `GET /api/group-requests` | The caller's pending requests and the invitations waiting for them: `[{id, groupId, groupName, kind: request \| invite, role, state, expiresAt, …}]` |
 | `POST /api/group-requests/:id/accept` | An invitation by its invitee; a request by a moderator. The workspace boundary and label are checked again now (`422`); expired is `410` |
@@ -2779,7 +2832,7 @@ daylight-saving gap moves forward by the gap. Events last at most 31 days. Reade
 | `GET /api/calendar/events/:id` | With `attendance {going, maybe, guests, checkedIn}` and the caller's `myRsvp` |
 | `PATCH /api/calendar/events/:id` | Moderators; the event fields, all optional. A change attendees see moves `sequence`; a new time or reminder list reschedules the reminders |
 | `POST /api/calendar/events/:id/cancel` `{reason?}` | Moderators. Stops the reminders and notifies **every attendee** (going or maybe), in the console (`event.cancelled`) and by email (`event-notice`: the time and a link, never the event's title or the reason). `200` with the event and `notified` |
-| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`) |
+| `POST /api/calendar/events/:id/rsvp` `{response: going \| maybe \| declined, guests?}` | Members (and anyone in the workspace for a public group) until the event ends. Guests up to `maxGuests` (`422`); `capacity` counts people with their guests (`409` with `left`); since 1.5.0 (B-3603) the event row is locked while the places are counted, so simultaneous answers for the last place take turns and only one gets it |
 | `GET /api/calendar/events/:id/attendees` | Readers see who is going or maybe; moderators also the declined and check-ins |
 | `POST /api/calendar/events/:id/check-in` `{userId, checkedIn?: true}` | Moderators. Someone without an RSVP is added as going (if they can read the event) |
 | `GET /api/calendar/events/:id/reminders` | Moderators. `[{id, minutesBefore, fireAt, state: scheduled \| sending \| sent \| cancelled \| skipped, recipients, sentAt}]` |
@@ -2961,6 +3014,7 @@ Limits per user: 5,000 blocks, mutes and follows each, 100 lists of up to 1,000 
 | --- | --- |
 | `GET /api/social/settings` | `{contactRule: workspace \| following \| nobody}` |
 | `PUT /api/social/settings` `{contactRule}` | Sets the caller's contact rule (audited `social.contact-rule.updated` when it changes) |
+| `GET /api/social/people?q=&limit=200` | Since 1.5.0. The people who share a workspace with the caller now (active, not the caller), optionally matching `q` in the username or display name: `[{userId, username, displayName, workspaces: [{id, name}]}]`, for the console's person picker. Whether someone accepts the caller is still decided when they act |
 | `GET /api/social/users/:id` | The caller's relation with one person: `{userId, blocking, muting, following, followedBy, canMessage}`. Someone outside the caller's workspaces is `404` unless the caller blocked or muted them. Being blocked by them shows only as `canMessage: false` |
 | `GET /api/social/blocks` | `[{userId, username, displayName, createdAt}]` |
 | `POST /api/social/blocks` `{userId}` | `201 {userId, blocked: true, created: true}`; `200` with `created: false` when already blocked; `422` for oneself |
@@ -3305,3 +3359,1010 @@ all required; `{anyOf}` when one of several suffices), `authenticated` (any sign
 entry for a route that is gone, or a route whose `requireAuth`, `requirePermission` or `requireAnyPermission`
 middleware disagrees with its entry. `npx tsx server/test/route-registry.ts --write` adds missing routes with what
 their middleware implies, for review.
+
+## Sprint 30 (1.5.0): MongoDB connections (B-3602)
+
+`engine: mongodb` on `POST /admin/connections` (`connections:manage`, same routes, checks and audit as the other
+engines). `endpoint` is `host:port` (27017 by default); `database` is required and is the only database read. The
+account is a sealed username and password or a `vault:` password reference (B-1705); it authenticates against the
+connection's database (as a URI naming that database would) unless the username is written `<authdb>/<user>`, such as
+`admin/reader`. `baoRole` is refused (`409`): OpenBao dynamic credentials are for
+PostgreSQL and MySQL. Zones and `CONNECTIONS_ALLOWED_HOSTS` apply as for the other engines: the host is resolved and
+checked once and the checked address is dialled (TLS still verifies the name), with one direct connection (no
+replica-set discovery), no retries and the connection's timeout as the server-selection, connect and `maxTimeMS` limit.
+
+- `POST /admin/connections/:id/test`: `ping`, `buildInfo` and `connectionStatus` with privileges. `readOnly: false` (and
+  `degraded`) when the account holds a write action (`insert`, `update`, `remove`, index or collection changes, user
+  administration, `anyAction`) or the server takes connections without an account; `degraded` when the account cannot
+  `find` in the database; `unreachable` with the scrubbed driver message on a failed connection or authentication.
+- `POST /admin/connections/:id/schema`: the database's collections and views (not `system.*`), with top-level fields and
+  types sampled from the first 20 documents of each of the first 200 collections.
+- `PUT /admin/connections/:id/allow-list`: collection names (case-sensitive) or patterns such as `orders_*`.
+- `POST /admin/connections/:id/query` (and `/export`): `query` is JSON, `{"find": "<collection>", "filter": {…},
+  "projection": {…}, "sort": {…}, "limit": n, "skip": n}` or `{"aggregate": "<collection>", "pipeline": [ … ]}`; with
+  `object` (the collection picked in the schema tree) a bare object is the filter of a find on it. Values may use
+  relaxed extended JSON (`{"$date": "…"}`, `{"$oid": "…"}`). Pipeline stages must be one of `$match`, `$project`,
+  `$addFields`, `$set`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$count`, `$unwind`, `$lookup`, `$graphLookup`,
+  `$unionWith`, `$facet`, `$bucket`, `$bucketAuto`, `$sortByCount`, `$replaceRoot`, `$replaceWith`, `$sample`,
+  `$redact`, `$setWindowFields`, `$densify`, `$fill`, `$geoNear`; collections read through `$lookup`, `$graphLookup` and
+  `$unionWith` (also in sub-pipelines and `$facet`) must be on the allow-list. Refusals (`422`, audited as
+  `connection.query.refused`): `kind: write` for write commands, mongosh write methods (`db.orders.updateMany(…)`),
+  `$out` and `$merge`; `kind: ddl` for `drop`, `create`, index and collection changes; `kind: denied` for a stage off
+  the list, a collection off the allow-list, `system.*`, another database, `$where`, `$function`, `$accumulator`,
+  `$code` and `mapReduce`; `kind: unparsed` for anything else (not JSON, mongosh read syntax, unknown keys), which
+  cannot be confirmed. Reads fetch the row limit plus one (`$limit` appended to a pipeline), with `maxTimeMS`; documents
+  become rows over the union of their top-level fields, sub-documents as JSON. Masking applies as for the other engines,
+  inside sub-documents too.
+
+Knowledge sources (`POST /knowledge/bases/:id/sources`, `kind: database`): on a MongoDB connection `location` is
+`mongo: <collection>` or the bare collection name (introspected and allowed), and `fields` (1 to 50, dotted paths
+allowed) names the fields whose text becomes the document; without `fields`, the text fields of the sampled schema other
+than the id, watermark and access fields are indexed (`400` when there are none). `idColumn` is the id field (`_id` by
+default), `watermarkColumn` an optional field that grows on every change (`updatedAt` or `updated_at` when the sampled
+schema has one; `null` keeps none, so every sync reads the collection again), compared after the stored watermark as a
+date, number, ObjectId or text; `accessColumn` and `accessKind` name a field listing the groups or users who may
+retrieve each document (an array or a list, as for B-1002). Only the id, the fields, the watermark and the access field
+are fetched. `replication` and `roleMappings` are refused (`409`). Documents carry at least the connection's label.
+`GET /knowledge/connections` lists MongoDB connections with the allowed collections and their sampled fields.
+
+## Sprint 30 (1.5.0): CalDAV and CardDAV (B-3101 to B-3104)
+
+New permissions `calendars:read`, `calendars:write` (personal calendars), `contacts:read`, `contacts:write` (the
+directory address book and personal address books); members and tenant admins hold them. Group events stay under
+`groups:read` and `groups:write`. The protocols themselves are at `/dav` and are described in `docs/dav.md`; only
+app passwords are JSON API routes. Migration `032_dav`.
+
+### App passwords (B-3101)
+
+An app password authenticates DAV clients (HTTP Basic, with the account's username) at `/dav` and nowhere else:
+`/api`, `/v1` and the console refuse it. It carries DAV scopes (`caldav`, `carddav`, `webdav`), narrowed on every
+request to what the owner's roles grant then. Roles that require MFA may have them, but creating one needs a browser
+session whose second factor was confirmed within `STEPUP_WINDOW_SECONDS` (signing in with a factor, or
+`POST /me/step-up` with a TOTP code or a passkey; a password step-up does not count): `401` with `step_up: true` and
+`factor: true` otherwise, and `403` (`step: mfa`) for an account with no second factor. Created and revoked passwords
+send a security notice and are audited (`dav.app_password.created`, `dav.app_password.revoked`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/app-passwords` | The caller's app passwords: `[{id, name, prefix, scopes, state, createdAt, expiresAt, lastUsedAt, lastUsedIp, lastUsedAgent, revokedAt}]`; `state` is active, expired or revoked (kept listed 30 days) |
+| `POST /api/me/app-passwords` | `{name, scopes: ['caldav' \| 'carddav' \| 'webdav'], ttlDays?: 30 \| 90 \| 180 \| 365 \| null}` (null: no expiry). Answers `201` with the view, `password` (`exai_d1_…`, shown once), `username` and the `server` URLs (`url`, `caldav`, `carddav`, `webdav`). At most 50 active per user |
+| `DELETE /api/me/app-passwords/:id` | Revokes it: the next DAV request with it is refused (`204`) |
+| `GET /api/me/dav` | For Settings (Sprint 32, B-3415): `{username, usernameWithTenant, server: {url, caldav, carddav, webdav}, scopes: [{scope, available}], stepUp: {hasFactor, windowSeconds, freshUntil}}`. `available` is whether the caller's roles grant any permission of the scope now; `freshUntil` is when the session's second-factor confirmation stops counting for creating an app password (null when it already has). `server.webdav` is the file store's collection, `/dav/files/` (B-32, Sprint 34), which answers WebDAV with a `webdav`-scoped app password |
+
+### DAV endpoints
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /.well-known/caldav`, `GET /.well-known/carddav` | `301` to `/dav/` (RFC 6764; also `HEAD`, `OPTIONS` and `PROPFIND`). Public |
+| `GET /dav/:path` | A calendar object (`text/calendar`) or vCard (`text/vcard`) with its `ETag`; `If-None-Match` answers `304`. Also `HEAD` |
+| `PUT /dav/:path` | Stores a calendar object or contact, or answers a group event (the caller's `PARTSTAT` becomes their RSVP). `If-Match` with a stale ETag is `412` |
+| `DELETE /dav/:path` | Deletes a personal object or collection; cancels a group event (moderators and owners) |
+| `OPTIONS /dav/:path` | `DAV: 1, 3, calendar-access, addressbook, extended-mkcol` and the methods allowed |
+
+## Sprint 31 (1.5.0): custom feed generators (B-3001 to B-3003) and relay commit verification (B-3604)
+
+### Relay commit verification (B-3604)
+
+A subscribeRepos `#commit` is believed only when it verifies (`server/src/atproto/commit.ts`, over the PDS's repository
+code: the MST walk in `pds/mst.ts`, the CAR reader in `pds/car.ts`, the signed bytes in `pds/repo.ts`): every block used hashes
+to its CID; the commit object (`{did, version: 3, data, rev, prev, sig}`) names the frame's repo and rev; `sig` is a
+compact low-S ECDSA-SHA256 signature over the DAG-CBOR of the commit without `sig`, by the `#atproto` key of the repo's
+DID document (resolved through the service URL checks, cached five minutes; fetched once more, at most once a minute
+per DID, when the signature fails, in case the key rotated); and each operation the subscription uses is proven against
+the signed tree root `data`: a create or update by walking the Merkle search tree to its path and finding exactly the
+operation's CID (with the record block hashing to it), a delete by finding nothing there. A commit that fails is
+dropped whole (none of its posts are checked, labelled or indexed; the cursor moves past it), counted in the
+subscription's `counts.rejected` and `exprsn_firehose_events_total{result="rejected"}`, and audited
+`atproto.firehose.commit.rejected` `{subscription, did}` with `{reason: commit | repo | resolve | document | signature |
+proof | too-big, detail, seq, posts, deletes, more?}`: at most `FIREHOSE_REJECT_AUDITS` a minute per subscription, the
+rest counted in `more` on the next one. Jetstream carries no signatures; a Jetstream endpoint is trusted as the
+operator's choice.
+
+### Feed generators
+
+A tenant's feeds are served by the tenant's own AT-Protocol identity (Sprint 25) as a feed generator: its DID document
+gains a `#bsky_fg` service of type `BskyFeedGenerator` at the identity's endpoint when the first feed is made (computed
+for did:web; for did:plc a signed PLC operation adds it, audited `atproto.identity.service-added`). The platform's
+identity serves no feeds. Each post the tenant's firehose subscriptions take, and that the moderation check passed, is
+indexed by every active feed whose rules all hold:
+
+- `authors`: DIDs (null: anyone); `collections`: NSIDs or `prefix.*` (default `[app.bsky.feed.post]`);
+- `keywords`: any of them, case-insensitive, not inside a longer word (null: any text);
+- `labels`: any of these in force on the post (from the tenant's labeler, its trusted external labelers, or the
+  check's own verdict: block is `!hide`, warn or flag `!warn`); `excludeLabels`: none of these (default `[!hide]`).
+
+Authors, collections and labels are checked again when a page is served, so a post outside the current rules, or
+labelled later, is never served. Narrowing authors or collections deletes what no longer matches; changing the keywords
+or the ranking empties the index (the post text is not kept). A delete seen on the firehose takes the post out of every
+feed.
+
+Ranking (optional) orders a feed by a score instead of newest first, and `minScore` drops posts below it:
+`{kind: embedding, profile, query, minScore?}` is the cosine similarity of the post to `query`, both embedded through
+the gateway by the embedding model the profile routes to (the profile must handle the subscription's label);
+`{kind: classifier, classifier, label, minScore?}` is a guardrail classifier's score for one of its labels. A post whose
+ranking fails is not indexed (`counts.rankFailed`, `lastError`).
+
+The index keeps the post URI, author, collection and a sort key (the time indexed, or the score × 1e9). Pages run by
+(sort, id) descending; the cursor is the last row's `<sort>::<id>` and the next page starts strictly after it, so a
+cursor never repeats a post however many arrive meanwhile. Rows older than `retentionHours` are not served and, with
+anything beyond `maxItems`, are pruned every `FEED_PRUNE_MINUTES` (job `atproto.feeds.prune`).
+
+A feed is `{id, rkey, uri, displayName, description, subscriptionId, rules, ranking, retentionHours, maxItems,
+ratePerMinute, auth: optional | required, state: active | paused, rev, record, published, counts: {indexed, served,
+rankFailed, items?}, lastError, createdAt, updatedAt}`. `uri` is `at://<publisher or generator DID>/app.bsky.feed.generator/<rkey>`;
+`record` is the `app.bsky.feed.generator` record to publish (B-3004): `{$type, did: <the generator's service DID>,
+displayName, description?, createdAt}`; `published` is `{did, uri, cid, at}` once recorded, after which only that URI
+names the feed. The generator is `{ready, reason, did, method, endpoint, serviceId: '#bsky_fg', serviceType:
+'BskyFeedGenerator', advertised}`.
+
+### Feeds (`firehose:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/atproto/feeds` | `{generator, feeds: [feed]}` (each with `counts.items`) |
+| `POST /api/atproto/feeds` `{rkey, displayName, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | B-3002. `rkey` 1 to 15 letters, digits or hyphens; `displayName` at most 24 characters, `description` 300; `retentionHours` 1 to 8760 (72); `maxItems` 10 to `FEED_ITEMS_MAX` (10,000); `ratePerMinute` 1 to 100,000 (300). A ranking whose profile does not route to an embedding model, or whose classifier lacks the label, is `400` with `step: ranking`. Without the tenant's own identity `409` with `step: identity`; a key in use or more than `FEEDS_MAX_PER_TENANT` feeds `409`. Audited `atproto.feed.created`. `201` |
+| `GET /api/atproto/feeds/:id` | The feed |
+| `PATCH /api/atproto/feeds/:id` `{displayName?, description?, subscriptionId?, rules?, ranking?, retentionHours?, maxItems?, ratePerMinute?, auth?, state?}` | Rules are merged field by field. Audited `atproto.feed.updated` (with `removed` when the index shrank) |
+| `DELETE /api/atproto/feeds/:id` | The feed and its index. Audited `atproto.feed.deleted`. `204` |
+| `GET /api/atproto/feeds/:id/skeleton?limit=1-100 (50)&cursor` | A preview page, as getFeedSkeleton serves it (not counted as served) |
+| `PUT /api/atproto/feeds/:id/publication` `{did, uri, cid?}` | B-3004 records where the generator record was published (or an admin who published it from an external account); `uri` must be `at://<did>/app.bsky.feed.generator/<rkey>`. Audited `atproto.feed.published` |
+| `DELETE /api/atproto/feeds/:id/publication` | Forgets it. Audited `atproto.feed.unpublished` |
+
+### Public XRPC (no session; `ATPROTO_PUBLIC_RATE_PER_MINUTE` per address, shared with the labeler routes)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /xrpc/app.bsky.feed.describeFeedGenerator`, `GET /atproto/:key/xrpc/app.bsky.feed.describeFeedGenerator` | `{did, feeds: [{uri}]}`: the active feeds of the tenant identity for this host (or path). `404 NotFound` where no identity is served |
+| `GET /xrpc/app.bsky.feed.getFeedSkeleton`, `GET /atproto/:key/xrpc/app.bsky.feed.getFeedSkeleton` `?feed=<at-uri>&limit=1-100 (50)&cursor` | B-3001, B-3003. `{cursor?, feed: [{post}]}`. `Authorization: Bearer <service JWT>` from the AppView: `alg` ES256K or ES256, signed by the issuer's `#atproto` key (its DID document through the service URL checks), `aud` the generator DID or `<did>#bsky_fg`, `exp` in the future and at most an hour away, `lxm` (when given) `app.bsky.feed.getFeedSkeleton`. A token that does not verify is `401` (`BadJwt`, `BadJwtSignature`, `BadJwtAudience`, `JwtExpired`, `BadJwtLexiconMethod`) whatever the feed; a feed with `auth: required` answers a request without one `401 AuthenticationRequired`. `400 UnknownFeed`, `InvalidRequest`, `BadCursor`; `429 RateLimitExceeded` over the feed's `ratePerMinute` (shared counters, with `Retry-After`). Metric `exprsn_feed_requests_total{method, result}` |
+
+Audit actions are in the event catalogue's `atproto.*` group. Configuration: `FIREHOSE_REJECT_AUDITS` (20),
+`FEEDS_MAX_PER_TENANT` (20), `FEED_ITEMS_MAX` (50,000), `FEED_PRUNE_MINUTES` (15; 0 never).
+
+## Sprint 31 (1.5.0): the AT-Protocol PDS (B-2901 to B-2906, B-3004)
+
+Exprsn-AI hosts AT-Protocol repositories. The protocol endpoints are at `/xrpc` and are described, with hosting,
+accounts, the firehose, migration and how labels apply, in [`docs/pds.md`](pds.md). This section lists the JSON API.
+New permission `pds:manage` (tenant admins): the tenant's hosting settings, its accounts, invite codes and published
+feed generator records. Members manage their own account with `atproto:link`. Turning hosting on or off is
+`platform:manage` with a recent sign-in. Errors from the PDS carry `error` (the XRPC error name) as an extension.
+Every change is audited (`pds.*`; the event catalogue's `pds.*` group, catalogue version 7). Migration `033_pds`.
+
+An account view is `{id, did, handle, state: active|deactivated|takendown, stateReason, takedownAction, migrating,
+userId, username?, email, didMethod: plc|web, signingKey, rotationKey (did:key), custody: signer|openbao, curve:
+secp256k1|p256, rev, commit, records?, createdAt, updatedAt, deactivatedAt, takendownAt}`. A hosting view is
+`{enabled, zone, handleDomain, inviteRequired, blobMaxBytes, blobTypes, enabledBy, enabledAt, updatedAt}`.
+
+### Hosting (platform admins)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds/tenants` | Every tenant's hosting view (with `tenantId`, `slug`, `name`) and the service: `{did, endpoint, handleDomain, zone, custody, relays: [{relay, lastAt, lastStatus, lastError}]}` |
+| `PUT /api/admin/pds/tenants/:tid` | `{enabled, zone?}`. Enabling fixes the handle domain `<tenant>.<PDS_HANDLE_DOMAIN>`; refused (`409`) in an air-gapped deployment, a zone without egress, without a signer or OpenBao, or when the domain is not a usable domain. Disabling is refused while active accounts remain. Audited `pds.hosting.enabled` / `pds.hosting.disabled` |
+| `POST /api/admin/pds/crawl` | Sends `com.atproto.sync.requestCrawl` to every relay in `PDS_RELAYS` now: `{host, relays: [{relay, status, error}]}`. Audited `pds.crawl.requested` |
+
+### The tenant's PDS (`pds:manage`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/pds` | The hosting view, `accounts` counted by state, and `service: {did, endpoint, subscribeRepos, seq, custody, curves}` |
+| `PATCH /api/admin/pds/settings` | `{inviteRequired?, blobMaxBytes? (null: the platform's), blobTypes? (null: the platform's)}`, within `PDS_BLOB_MAX_BYTES` and `PDS_BLOB_TYPES`. Audited `pds.settings.updated` |
+| `GET /api/admin/pds/accounts?state&q&limit&before` | `{accounts: [view]}`, newest first; `q` matches part of a handle or a whole DID |
+| `GET /api/admin/pds/accounts/:id` | One account view |
+| `POST /api/admin/pds/accounts/:id/deactivate` | `{reason}`. The repo answers `RepoDeactivated`, sessions end. Audited `pds.account.deactivated` |
+| `POST /api/admin/pds/accounts/:id/activate` | Audited `pds.account.activated` (a migrated account only once its DID names this PDS) |
+| `POST /api/admin/pds/accounts/:id/takedown` | `{reason}`. A moderation action on the `pds-repo` object (B-1903; the owner is told and may appeal): `RepoTakendown`, blobs not served, sessions revoked, `!takedown` published on the DID (B-1610). Answers `{account, action}`. Audited `moderation.action.applied`, `pds.account.takendown` |
+| `POST /api/admin/pds/accounts/:id/restore` | `{reason}`. Reverses that action: the previous state, the label withdrawn. Answers `{account, action, restored}`. Audited `moderation.action.reversed`, `pds.account.restored` |
+| `GET /api/admin/pds/invites` | `{invites: [{id, hint, usesMax, uses, note, createdBy, createdAt, expiresAt, disabledAt, state: active\|expired\|used\|disabled}]}` (never the codes) |
+| `POST /api/admin/pds/invites` | `{usesMax? (1), expiresInDays?, note?}`: `201` with the view and `code` (shown once). Audited `pds.invite.created` |
+| `DELETE /api/admin/pds/invites/:id` | Disables the code (`204`). Audited `pds.invite.disabled` |
+| `GET /api/admin/pds/feed-generators` | `{records: [{id, target: hosted\|external, accountId, repo, rkey, uri, cid, serviceDid, displayName, createdBy, createdAt, updatedAt}]}` (B-3004) |
+| `POST /api/admin/pds/feed-generators` | `{target: {kind: 'hosted', accountId} \| {kind: 'external', identifier, appPassword, pdsUrl?}, serviceDid, rkey, displayName, description?, acceptsInteractions?, contentMode?}`: publishes (or replaces) the `app.bsky.feed.generator` record naming `serviceDid`; the external app password is used once and never stored. `201` with the record view. Audited `pds.feed.published`. Or `{target, feedId}` (no metadata): publishes the record of a feed defined under `/api/atproto/feeds`, built by the feed generator (its rkey, display name and description; `did` the generator's service DID, `409` while the tenant has no AT-Protocol identity, `404` for an unknown feed), and records the publication on the feed (`published`, audited `atproto.feed.published`); the response adds `feedId` |
+| `POST /api/admin/pds/feed-generators/:id/withdraw` | `{identifier?, appPassword?, pdsUrl?}` (needed for an external record): deletes the record (`204`); a feed published as it forgets the publication (`published: null`, audited `atproto.feed.unpublished`). Audited `pds.feed.withdrawn` |
+
+### One's own account (`atproto:link`, a browser session)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/pds` | `{hosting: {enabled, handleDomain, endpoint}, account: view \| null, appPasswords: [{id, name, privileged, createdAt, lastUsedAt, revokedAt, state}]}` |
+| `POST /api/me/pds` | `{handle}` (a name, or the full handle): creates the account (recent sign-in). `201` with the view. Audited `pds.account.created` |
+| `PUT /api/me/pds/handle` | `{handle}` within the tenant's domain (recent sign-in). Audited `pds.account.handle_changed` |
+| `POST /api/me/pds/deactivate`, `POST /api/me/pds/activate` | The account's own state |
+| `POST /api/me/pds/app-passwords` | `{name, privileged?}`: a recent sign-in and, when the user has a second factor, one confirmed within `STEPUP_WINDOW_SECONDS` (`401` with `step_up` and `factor` otherwise). `201` with the view, `password` (`xxxx-xxxx-xxxx-xxxx`, shown once), `identifier` and `server`. At most 50 live. Audited `pds.app_password.created` |
+| `DELETE /api/me/pds/app-passwords/:id` | Revokes it and its sessions at once (`204`). Audited `pds.app_password.revoked` |
+| `POST /api/me/pds/plc-token` | A single-use code for `com.atproto.identity.signPlcOperation` (moving the account to another PDS), valid 15 minutes, shown once (recent sign-in): `201 {token, expiresAt}`. Audited `pds.plc.token_issued` |
+## Sprint 30 (1.5.0): import repositories and model import (B-3801 to B-3803)
+
+The server side of the import wizard (the Import screen is B-3807). New permissions: `imports:run` (browse
+repositories and request imports; model, ML and knowledge admins and tenant admins; a destination also needs its own
+permission, `models:manage` for a draft model), `imports:repositories` (model admins: propose, confirm and change
+repositories) and `imports:review` (the new `legal-review` role, granted only by a system admin: licence exceptions and
+the licence allow-list). Migration `033c_imports`. Audit actions `import.*` (also an event group). Configuration:
+`IMPORT_CONNECTIVITY`, `IMPORT_PROXY_URL`, `IMPORT_ALLOWED_HOSTS`, `IMPORT_TIMEOUT_MS`, `IMPORT_PART_BYTES`,
+`IMPORT_MAX_BYTES`, `IMPORT_HARVEST_MAX_ITEMS`, `IMPORT_HARVEST_TICK_MINUTES`, `IMPORT_BUNDLE_POLL_MINUTES`,
+`IMPORT_BACKOFF_MAX_MINUTES`, `IMPORT_DATASET_QUOTA_GB` (`server/.env.example`).
+
+### Repositories (B-3801)
+
+Types (`GET /api/imports/types`): `hf` (Hugging Face compatible hub), `ollama` (Ollama compatible OCI registry), `ckan`,
+`dcat` (DCAT-AP as JSON-LD), `sdmx` (SDMX 2.1 REST), `openml`, `invenio` (InvenioRDM, Zenodo), `kaggle` and `bundle`
+(model files in promoted signed platform bundles). Model import is implemented for `hf`, `ollama` and `bundle`; the
+others are browsable dataset catalogues until dataset import (B-3804).
+
+A repository is **proposed** by one holder of `imports:repositories` (`state: pending`) and **confirmed** by another
+(`403` `step: dual-control` for the proposer). Until then it is not browsable (`409`), not harvested and its hosts are
+not on the allow-list. Confirming queues the first harvest. The base host and `extraHosts` (redirect and CDN hosts,
+defaulted per type: `*.hf.co`, `cdn-lfs*.huggingface.co` for a hub, `*.r2.cloudflarestorage.com` for the Ollama
+registry) are the repository's part of the staging-proxy allow-list; they cannot be changed afterwards (propose again).
+`https://` only; plain `http://` only for hosts `IMPORT_ALLOWED_HOSTS` names.
+
+The credential is a vault reference (`credentialRef: vault:<path>#<key>`, checked with the saver's vault policy) or a
+value (`credential`) written into the vault at `imports/repositories/<id>` as the caller (they need vault write on that
+path). It is resolved, at use, as the user who saved it (B-1705: they need `secrets:read` and the path policy), sent
+only on the first request to the repository's own host, never along a redirect, and never shown again (the view has
+`credential: {recorded, ref, required, kind}`). Hub and InvenioRDM tokens go as `Bearer`, Kaggle and registry
+credentials (`username:key`) as Basic, CKAN keys as `Authorization`, OpenML keys as `X-API-Key`.
+
+Harvests (`imports.harvest` job) replace the repository's catalogue snapshot in one transaction; `harvestMinutes`
+(at least 15) schedules them (`imports.harvest-due`, every `IMPORT_HARVEST_TICK_MINUTES`). A source answering 429 (or
+503 with `Retry-After`) puts the repository into backoff (the longer of `Retry-After` and one minute doubling per
+failure, capped at `IMPORT_BACKOFF_MAX_MINUTES`): `status: rate limited`, `backoffUntil`; harvests, live search and
+downloads wait for it.
+
+Repository view: `{id, name, type, typeName, protocol, baseUrl, host, extraHosts, region, kinds, options, credential,
+licencePolicy, harvestMinutes, nextHarvestAt, state: pending | active | disabled | rejected, status: unknown |
+reachable | rate limited | unreachable | needs token | disabled, statusDetail, backoffUntil, liveSearch, modelImport,
+snapshotAt, snapshotItems, harvestJob, requestedBy, decidedBy, decidedAt, decisionNote, createdAt, updatedAt}`.
+
+Type options: `hf` `search`, `author`; `ollama` `models` (names to track; a registry answering `/v2/_catalog` needs
+none), `maxTags`; `ckan` `query`, `fq`, `region`; `dcat`, `sdmx` `region`, `licence` (the provider's terms); `openml`
+`detailLimit` (how many descriptions to read for licences); `invenio` `query` (for example `resource_type.type:dataset`);
+`kaggle` `query`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/types` | The types with kinds, protocol, example URL, default hosts, credential, live search and facet keys |
+| `GET /api/imports/repositories` | Repository views |
+| `POST /api/imports/repositories` `{name, type, baseUrl?, region?, kinds?, extraHosts?, options?, credentialRef? \| credential?, licencePolicy?, harvestMinutes?}` | `201` a pending repository; the other repository admins are notified |
+| `GET /api/imports/repositories/:id` | One repository |
+| `PATCH /api/imports/repositories/:id` `{name?, region?, options?, credentialRef?, credential?, licencePolicy?, harvestMinutes?}` | Changes it (not its hosts) |
+| `POST /api/imports/repositories/:id/confirm` `{note?}` | The second admin's confirmation: the view and `harvestJobId` |
+| `POST /api/imports/repositories/:id/reject` `{note?}` | Rejects a proposal |
+| `POST /api/imports/repositories/:id/enable`, `/disable` | Enables or disables it |
+| `POST /api/imports/repositories/:id/harvest` | `202 {jobId}` |
+| `POST /api/imports/repositories/:id/check` | Probes the source (and the credential) and updates `status` |
+| `DELETE /api/imports/repositories/:id` | `204`; `409` while any of its imports is in the queue |
+| `GET /api/imports/proxy-allowlist?format=json\|squid` | `platform:manage`: the hosts of every confirmed repository (system admins: every tenant) plus `IMPORT_ALLOWED_HOSTS`, as `{proxy, hosts: [{host, repositories}]}` or squid `dstdomain` lines |
+
+### Catalogue browse (B-3802)
+
+`GET /api/imports/repositories/:id/catalog?kind&q&facet.<key>=<value>&live=auto|on|off&limit&offset` answers
+`{repository, kind, query, selected, source: live | snapshot, liveReason, snapshotAt, total, limit, offset, items,
+facets: [{key, label, values: [{value, count, selected}]}]}`. Items: `{itemId, name, publisher, description,
+classification, licence, licenceAllowed, formats, gated, sizeBytes, updated, facets, data}`.
+
+Facets come from the source's own taxonomy: models `classification` (the hub's pipeline tag, the registry's model
+family), `format`, `licence`, `parameters`, `access` (open or gated), `library`, `family`, `quantization`; datasets
+`classification` (CKAN groups, DCAT-AP themes, SDMX categorisations, OpenML task types, InvenioRDM resource types,
+Kaggle and hub tags), `domain`, `format`, `licence`, `publisher`, `rows`, `region`, `updates`. Counts are disjunctive:
+a value's count is the number of items matching the search and every other selected facet, which is exactly how many
+rows selecting it returns. A search runs live through the proxy when the type can be searched (`hf`, `ckan`,
+`invenio`, `kaggle`), the repository is reachable and not backing off, and the instance is not air-gapped; otherwise
+(and with no search terms) the snapshot answers, and `liveReason` says why.
+
+### Model import (B-3803)
+
+The select and review steps:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/repositories/:id/item?id&revision` | The model as the source states it now: `{itemId, name, revision (the commit, or the manifest digest), files: [{name, size, pin: sha256:… \| gitsha1:…, format: gguf \| safetensors \| pickle \| onnx \| metadata \| manifest \| other, mediaType}], variants, gated, access: open \| granted \| gated, gate, licence, licenceSource, classification, family, parameters, capabilities, contextLength, source: live \| snapshot \| bundle}`. Air-gapped: from the snapshot. Rate limited: `503` |
+| `POST /api/imports/repositories/:id/gate` `{item}` | Accepts a gate with the recorded token: `{item, access: granted, account, acceptedBy, acceptedAt}`; `409` `Gate pending` while the publisher has not approved |
+| `POST /api/imports/plan` (the request body below) | `{repository, item, name, revision, mode, source, files (with selected), variants, selected (names), variant, sizeBytes, gated, access, gate, licence: {id, source, allowed, recorded, needsException}, label, tag, conversion: {needed, quantization}, manifestDigest, checks: [{name, result: passed \| refused \| warning \| info \| waiting, detail}], blocked, waiting}`; nothing is written |
+
+Request body (plan and request): `{repositoryId, item, revision?, variants? (one GGUF file, or an Ollama tag),
+files?, target: models, label (default internal), licence? (recorded when the source states none), attribution?, tag?,
+quantization? Q4_K_M | Q5_K_M | Q8_0 | F16, poolId?, notes?, exception?: {reason}}`.
+
+Checks, in the board's order: **Format** (only GGUF and safetensors; a pickle-only repository, a selected pickle,
+ONNX or other weights, two GGUF variants, or GGUF and safetensors together are refused), **Licence** (from the card at
+the pinned commit or the manifest's license layer; on the allow-list, or waiting for an exception), **Access** (the
+gate), **Serving path** (classifier and speech models are refused until B-3806), **Conversion** (safetensors and
+published GGUF go through the GPU training worker; refused without one), **Destination** (a valid, unused tag; the
+caller's clearance; the pool's ceiling), **Size** (`IMPORT_MAX_BYTES`), **Connectivity**.
+
+`POST /api/imports` (`imports:run` and, for a draft model, `models:manage`) answers `201` with the import, or:
+`422 Import refused` (`import` holds the refused queue entry; nothing is downloaded, staged or registered), `409`
+`reason: gate`, `409 reason: licence-unknown` (record `licence`), `409 reason: licence-exception-required` (send
+`exception`). States: `queued`, `waiting on licence` (an exception `EXC-n` is pending; the legal reviewers are
+notified), `queued for bundle` (air-gapped), `running` (`stage`: Pinning, Downloading, Converting, Registering),
+`complete`, `refused`, `failed`, `cancelled`.
+
+The `imports.model` job re-reads the source at the pinned revision (a file whose digest changed under it refuses the
+import), downloads each file in parts of `IMPORT_PART_BYTES` (a retry resumes with `Range` from the stored parts),
+refuses pickle by the first bytes (`\x80` protocol or a zip archive) whatever the name, and checks every file against
+its pin (sha256, or the git blob id for small files). Verified files are kept content-addressed
+(`imports/blobs/sha256/<hex>`). Registration: an Ollama manifest registers as `<name>:<tag>` (another registry's host
+prefixed), `expected_digest` the manifest's digest, which is what the pools report; hub files are sealed as artefacts
+of the import and converted (or packaged, `as-is`, for a published GGUF) by the training worker's `POST /v1/convert`
+(`docs/training-worker.md`), and the digest it returns is pinned on the draft. The draft is an ordinary `draft` model
+(pull, evaluate and dual-control approval on the Models screen); with `poolId` it is placed and pulled. The import's
+`manifest` (`exprsn-import-manifest/1`: source, revision, files with pins and sha256, licence and its status, label,
+attribution, requester, gate, model and expected digest, conversion) is signed with the KMS key `import-manifests`.
+
+Import view: `{id, ref (IMP-2026-41), kind, repository, item, itemName, revision, target, mode, state, stage,
+progress, note, files: [{name, size, pin, format, done, sha256, state}], options, checks, log: [{at, title, meta,
+tone}], manifest, licence, licenceStatus: allowed | exception pending | exception granted | exception refused,
+exception: {id, ref, state, decidedBy, decisionNote}, label, attribution, sizeBytes, storedBytes, jobId, model: {id,
+name, state, expectedDigest}, error, requestedBy, requestedByName, createdAt, startedAt, finishedAt, updatedAt}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports?state&kind&q&limit&offset` | `{counts: {total, running, waiting, queued}, imports}` within the caller's clearance |
+| `POST /api/imports` | Requests an import (above) |
+| `GET /api/imports/:id` | One import |
+| `POST /api/imports/:id/cancel` | Cancels a queued, waiting or running one (a pending exception is withdrawn, stored parts discarded) |
+| `POST /api/imports/:id/retry` | Retries a failed or cancelled one, resuming the downloads; a refused one is `409` |
+| `GET /api/imports/exceptions?state` | `imports:run` or `imports:review`: `[{id, ref, licence, reason, state, import: {id, ref, item, itemName, state, label}, requestedBy, requestedByName, requestedAt, decidedBy, decidedByName, decidedAt, decisionNote}]` |
+| `POST /api/imports/exceptions/:id/decision` `{decision: grant \| refuse, note?}` | `imports:review`. Whoever requested the import or the exception gets `403 step: dual-control`; an already decided one `409`. Granting queues the import; refusing refuses it |
+| `GET /api/imports/settings` | `{allowedLicences, defaultLicences, updatedBy, updatedAt, connectivity: direct \| bundle, viaProxy, quota}` |
+| `PUT /api/imports/settings/licences` `{allowedLicences}` | `imports:review`: the tenant's licence allow-list (ids are normalised; `unknown` and `other` are never allowed) |
+| `GET /api/imports/quota` | `imports:run` or `usage:read`: `{maxBytes, custom, usedBytes: {datasets, models, total}, appliesTo: datasets, updatedAt}`. The quota (500 GB unless set) applies to dataset imports (B-3804); model imports are metered beside it |
+| `PUT /api/admin/tenants/:tid/import-quota` `{maxBytes}` | `tenant:manage` and the system-admin role; `null` restores the default |
+| `GET /api/imports/bundle-requests` | `platform:manage`: `{format: exprsn-import-requests/1, generatedAt, requests: [{id, ref, tenant, repository: {type, baseUrl, name}, item, revision, variant, manifestDigest, files, licence, path, requestedAt}]}`, what staging fetches for the next bundle |
+
+**Bundle mode.** With `IMPORT_CONNECTIVITY=bundle` requests are planned from the snapshot and wait as
+`queued for bundle`. Staging reads `GET /api/imports/bundle-requests`, fetches and scans, and ships the files in a
+signed platform bundle under `imports/<import id>/` (the `models` mirror; Ollama layers as `<kind>-<12 hex>` beside
+`manifest.json`; an optional `import.json` `{licence, source, item, revision}`). Once the bundle is verified and
+promoted, `imports.bundle-match` (every `IMPORT_BUNDLE_POLL_MINUTES`) continues each request from the bundle's files with
+the same checks; a pin recorded at request time must still match. A `bundle` repository browses and imports promoted
+bundle files directly.
+
+## Sprint 32 (1.5.0): the chain context, sub-workflow, agent, map and loop steps (B-4101, B-3901, B-3902, B-3905)
+
+### The chain context (B-4101)
+
+Every invocation is a node of one chain (`server/src/chain/context.ts`, tables `chains` and `chain_nodes`): a chat turn
+whose answer called a tool, an agent run, a workflow run, a tool call, a skill load, a plugin action that started a
+workflow, an app trigger. The first is the root; what it causes are its descendants. The rules, read from the database
+so every instance gives the same answer:
+
+- **Principal**: a child acts as the root's principal; a call that would act as someone else is refused (an app trigger
+  owned by another user starts a chain of its own instead).
+- **Label**: a child's label is at least the chain's high-water mark, and the mark rises with every node and every
+  step output above it (a sub-workflow's result, an agent's answer). Nothing runs above a callee's ceiling: a tool call
+  whose chain carries data above the tool's ceiling is refused (`tool_unavailable`).
+- **Depth**: at most `CHAIN_MAX_DEPTH` (default 8; the root is depth 0) across kinds, with `WORKFLOW_MAX_DEPTH`
+  (3) nested workflow runs and `AGENT_MAX_DEPTH` (3) nested agent runs as per-kind caps; `PLUGIN_MAX_DEPTH` and
+  `APPS_TRIGGER_MAX_DEPTH` still apply to their own chains of events.
+- **Budgets**: tokens, steps, wall time and GPU time (the cost meter) of every node are charged to the root's budgets:
+  an agent root's are its run budgets, a workflow root's its graph limits (tokens, timeout; `CHAIN_MAX_STEPS` steps); a
+  chat turn, plugin action, app trigger or bare tool call gets `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`,
+  `CHAIN_MAX_WALL_SECONDS` and `CHAIN_MAX_GPU_SECONDS`. Wall time is the time of the leaf work (model calls, tool
+  calls, steps that do not hand their work to a child), so nested runs are not counted twice. Once a budget is used up
+  the chain is `stopped` (audited `chain.stopped` once): nothing new begins in it, an agent run stops before its next
+  thinking step (state `budget`, its error naming the root's budget), a workflow run fails before its next step. Raising
+  a root agent run's budgets (`POST /api/runs/:id/resume`) raises its chain's.
+- **Retries and instances**: a node is unique by `(kind, ref)` (the run id for runs) and its chain rides on the run's
+  row (`chain_id`, `chain_node`), so a job retried on another instance resumes the node it began.
+
+A refused invocation (`code`: `depth`, `kind-depth`, `principal`, `budget`, `stopped`) is audited `chain.refused`
+`{chain, parent, kind, callee}` with `{rule, reason}`. A refused tool call comes back to the caller as an error
+`chain_limit: …` (the model sees it as a tool error) and is recorded as a `refused` node under its would-be parent. A
+refused sub-workflow, agent step or map item fails its step.
+
+Run views carry `chain: {id, node}` and `caller: {kind, id, node}`: `GET /api/runs/:id` (agent runs) and `GET
+/api/workflow-runs/:id`, which also lists `children: [{kind: workflow-run | agent-run, id, workflowId | agent, step,
+state, label, error}]` (within the caller's clearance) and `items: [{nodeId, index, state, error, childRun, tokens}]` (map
+and loop checkpoints). The tree view of a chain is `GET /api/chains/:id` (B-4107, Sprint 34a, below).
+
+### New step kinds
+
+Validated at publish with the existing codes; a reference that is not published to the workflow's workspace is
+`unavailable`. Dry runs mock all four and call nothing.
+
+| Kind | Config | Output |
+| --- | --- | --- |
+| `sub` | `workflow` (name or id, same workspace), `version?` (pinned; else the version published when the step runs), `input?` (field templates, one template rendering to an object, or the step's input) | `{run, output}`: the child run and the merged output of its last steps |
+| `agent` | `agent` (registry name), `input?` (task template; the step's input as JSON when omitted), `budgets?` (`steps`, `tokens`, `wallSeconds`, `toolCalls`, up to the registry maximum) | `{run, text}` |
+| `map` | `over` (a template rendering to a list), one action (below), `maxParallel` (1–20, default 10), `maxItems` (1–200, default 200), `as` (field name, default `results`) | `{[as]: [...], count}` in item order |
+| `loop` | one action, `max` (1–40, default 5), `while?` `{left, op, right}` (branch operators, checked before every iteration) | `{iterations, last, results, stopped: condition \| max}` |
+
+An action (map item or loop iteration) is a model prompt (`profile`, `prompt`, `format?`), a registry tool (`tool`,
+`args?`; for a map without `args` the item itself, or `{item}`), or a published workflow run as a child (`workflow`,
+`version?`, `input?`; default `{item, index}` for a map, `{iteration, last, results}` for a loop). Templates read
+`{{item}}`, `{{index}}` (map), `{{iteration}}`, `{{last}}` and `{{results}}` (loop) as well as `input` and `steps`.
+
+- **Sub-workflow (B-3901)**: the child runs as the parent's owner, under the higher of the step's label and the
+  child workflow's, in the parent's chain (trigger `workflow:<parent run>`, `caller_kind: workflow-run`), audited
+  `workflow.run.started` with `{parentRun, parentWorkflow, step}`. It runs inside the step while it can; when it waits
+  on an approval the step and the parent wait, and the child's end resumes the parent with its output and label.
+  Cancelling the parent cancels its waiting children (and agent runs). A workflow cannot run itself; `workflow.*`
+  tools stay refused in tool steps and items; nesting is bounded by `WORKFLOW_MAX_DEPTH`.
+- **Agent step (B-3902)**: starts a run of the published agent as the run's owner (audited `agent.run.started` with
+  `{workflowRun, step}`), under the agent's ceiling (above it the step is blocked); the step waits without a worker and
+  continues when the agent run ends; a failed, cancelled or budget-stopped run fails the step (with a typed error a
+  failure edge reads, B-4106).
+- **Skills on a model step (B-3902)**: `skills: [name…]` (up to 8) on a `model` step loads each published skill
+  (a `skill-load` node in the chain): its instructions join the system prompt and its tools are offered through the
+  dispatcher, so every call passes the tool's ceiling, its schema, the `tool-call` guardrail checkpoint and its rate
+  limit. A write or destructive call runs only when an Approval step comes before the model step on every path;
+  otherwise (since Sprint 34a, B-4106) the step pauses on an approval for the call. At most six rounds of calls.
+  Skills load with their closure (B-4103). The step's detail lists `skills`,
+  `tools`, `hidden` and `toolCalls: [{tool, ok, decision, error}]`.
+- **Map and loop (B-3905)**: items run at most `maxParallel` at once; every item and iteration is a step of the chain
+  (checked against the root's budgets before it starts) and its tokens count toward the run's token budget. A run's
+  maps fan out over at most 200 items (`maxItems` declared on the maps are summed at publish, the real lists at run
+  time); each loop iteration beyond the first counts toward the 40-step limit at publish. Each item's result is a
+  checkpoint (`workflow_items`, sealed) so a map resumes without running finished items again. Items never pause one
+  by one: a write tool in a map or loop needs an Approval step before it on every path (refused at publish otherwise),
+  and child workflows that wait leave the step waiting until all are done. The first failing item fails the step.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-callees` | `agents:run`. What the new steps may call from the current workspace, within the caller's clearance: `{workflows: [{id, name, label, version, input}], agents: [{name, version, description, label, budgets}], skills: [{name, version, description, label, tools}], limits: {chainMaxDepth, workflowMaxDepth, maxItems, maxParallel}}` |
+## Sprint 32b (1.5.0): workflow triggers, failure handling and bundles (B-3903, B-3906, B-3909)
+
+**Triggers on the workflow itself (B-3903).** The trigger step takes two more sources: `{source: event, event}` (a
+catalogue event type such as `file.uploaded`, or a group such as `file.*`; not `*`) and `{source: schedule, cron}` (five
+fields, UTC; a `schedule` trigger without `cron` is still started by an app's schedule trigger). Publishing checks the
+event against the catalogue (`config`; a reserved type is a warning) and the cron expression, and writes the version's
+trigger; republishing with another source removes it. Runs start as the person who published the version (the
+trigger's owner), with the roles, clearance and memberships they hold at that moment: an owner who is disabled, lost
+`agents:run`, left the workflow's workspace or is not cleared for the event gets a skip (`workflow.trigger.skipped`
+with the reason) instead of a run, as does an event for a version that is no longer the published one. An event run's
+input is `{event: {id, type, tenant, label, createdAt, data}, trigger: {id, kind: event, depth}}` and its trigger
+`event:<firing id>`; a schedule run's input is `{event: schedule, dueAt, trigger: {id, kind: schedule, depth: 1}}` and its
+trigger `schedule:<firing id>`.
+
+Event fan-out follows the plugin rules: a workflow in a workspace receives only events that name that workspace
+(`data.workspace` or the audit target's `workspace`), a tenant-level workflow the tenant's events; an event above the
+workflow's label is not delivered; each trigger fires at most `WORKFLOW_EVENT_RATE_PER_MINUTE` times a minute (dropped
+events are counted in `exprsn_workflow_trigger_dropped_total{reason}` and audited once a window as
+`workflow.trigger.throttled`); an event caused by a chain of workflows is never delivered to a workflow in that chain,
+events about a workflow's own runs never start it, and an event whose chain is `WORKFLOW_EVENT_MAX_DEPTH` long is
+dropped. Each delivery is a firing, unique per trigger and event id, and a `workflow.trigger` job. Schedule triggers are
+checked every `WORKFLOW_SCHEDULE_TICK_SECONDS`; each due time is claimed once across instances. Audited:
+`workflow.trigger.set`, `workflow.trigger.removed`, `workflow.trigger.updated`, `workflow.trigger.fired`,
+`workflow.trigger.skipped`, `workflow.trigger.throttled`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
+| `PATCH /api/workflows/:id/triggers` `{enabled}` | `workflows:manage`. Turns the trigger off or on again (a schedule's next due time is recomputed); `404` without one |
+
+**Failure handling (B-3906).** A step may carry `retry: {max: 1-5, delayMs: 1000-3600000 (5000), backoff: fixed |
+exponential (exponential)}` (not on trigger, approval, wait or branch steps; a warning on writes): a step that fails is
+tried again up to `max` more times, waiting durably between attempts (the step is `waiting` with `resumeAt` and
+`detail: {retryAt, retries, lastError}`; the run is `waiting`). Label-ceiling and guardrail blocks and rejections are
+not retried. An edge with `branch: failure` (from any step but the trigger) is taken when its step fails for good: the
+steps on it receive `{error, step}` (also readable as `{{steps.<id>.error}}`), its other edges are skipped, and the run
+does not fail for it. A run (not a dry run) that fails for good is a dead letter, audited `workflow.run.dead_lettered`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflow-dead-letters?state&workflow&limit` | `workflows:manage`. Dead letters of the current workspace's workflows within the caller's clearance: `{items: [{id, workflowId, workflow, runId, nodeId, label, error, state: open \| redriven, failedAt, redrivenBy, redrivenAt, redriveRunId}]}` |
+| `POST /api/workflow-dead-letters/:id/redrive` | `workflows:manage`. Replays the run from the step that failed (steps before it keep their checkpoints): `201` the dead letter, `redriven` with `redriveRunId`; `409` when it was redriven already. Audited `workflow.dead_letter.redriven` |
+
+**Bundles (B-3909).** `exprsn-workflow/1`: `{format, exportedAt, workflow: {name, description, label}, version (null for
+the draft), graph, references: {tools: [{name, version}], profiles, apps, vault, trigger}, key, signature}`, signed with
+the KMS HMAC key `<OPENBAO_KEY_PREFIX>workflow-bundles` over the canonical JSON of everything but the signature. Runs,
+versions, the registry tool a workflow is published as and app triggers are not part of it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/bundle` | `workflows:manage`. The signed bundle of the published version (the draft when nothing is published), as an attachment. Audited `workflow.exported` |
+| `POST /api/workflows/import` `{bundle, name?, bindings?: {tools, profiles, apps, vault}}` | `workflows:manage`. Verifies the signature before reading anything else (changed after signing, another key or no signature: `422 Bundle refused`, audited `workflow.import.refused`), re-binds each reference (`bindings` maps a name to another; otherwise it keeps its name) and creates the workflow as a draft in the current workspace: `201 {workflow, bindings: [{kind: tool \| profile \| app \| vault \| trigger, from, to, status: bound \| missing \| on publish, detail}]}`. A taken name is `409`; a vault reference the importer cannot read is `409` (bind it). The trigger starts nothing until the importer publishes the workflow. Audited `workflow.imported` |
+
+## Sprint 32c (1.5.0): domain built-in tools, approval forms, notify and webhook steps (B-3904, B-3907, B-3908)
+
+### Domain built-ins (B-3904)
+
+Five platform registry tools with `impl: builtin` (published to every tenant, like `calculate`), seeded by migration
+`034c_workflow_steps`. They go through the one dispatcher, so chat, agent runs, workflow tool steps and the registry
+harness call them the same way: the input schema, the tool's ceiling, the `tool-call` checkpoint and the approval rule
+for writes (all five are `write`; a workflow tool step pauses for its approver role unless an Approval step comes
+before it on every path). Each acts as the caller through the domain service: the permission the domain's route needs,
+membership and rights, clearance and label ceilings, guardrails, the audit entry and the catalogue event. Data is never
+sent somewhere labelled below it: a call made with confidential data into an internal conversation, group or session
+fails with `Blocked by label ceiling: …`. The registry harness (`POST /admin/registry/:id/test`) holds writing
+built-ins (`needsApproval`, `sandboxed: false`) instead of acting on live data.
+
+| Tool | Arguments | Result | Needs |
+| --- | --- | --- | --- |
+| `messages.send` | `{conversation \| user, body, thread?}` (`user` opens or reuses the direct conversation) | `{conversation, message, label}` | `messages:write` |
+| `feed.post` | `{workspace?, group?, body}` (the caller's current workspace by default) | `{post, state, label, workspace}`; the post is at least the call's label and records its source | `feed:write` |
+| `files.write_version` | `{file, content, encoding?: utf8 \| base64, type?}` (up to 1 MB) | `{file, version, state, size}`; the version goes through quarantine and the scan, at least the call's label | `files:write` |
+| `groups.create_event` | `{group, title, start, end? \| durationMinutes?, timeZone, description?, location?, reminders?}` | `{event, group, startsAt, label}` | `groups:write` and the group's `events` right |
+| `channels.answer` | `{channel, session, text}` | `{message, seq}` | `channels:review` |
+
+A post made by a built-in or a plugin carries `source: {kind, id}` in its view (`GET /feed/posts/:id` and every feed
+page): `workflow-run` (a workflow tool step; the run's id), `agent-run`, `message` (chat), `api-request`, `plugin`.
+`feed.post.created` audits it in `detail.source`.
+
+**Plugin broker calls.** `records.read` `{app, entity, id? | filter?, q?, limit?}`, `records.write` `{app, entity,
+action?: create | update | transition, id?, values, to?, version?}`, `files.read` `{file, version?}` (`text` for text
+types, `base64` otherwise, at most 256 kB with `truncated`), `groups.read` `{group, events?}` (the group and its events
+for the next 90 days) and `posts.write` `{workspace?, group?, body}` answer `200` with the result. They need the
+capability (`read:records`, `write:records`, `read:files`, `read:groups`, `write:posts`) and act as the user who
+installed the plugin: that user must still be active and hold `records:read`, `records:write`, `files:read`,
+`groups:read` or `feed:write`, their clearance is capped at the plugin's max label, and a write carries at least the
+event's label (records are written with `source: plugin`, posts with `source: {kind: plugin, id}`). Bad arguments are
+`400`; a plugin installed from the command line, or whose installer is gone, is `403`.
+
+### Approval forms (B-3907)
+
+An `approval` step takes `form: {app, form}` (names or ids): the approver fills in that app form, and the answers
+become the step's output (`{…input, approved, by, answers}`; the port schema adds `answers: object`). The form must
+exist and be openable by whoever saves the graph (`422`, code `reference`, at save). When the step opens, the form is
+resolved as the run's owner and kept with the approval.
+
+| Method and path | Change |
+| --- | --- |
+| `GET /workflow-approvals`, `GET /workflow-runs/:id` | Each approval adds `form: {app, form, title, submitLabel, fields: [{name, label, help, type, required, options?, visibleIf…}]}` (null without one) and `answers` (once decided, within the caller's clearance) |
+| `POST /workflow-approvals/:id` `{decision, reason?, answers?}` | Approving a step with a form needs `answers`, validated like a submission of that form: only the visible fields are kept (the rest dropped), required ones (including those a condition shows) present, text through the `user-input` checkpoint, then the entity's types, options and links. `400` with `problems` when they do not pass (the approval stays pending); answers on an approval without a form are `400`. Nothing is written to the app. The answers are sealed with the approval, returned as `answers`, and audited in `workflow.approval.approved` `detail.answers` (at the run's label) |
+
+### Notify and webhook steps (B-3908)
+
+Two new step kinds, both writes (a workflow offered as a tool with one is at least `write`); a dry run mocks them.
+
+- `notify` `{users?: [template], roles?: [role], title, body?, email?: false, route?}`, output `{notified, skipped}`.
+  `users` render to user ids or usernames. Only active users of the tenant cleared for the step's label are told, and
+  for a workflow in a members-only workspace only its members; the rest (and unknown names) are skipped and counted.
+  The notice carries the step's label and opens `route` (`workflows?run=<id>` by default); `email: true` also mails
+  it. Audited `workflow.step.notified` `{notified, skipped, email, roles}`.
+- `webhook` `{url, event?: workflow.<name> (workflow.webhook), body?: {field: template} | template}`, output
+  `{webhook, delivery, event}`. The URL is fixed (no templates). It is checked against the operator's and the tenant's
+  outbound host rules when the graph is saved (`POST /workflows`, `PUT /workflows/:id/draft`, publish): an endpoint
+  outside them is refused with `422 Workflow invalid` and `errors: [{code: config, nodeId, message: "<step>: the
+  endpoint is refused by the outbound host rules: …"}]`, and nothing is saved. At run time the step queues one delivery
+  through the tenant's webhook path, on a webhook managed for the workflow and endpoint (`workflow:<id>:<hash>`, no
+  subscriptions, removed with the workflow): the body is `{id, type: event, tenant, label, createdAt, data: {workflow,
+  run, step, data}}` (`data` the step's input or its `body`), signed with the tenant's Ed25519 webhook key
+  (`X-Exprsn-Key-Id`, `X-Exprsn-Timestamp`, `X-Exprsn-Signature-Ed25519`; JWKS at `/webhooks/keys/<tenant slug>`), with
+  the webhook path's retries and breaker. One delivery per run and step (a retried job does not send twice; a replay is
+  a new run and sends again). Audited `workflow.step.webhook` `{host, event, delivery}`.
+
+
+## Sprint 32e (1.5.0): the live Workflows screen (B-3910)
+
+The console's Workflows screen now edits every step kind the server has (the 1.4.0 `record` step, `notify`,
+`webhook`, `sub`, `agent`, `map`, `loop`, skills on model steps, approval forms, vault references in HTTP headers,
+per-step retries and failure edges), sets the trigger's `event` and `schedule` sources, and shows the triggers and
+callers, dead letters and bundles of Sprint 32b. Two server changes back it:
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/workflows/:id/callers` | `agents:run`. What else starts the workflow, for the Triggers and callers tab: `{workflowId, appTriggers: [{id, kind: record \| schedule, app, appName, appTitle, entity, entityTitle, events, cron, ownerId, ownerName, enabled, nextRunAt, lastRunAt, lastRunId, lastResult}] (apps the caller is cleared for), workflows: [{workflowId, workflow, label, publishedVersion, step, stepTitle, kind: sub \| map \| loop, version, in: draft \| published \| published and draft}] (other workflows of the workspace that run it), tools: [{id, name, version, status, sideEffect, label, workflowVersion}], plugins: [{id, key, name, version, state, maxLabel, installedBy, installedByName}] (granted call:workflow), lastRuns: {<kind>: {runId, at, state, trigger, count}}}`. `lastRuns` counts the last 500 runs (not dry runs) by kind of start (`manual`, `api`, `record`, `schedule`, `event`, `plugin`, `workflow`, `tool`, `replay`), the caller's own unless they hold `workflows:manage`. The workflow's own event or schedule trigger is `GET /workflows/:id/triggers` |
+| `GET /api/events/catalogue` | Also readable with `workflows:manage` (besides `webhooks:manage` and `plugins:manage`): the editor picks an event trigger's type from it |
+
+## Sprint 34a (1.5.0): chaining agents, skills, tools and workflows (B-4102 to B-4107)
+
+Built on the chain context of Sprint 32 (B-4101): every link below is a node of the caller's chain, acts as the
+chain's principal, runs at the chain's label (the high-water mark) within the callee's ceiling, and is charged to the
+root's budgets. Migration `036_chains` adds `chain_nodes.decision` and `error_type` and two indexes. Server only; the
+boards and live screens (B-4108, B-4109) build on the shapes here.
+
+### Registry fields (for the registry editor)
+
+| Kind | Field | What it is |
+| --- | --- | --- |
+| agent | `definition.agents: [name…]` (up to 16) | **Delegates** (B-4102): agents this agent may call. Each is offered to the model as the tool `agent:<name>` (function name `agent_<name>`, with characters outside `[A-Za-z0-9_-]` as `_`), with the delegate's `inputSchema` or `{task: string}` as its parameters |
+| agent | `definition.workflows: [name…]` (up to 16) | **Workflows** (B-4104): workflows (by name or id, resolved in the run's workspace) this agent may start and await, without publishing them as tools; offered as `workflow:<name>` (`workflow_<name>`) |
+| agent | `inputSchema`, `outputSchema` (JSON Schema, optional; on `POST /api/admin/registry` and `PATCH`) | The task a delegating agent sends, and the answer it gets back typed: the delegate's answer is parsed as JSON (a fenced block or the whole text) and checked against `outputSchema` |
+| skill | `definition.skills: [name…]` (up to 16) | **Skill dependencies** (B-4103): skills this skill builds on. Loading a skill loads its closure |
+| skill | `definition.tools` | As before; the tools of the whole closure are offered |
+
+`GET /api/agents` (the runnable agents) adds `skills`, `agents`, `workflows` and `outputSchema`. An entry's automated
+checks add **Chain references** (agents and skills): every delegate, skill and listed workflow is published (a
+workflow: in the entry's workspace), no delegate or listed workflow carries data above the agent's ceiling (a
+delegate's ceiling, a workflow's label: what it returns reaches the agent), and no cycle cannot terminate (below).
+Approval stays disabled while it fails. Agents with an `inputSchema` or `outputSchema` also get **Schema valid**.
+
+### Delegation (B-4102)
+
+A call to `agent:<name>` (only from an agent run, and only to a delegate its definition lists) passes the dispatcher
+like any tool call (input schema, the delegate's ceiling against the chain's label, the `tool-call` guardrail
+checkpoint) and starts a child run of the published delegate: the same principal, in the chain under the call's
+`tool-call` node (so `AGENT_MAX_DEPTH` and `CHAIN_MAX_DEPTH` apply), at the chain's label, with budgets no larger than
+the delegating run has left (`steps` and `toolCalls` less the ones used and this call, `tokens`, `wallSeconds`), as its
+own job. The delegating run pauses (its step `waiting` with `meta.awaiting: {kind: agent-run, id}`) and continues when
+the child ends; the child's tokens then count against the delegating run's token budget too. Audited
+`agent.run.delegated` `{run, agent, version}` with `{parentRun, parentAgent, budgets, chain}`. The tool result is
+`{run, agent, answer}` (`answer` is the text, or the parsed object when the delegate declares `outputSchema`).
+Cancelling a run cancels the runs it delegated to. A delegate whose ceiling is below the chain's label is not offered
+(`tool_unavailable … hidden: agent:<name>, its ceiling is …`).
+
+### Workflows an agent lists (B-4104)
+
+`workflow:<name>` runs the version published now, in the run's workspace, as a workflow tool does (B-1006): the
+trigger's schema is the input, the side-effect class is what the steps imply (a write workflow is held for approval
+in the agent run like a write tool), the workspace's ceiling is the most the call may carry, and the result is `{run,
+output}` (validated when the workflow ends in one step with an output schema: `meta.valid`). A workflow run that
+pauses on an approval leaves the agent run waiting until it finishes. A workflow the agent does not list is refused
+(`tool_unavailable: workflow_<name> is not one of this agent's tools`). `GET /api/workflows/:id/callers` adds `agents:
+[{id, name, version, status, label}]` (agents, not retired, that list the workflow).
+
+### Skills compose (B-4103)
+
+Loading a skill (an agent's `skills`, a model step's `skills`) loads its closure: each skill it builds on, transitively,
+once, depth-first in listing order with a skill's dependencies before it (their instructions come first), at most 32.
+The tools of every skill in the closure are offered (deduplicated, in that order), and every skill of the closure is a
+`skill-load` node of the chain. On a model step a missing sub-skill fails the step and one whose ceiling is below the
+data's label blocks it.
+
+### Chain checks at publish and "used by" (B-4105)
+
+The reference graph is built from the registry and the published workflow versions of the tenant. Edges are
+**optional** when a model chooses them (an agent's delegates, workflows and tools; a skill's tools), **closure** for a
+skill's sub-skills, and **mandatory** otherwise (an agent's skills; a workflow's sub-workflow, map and loop workflows,
+agent steps, model-step skills and tool steps; a workflow tool's workflow). From the entry or workflow being published:
+
+- a cycle made only of mandatory edges cannot terminate: refused (registry: the Chain references check; workflow
+  publish: `422` with an error `{code: chain, message, path: ["workflow:<id>", …]}`);
+- a cycle through an optional edge can end (the model decides; `CHAIN_MAX_DEPTH` and the root's budgets bound it): a
+  warning (`{code: chain, …}` in the publish response's `warnings`, or in the check's detail);
+- a cycle of sub-skills ends by itself: a warning in the check's detail.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/registry/:id/used-by` | `tools:manage` or `agents:manage` (by the entry's kind). `{id, kind, name, version, status, usedBy: [RefUsedBy], otherVersions: [{id, version, status}], retireBlocked}`. `RefUsedBy` is `{kind: agent \| skill \| tool \| workflow, id, name, version, status, via, live}`: `via` is how it references the entry (`delegate`, `workflow`, `tool`, `skill`, `sub-skill`, `skill-tool`, `sub-workflow`, `agent-step`, `model-skill`, `tool-step`, `workflow-tool`), `live` whether it is published or deprecated (a workflow: its published version) and so may reach the entry now; drafts are listed with `live: false`. `retireBlocked` is true when no other published or deprecated version of the name remains and something live uses it |
+| `GET /api/admin/registry/:id` | `referencedBy` now lists the referrers of every kind (as `RefUsedBy`), not only agents and skills naming a tool |
+| `POST /api/admin/registry/:id/lifecycle` `{to: retired}` | `409` `Still in use` with `usedBy` when it is the last callable version of a name something live uses, naming them (`close-checklist is used by agent Closer 1.0.0; …`). A deprecation still succeeds and returns `referencedBy` |
+| `GET /api/workflows/:id/used-by` | `agents:run`. `{id, name, usedBy: [RefUsedBy], deleteBlocked}`: agents that list the workflow, workflow tools, other workflows' steps |
+| `DELETE /api/workflows/:id` | `409` `Still in use` with `usedBy` while a published agent or workflow uses it (a workflow tool entry does not block it; it becomes unavailable as before) |
+
+### Approvals and failures through the chain (B-4106)
+
+A call held anywhere pauses the chain: an agent run waits on its step's approval and every run that delegated to it (or
+started the workflow it is in) waits on it; a workflow run waits on its approval and its callers wait on it. **A
+model step's skills** no longer report a held call to the model: the step pauses on an approval for that call
+(`approverRole` on the model step, default `workflow-admin`; `approvalTimeoutMs`, default 24 h), its state sealed in
+the step (`detail.skillHold: {approval, tool, since}`); approved, the step continues from where it was and makes the
+call; rejected, the model is told (`Rejected by <name>: <reason>. Nothing was run.`) and goes on; expired, the step
+fails. `detail.toolCalls[]` adds `approvedBy`, and `detail.holds[]` records each decided hold.
+
+Held calls are listed where the root is: `GET /api/runs/:id` and `GET /api/workflow-runs/:id` add `held: [ChainHeldCall]`
+when the run is its chain's root and the caller is cleared for the chain's label (else `[]`), and `GET
+/api/chains/:id` lists them in `held` and on each node. `ChainHeldCall` is `{node, path: [{node, kind, ref, name,
+depth}] (root first), at: {kind: agent-run, run, step} | {kind: workflow-run, run, approval, step}, tool, sideEffect,
+since, approvers, canDecide}`.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/chains/:id/held/:node/decision` `{decision: approve \| reject, note?, step?, approval?}` | `agents:run`, `tools:manage`, `agents:manage` or `workflows:manage`. Decides the call held at that node where it waits, with the rules there: an agent run's write call by its owner or a tool admin, a destructive one by a tool admin other than the owner (`POST /api/runs/:id/steps/:n/decision`); a workflow approval by a holder of its role (`POST /api/workflow-approvals/:id`). `step` or `approval` picks one when the node holds several (`409` otherwise; `409` when nothing is held there). `404` for someone who can neither see the chain nor decide the call. Returns `{chain, node, at, path, decision: approved \| rejected}`. Audited `chain.held.decided` `{chain, node, run, step \| approval}` with `{decision, tool, sideEffect, depth, path}`, plus `agent.call.approved`/`rejected` or `workflow.approval.approved`/`rejected` as at the place itself |
+
+**Typed errors.** A child's failure reaches its parent typed (`ChainErrorType`: `failed`, `budget`, `cancelled`,
+`rejected`, `chain_limit`, `output`, `label`, `timeout`), recorded on the chain node (`errorType`):
+
+- an agent sees it as a tool error whose text starts with `child_<type>:` (`child_budget: Tiny run … stopped at its
+  budget: …`), the step's `detail.errorType` and the tool message's `type`;
+- a workflow step that fails passes `{error, step, type}` to its failure edge (`FAILURE_PORT` adds `type`; B-3906):
+  an agent step whose run stopped at its budget is `budget`, a cancelled one `cancelled`, a refused chain call
+  `chain_limit`, a timeout `timeout`.
+
+A run that another run or a workflow step awaited ended for its caller when it stopped at its budget: `POST
+/api/runs/:id/resume` on it is `409` (the caller took the stop as an error and went on); replay it instead. A root run's
+budget stop is resumed as before.
+
+### The chain view (B-4107)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/chains/:id` | `agents:run`, `agents:manage`, `tools:manage` or `workflows:manage`; the chain's principal or an agent, tool or workflow admin, within clearance for the chain's label (`404` otherwise). Returns `ChainView` (below) |
+| `POST /api/chains/:id/nodes/:node/replay` `{fromStep?, fromNode?}` | `agents:run` or `agents:manage`. Replays an `agent-run` node from a step (`fromStep`, as `POST /api/runs/:id/replay`) or a `workflow-run` node from a step (`fromNode`, as `POST /api/workflow-runs/:id/replay`), each as a new chain; other kinds `409`. `202` `{kind, run, chain, label, workflowId?}`; audited `chain.node.replayed` |
+| `GET /api/admin/audit?target=<id>` | `audit:read`. New filter: events whose target names the id as a whole value (a run, a chain, a registry entry); also for exports |
+
+`ChainView` is `{id, state: running | done | stopped, stopReason, label, principal: {id, name}, budgets, used, totals,
+createdAt, updatedAt, nodes (count), maxDepth, limits: {maxDepth, kindCaps}, links: {audit}, held: [ChainHeldCall],
+root: ChainNode}`, where `budgets`, `used` and `totals` are `{tokens, steps, wallMs, gpuMs}` (`gpuMs` is the cost
+meter). `totals` is the sum over the nodes and equals `used`: every charge goes to the node and to the root in the same
+atomic increments. `ChainNode` is:
+
+```
+{ id, parent, depth, kind: chat-turn | agent-run | workflow-run | tool-call | skill-load | plugin-action | app-trigger,
+  ref (the run id for runs), callee, name (a workflow run: the workflow's name), label,
+  state: running | succeeded | failed | refused | waiting | cancelled, error, errorType, decision (tool calls: the
+  tool-call checkpoint's action),
+  usage: {tokens, steps, wallMs, gpuMs}, subtree: {tokens, steps, wallMs, gpuMs, nodes},
+  createdAt, finishedAt, durationMs,
+  links: {run: "/api/runs/<id>" | "/api/workflow-runs/<id>" | null, audit: "/api/admin/audit?target=<ref>" | null},
+  audit?: [{id, seq, action, ts}]   (holders of audit:read only; the run's newest 20),
+  guardrails: [{id, checkpoint, action, label, at}]   (decisions made in the run: agent runs by run, workflow runs by step),
+  replay: null | {href: "/api/chains/<id>/nodes/<node>/replay", fromStep: [n…]} | {href, fromNode: [stepId…]},
+  held: [{at, tool, sideEffect, since, approvers, canDecide}],
+  children: [ChainNode…] }
+```
+
+Siblings are in the order they began. Chat turns link to their chains with B-40 in 1.7.0; Runs (agent runs) and
+workflow runs carry `chain: {id, node}`, and their views list `children` (agent runs: `[{kind: agent-run, id, agent,
+node, state, label, error} | {kind: workflow-run, id, workflowId, node, state, label, error}]`).
+
+## Sprint 34b (1.5.0): WebDAV for the file store (B-3201 to B-3203)
+
+No new JSON routes. `/dav/files/` serves the file store to WebDAV clients (`docs/dav.md`), with the app passwords'
+`webdav` scope and `files:read` / `files:write`; `LOCK` and `UNLOCK` join the DAV methods (`DAV: 1, 2, 3, …`).
+Migration `036c_dav_files`.
+
+## Sprint 34c (1.5.0): profiles and presence (B-5801, B-5802)
+
+People write a profile beyond the name their user store gives them, and say whether they are available. Reading needs
+`social:read`, changing one's own `social:write` (held by members and tenant admins); an avatar also needs
+`files:write`, because it is stored in the file store. Every route answers `Cache-Control: no-store`.
+
+- **Who sees a profile.** Someone is known to people who share a workspace with them (anyone else gets `404`, as for
+  the person picker). Of those, a viewer sees the pronouns, bio and avatar only when their clearance reaches the
+  profile's `label` (`limited: clearance` otherwise) and, when the owner named `workspaces`, they share one of those
+  (`limited: hidden` otherwise). Two people in a block (either way) see each other's name only, with `limited: hidden`
+  too, so the view does not tell a blocked person they are blocked; they also see no presence.
+- **Pronouns and bio** pass the `user-input` guardrail like a post (`source {kind: profile, id: <user id>}`): a block
+  or a hold is `422` with `step: guardrails, field`; a redaction is what is stored.
+- **The avatar** is an image (PNG, JPEG, WebP or GIF, at most 2 MiB) uploaded into the file store of the caller's
+  current workspace as `Profile picture <time>.<ext>` with the profile's label, so it goes through the file store's
+  quarantine (type from the bytes, text classifier, ClamAV when configured). The profile pins that version. It is
+  served only when the version is `ready`, is an image, the file is not in the trash (deleted, or taken down by
+  moderation) and the viewer clears the version's label; a version that fails its scan is never served.
+- **Presence**: `available`, `away`, `busy` or `offline`. A person chooses one or `auto`. Chosen `offline` (appear
+  offline) always reads offline; without a connected socket a person reads offline; otherwise a chosen status stands,
+  and `auto` reads `away` while every socket they hold reports idle and `available` otherwise. Presence is visible to
+  people who share a workspace with the person and nothing at all is told to someone in a block with them.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/people/me` | `{userId, username, displayName, pronouns, bio, label, workspaces: [id] \| null, avatar: {fileId, version, state: quarantined \| scanning \| ready \| rejected \| gone \| not an image, url} \| null, presence: {status, effective}, updatedAt}` |
+| `PATCH /api/people/me` `{pronouns?, bio?, label?, workspaces?}` | Pronouns up to 40 characters, bio up to 500 (`null` or empty clears), screened at `user-input`. `label` at most the caller's clearance (else `403 step clearance`); `workspaces` the caller's own (else `422 step workspace`; `null` or `[]` for all shared ones). Audited `profile.updated {fields, label, workspaces, redacted?}`, never the text |
+| `PUT /api/people/me/avatar` (raw image body) | `202` with the profile, its `avatar.state` quarantined. Another type is `415`, more than 2 MiB `413`, no workspace `409`, no `files:write` `403`. Audited `file.upload.received` (with `via: profile`) and `profile.avatar.set {file, version, workspace, replaced?}`; the scan's `file.version.ready` or `file.version.rejected` follows |
+| `DELETE /api/people/me/avatar` | Stops using it (the image stays in the file store). Audited `profile.avatar.removed` |
+| `GET /api/people/:id` | `{userId, username, displayName, self, limited: null \| clearance \| hidden, pronouns?, bio?, label?, avatar: {url} \| null, presence: {status} \| null, sharedWorkspaces: [{id, name}], relation}` (`relation` as `GET /api/social/users/:id`). For oneself, the `GET /api/people/me` fields with `self: true` |
+| `GET /api/people/:id/avatar?v=` | The image (`Content-Disposition: inline`, the sandbox CSP and `nosniff`), or `404` when the viewer may not see it or it is not a ready image |
+| `GET /api/presence?ids=a,b` | `{statuses: {<userId>: status}}` for up to 200 people; those the caller shares no workspace with or is in a block with are left out entirely |
+| `GET /api/presence/me` | `{status: auto \| available \| away \| busy \| offline, effective}` |
+| `PUT /api/presence/me` `{status}` | Chooses a status; the change is published at once. Audited `presence.status.updated {before, after}` |
+
+Over the console's socket (the same connection as the B-2603 rooms):
+
+| Event | Direction | What it carries |
+| --- | --- | --- |
+| `presence.watch {userIds}` | client to server | The people to hear about (replaces the previous set, at most 200). The server keeps those the caller may see, joins their presence rooms and answers `{ok, statuses: {<userId>: status}}` |
+| `presence.unwatch` | client to server | Stops every watch |
+| `presence.idle {idle}` | client to server | The person went idle (the console sends it after five minutes without input or while the page is hidden) or came back |
+| `presence.changed {userId, status, at}` | server to client | Someone watched (or the person themselves) changed status. Published once (`TOPICS.presence`) and relayed by every instance without the sockets of people in a block with them; a block made later takes each out of the other's presence room at once |
+
+Every socket counts as a connection of its person while it is open; connections are kept per instance in
+`presence_connections` with a 30-second heartbeat, and the rows of an instance that stopped refreshing them for 90
+seconds are swept (its people read offline unless connected elsewhere). `server/src/profiles/` has `s.people`
+(`ProfileService`) and `s.presence` (`PresenceService`: `statuses`, `visibleAmong`, `effective`).
+
+## Sprint 35a (1.6.0): model servers beyond Ollama (B-4301 to B-4307)
+
+An instance has a `kind`: `ollama` (the default, every instance from before) or `openai`, a server speaking the Chat
+Completions API: Apple's `fm serve` (macOS 27, on a port or a Unix socket), `mlx_lm.server`, llama.cpp's
+`llama-server`, vLLM. It joins a pool like an Ollama node. The gateway reaches every server through one interface
+(`server/src/gateway/server.ts`, `ModelServer`: `version`, `models`, `loaded`, `show`, `load`, `unload`, `pull`,
+`delete`, `chat`, `embed`); `OllamaClient` implements it unchanged and `OpenAIServer` (`gateway/openai-server.ts`)
+maps it onto Chat Completions. What a server cannot do throws `Unsupported` and is skipped, never an error: a Chat
+Completions server reports nothing resident (a model it lists counts as ready), cannot load, unload, pull or delete
+(those are recorded as `unsupported` in the instance's events), is skipped by pulls onto a mixed pool and by rolling
+upgrades, and offers embeddings only when its `/v1/embeddings` answers (once it refuses, embedding requests go to
+another instance that has the model, such as an Ollama pool; knowledge, memory and the guard are unchanged).
+
+Health is `GET /health`, or `GET /v1/models` when the server has no `/health`; the models are `/v1/models` (a model
+`fm serve`'s `/health` lists as unavailable, Private Cloud Compute, is not offered); llama.cpp's `/props` gives the
+context length. What the server reported is kept in the instance's `settings.reported`: `server`, `contextLength`,
+`tools` and `jsonSchema` (from the probe), `embeddings`, `models`, `probedAt`, `probedModel`, `probeDetail`.
+
+Chat goes to `/v1/chat/completions`, streamed: messages and the system prompt, tools and tool calls (ids kept and
+each tool result paired with its call), streamed deltas (`reasoning_content` as thinking), `response_format` from a
+JSON schema, stop, temperature, top_p, seed, penalties, max tokens (`num_predict`) and usage (estimated at four
+characters a token when the server does not report it, as `fm serve` does not while streaming). Ollama-only options
+(`num_ctx`, `keep_alive`, `think` and the rest) are not sent and recorded once per client as a `dropped` instance
+event. The server-side tool loop, guardrail checkpoints, labels and metering are unchanged.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /admin/pools/:id/instances` `{name, kind: ollama\|openai, url?, socketPath?, token?, tokenRef?, deploy, tls?, settings?}` | `pools:manage`. `kind openai` with `socketPath` (an absolute path; no URL, no TLS) or a `url` (the egress check and mutual TLS as for Ollama). `token` is written to the caller's vault at `model-servers/<id>#token` (needs `secrets:write` and `secrets:read`, `403` otherwise) and never returned; `tokenRef` names one already there (checked readable). It is read, at use, as the person who saved it, in their tenant. A socket, token or reference on an Ollama instance is `400`. The answer is the instance view below, with `probeJobId` (the `instance.probe` job). Audited `instance.created {kind, url, socket, deploy, mtls, token: <vault reference> \| null, probeJob}` |
+| `PATCH /admin/instances/:id` `{url?, socketPath?, token?, tokenRef?, tls?, settings?, state?}` | The kind does not change. `socketPath: null` drops the socket (give a `url` with it); `tokenRef: null` clears the token. `settings.reported` is kept when `settings` is replaced. Audited `instance.updated` (never the token) |
+| `POST /admin/instances/:id/probe` | `pools:manage`. `202 {jobId}`: the `instance.probe` job asks the server's first chat model for a tool call and for JSON schema output and records `tools`, `jsonSchema`, `probedAt`, `probedModel`, `probeDetail`. `409` for an Ollama instance. Audited `instance.probe.started {job}` |
+| `POST /admin/instances/:id/load`, `.../unload` | On a Chat Completions server: `200 {evicted: [], unsupported: true}` and `{ok: true, unsupported: true}`, nothing sent, an `unsupported` event recorded; audited `model.loaded`/`model.pinned`/`model.unloaded` with `unsupported: true` |
+| `GET /admin/model-servers` | `models:manage`. The import picker: `[{instanceId, instance, poolId, pool, poolCeiling, transport: socket\|url, token, state, health, healthDetail, version, reported, models: [{id, available, reason, ownedBy, catalogued: {id, state, held} \| null}]}]`, after polling each server. No URL, socket path or token |
+| `POST /admin/models` `{serverInstanceId, serverModel, label, license?, notes?}` | `models:manage`. Registers a model the server lists: `name` and `serverModel` the server's model id, `source` `server:<instance>/<model id>`, `format` `server`, no expected digest (`400` with one), `importState` `pulled`, capabilities `completion` (and `tools` when the probe saw a tool call; `embedding` for an id with "embed"), placed warm on the instance's pool, no pull job. `409` when the server does not list it or lists it unavailable (Apple's `pcc`), `403` above the caller's clearance or the pool's ceiling, `422` for a pickle-like id. Audited `model.import.requested {format: server, server, serverModel, pool, …}` |
+| `GET /admin/models` | Each model also has `held`, `serverInstanceId`, `serverModel`, and for a held model `server: {instanceId, instance, model, health, reported: {server, contextLength, tools, jsonSchema, embeddings, probedAt}}` |
+
+Server-held models follow the catalogue's rules: the licence, the conformance run (on the instance it came from when
+that one can serve it; the tool-calling test always runs for them, and passing it gives the `tools` capability), a
+label ceiling, and dual-control approval (`403 step dual-control` for the requester). Placements of a held model, and
+any placement on a pool with a Chat Completions server, are `warm` only (`409` otherwise); a held model is placed only
+on a pool where an instance lists it; an Ollama model cannot be placed on a pool whose instances are all Chat
+Completions servers. `POST /admin/models/:id/pull` on a held model checks that an instance in the pool lists it.
+Retiring a held model deletes nothing on the server. Migration `037_model_servers` adds `instances.kind`,
+`socket_path`, `token_ref`, `token_tenant`, `token_owner` and `models.server_instance_id`, `server_model`.
+
+## Sprint 35d (1.6.0): tenant provisioning templates (B-4501)
+
+A system admin creates a tenant from a template with its first admin in one step (decision Q11). Templates are code
+(`server/src/tenancy/templates.ts`): `enterprise`, `team` and `personal`, exprsn-platform's organisation types. Both
+routes need `tenant:manage`; provisioning also needs the `system-admin` role (`403 step role`) and a clearance that
+reaches the template's highest workspace ceiling (`403 step clearance`). The CLI does the same with `exprsn-ai
+tenant:create --template <id> --slug <slug> --name <name> --admin-username <name> --admin-display-name <name>
+[--admin-email <address>] [--password]` (without `--password` it prints the enrolment link).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/tenant-templates` | `[{id, name, description, workspaces: [{name, description, label, visibility}], roles: [{name, description, permissions}], profiles: [{name, displayName, description, label}], zone, issuer, adminClearance}]` |
+| `POST /api/admin/tenants/from-template` `{template, slug, name, directoryDn?, admin: {username, displayName, email?, password?}}` | `201 {tenant, applied, admin}`. `tenant` as `GET /api/admin/tenants/:tid`; `applied: {template, workspaces: [{id, name, label}], roles: [{id, name}], profiles: [{id, name, poolId}], zone: {id, state: pinned \| no pool in zone, poolId, poolName}, issuer: {state: created \| skipped \| not in template, id, reason}}`; `admin: {id, username, roles: [tenant-admin], clearance, enrolLink, enrolHours}`. A taken slug is `409` with nothing created; a password the policy refuses is `422` (field `admin.password`) before anything is created; an unknown template `400` |
+
+What provisioning makes, in order: the tenant with a Local accounts store and its data key (as `POST
+/api/admin/tenants`); the template's workspaces; its custom roles, built only from member-baseline permissions and
+applied as version 1 (`grantableBy` tenant-admin and identity-admin); its profiles as drafts without a model, pinned
+to the first pool (by name) in the template's zone whose ceiling reaches the profile's label; the tenant's issuing
+intermediate (ECDSA P-256, three years) under the active platform root when the template has an issuer, the root
+exists and the CA's key custody is available, else `skipped` with the reason; then the first admin, `tenant-admin`
+with the clearance of the highest workspace ceiling and a direct member of every workspace, with a single-use
+enrolment link (`PASSWORD_INVITE_HOURS`; `POST /api/auth/password/reset` with its token sets the password and answers
+an `enroll` session) or, with `admin.password`, a password (sign-in with `{tenant, username, password}` then asks for
+the second factor, stage `enroll`). Audited in the new tenant's chain and in the provisioning admin's:
+`tenant.created` (`detail.template`), `workspace.created`, `authz.role.created`, `profile.created`,
+`pki.intermediate.created`, `user.created`, `user.enrol_link.issued`, `workspace.member.added` and the summary
+`tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin: {user, username, enrolLink}}`.
+
+## Sprint 35d (1.6.0): Social and messaging (B-4206)
+
+The administrator's policies and health views for the feed, groups, messaging and relations of every workspace they
+may act in (all of them for a tenant admin), behind the Social and messaging screen (`#/social`). Decisions
+(`design/platform-admin/DECISIONS.md`): `social:manage` governs the feed, group, messaging and relations policies
+(Q4); whether posts pass `user-input` in full and who approves held posts are the moderation-facing parts and also
+need `moderation:manage` (`403 step permission`); exporting another member's conversation is under dual control, a
+second platform admin approving (Q5). Realtime needs `platform:manage`. Every route answers `Cache-Control: no-store`.
+Migration `037d_platform_social`; `server/src/social/admin.ts` is `s.socialAdmin`.
+
+**Workspace policies** apply where they belong. Without a row a workspace has the defaults shown.
+
+| Field | Default | Where it applies |
+| --- | --- | --- |
+| `feedGuard` | `true` | Posting: `false` checks posts labelled internal or below against the platform baseline only (the engine's `meta.baselineOnly`); anything above internal, and every comment, is still checked in full |
+| `feedApprover` | `reviewers` | Deciding a held post (`POST /api/flags/:ref/decide`): `reviewers` is any flag reviewer (`flags:review`), `feed` needs `feed:manage`, `guardrails` `guardrails:manage`, `moderators` `moderation:review` (`403 step approver, permission`) |
+| `feedMedia`, `feedMediaMaxBytes` | `true`, `null` | Posting with media: off is `422 step workspace-policy`; a file larger than the limit too. Turning media off clears the limit |
+| `groupCreate` | `members` | `admins`: creating a group needs `groups:manage` or `social:manage` (`403 step workspace-policy`) |
+| `groupVisibility`, `groupJoin` | `private`, `request` | A new group without them (`visibility` and `joinMode` are now optional on `POST /api/groups`) |
+| `eventCapacity` | `null` | A new event without `capacity` |
+| `contactRule` | `workspace` | Starting a conversation or adding someone: `contacts` needs mutual follows, `admins` needs `social:manage` or `tenant:manage`; one shared workspace that admits the caller is enough, and each person's own contact rule and blocks still apply (the same `403` words) |
+
+**Tenant settings**: the weekly digest's `digestProfile` (before `FEED_DIGEST_PROFILE`; a workspace's own digest
+profile still comes first), `digestDay` (0 Monday to 6 Sunday) and `digestHour` (UTC: the digest week ends at the
+latest such time, Monday 00:00 by default), `digestTop` (before `FEED_DIGEST_TOP`), `digestMaxLabel` (before
+`FEED_DIGEST_MAX_LABEL`, at most the caller's clearance), and `summaryProfile` for messaging summaries (before
+`MESSAGING_SUMMARY_PROFILE`). A profile must resolve through the gateway (`422` with `field`). `null` restores the
+environment's value.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/admin/social/policies/:workspaceId` `{feedGuard?, feedApprover?: reviewers \| feed \| guardrails \| moderators, feedMedia?, feedMediaMaxBytes?: 1024 to 1 GiB \| null, groupCreate?: members \| admins, groupVisibility?, groupJoin?, eventCapacity?: 1 to 100000 \| null, contactRule?: workspace \| contacts \| admins}` | The policy after the change. A workspace the caller does not administer is `404`. Audited `social.policy.updated {changed, before, after, weakened?: feedGuard}` |
+| `PUT /api/admin/social/settings` `{digestProfile?, digestDay?, digestHour?, digestTop?: 1 to 50, digestMaxLabel?, summaryProfile?}` | The settings after the change. Audited `social.settings.updated {changed, before, after}` |
+| `GET /api/admin/social/feed` | `{counters: {postsToday, held, commentsToday, reactionsToday, trendingTags}, workspaces: [{id, name, label, feedGuard, feedApprover, feedMedia, feedMediaMaxBytes, postsToday, held}], trending: {minutes, hours, lastRun, tags: [{tag, posts, people, excluded}]}, digest: {settings, effective: {digestProfile, digestDay, digestHour, digestTop, digestMaxLabel, summaryProfile}, profiles: [name], last: {id, workspaceId, state: ready \| empty \| failed, profile, error, posts, weekStart, createdAt} \| null}, canModerate}`. Counts and tags only at labels the caller is cleared for |
+| `POST /api/admin/social/trending/exclusions` `{tag}` | `201 {tag, excluded: true}` (the tag normalised; already excluded answers the same). An excluded tag leaves `GET /api/feed/trending` at once and the `feed.trending` job leaves it out; it still works on posts and in hashtag feeds. Audited `feed.trending.excluded` |
+| `DELETE /api/admin/social/trending/exclusions/:tag` | `{tag, excluded: false}`. Audited `feed.trending.included` |
+| `POST /api/admin/social/trending/run` | `202 {jobId}`: the `feed.trending` job for the tenant now (requests within the same minute share one job). Audited `feed.trending.requested` |
+| `POST /api/admin/social/digest/test` | `202 {jobId, workspaces}`: the `feed.digest` job in test mode over the workspaces the caller administers that have a digest profile: the last seven days ranked and summarised, sent to the caller alone as a notification (never above their clearance); nothing is stored or posted. No workspace with a profile is `409`. Audited `feed.digest.test-requested` |
+| `GET /api/admin/social/groups` | `{settings: {requestDays, inviteDays, feedPerMinute, feedMaxLabel}, defaults: [{workspaceId, name, groupCreate, groupVisibility, groupJoin, eventCapacity}], groups: [{id, name, workspaceId, workspace, label, visibility, joinMode, state: active \| hidden \| archived, members, pending, upcomingEvents, openReports, feeds, owners: [{userId, displayName}], createdAt}], above, feeds: [{id, kind: event \| group \| user, targetId, name, issuedTo: {userId, username, displayName}, label, createdAt, lastUsedAt, revokedAt, state}]}`. Groups above the caller's clearance are counted in `above`, not listed; feeds of groups and events outside the caller's workspaces or clearance are left out |
+| `GET /api/admin/social/groups/:id/members` | `{id, name, state, members: [{userId, username, displayName, role}]}` (for the transfer picker) |
+| `POST /api/admin/social/groups/:id/transfer` `{userId}` | `{id, owners: [userId], moderators: [previous owners]}`. The new owner must be a member (`422 step member`); an archived group is `409`. The members are told. Audited `group.ownership.transferred {before, after}` |
+| `POST /api/admin/social/groups/:id/archive` | `{id, state: archived, members}`: read only from now on. Members keep reading posts and events; posting, commenting, reacting, reposting, joining, inviting and scheduling answer `409`; pending requests and reminders are cancelled; calendar feeds keep the events. The members are told. Audited `group.archived {members, requestsCancelled, remindersCancelled}` |
+| `POST /api/admin/social/calendar-feeds/:id/revoke` | The feed view with `url: null`: its signed URL answers `404` on its next fetch. Audited `calendar.feed.revoked` (`detail.via: social-admin`) |
+| `GET /api/admin/social/messaging` | `{retention: [{workspaceId, name, days, source: workspace \| tenant \| none}], limits: {maxMembers, attachmentMaxBytes, signalsPerMinute}, search: {keyword, semantic, embedModel}, summary: {profile, effective, maxMessages, profiles}, relations: {blocks, mutedConversations, exported}, exports: [export], approvers: [{userId, displayName, username}], canApprove}` |
+| `GET /api/admin/social/conversations?q=` | Up to 200 conversations the caller may ask to export: group conversations in a workspace they administer and direct ones with a member in one, at labels they are cleared for, most recent first: `[{id, kind, title, workspace, members, label, lastMessageAt}]` (group titles, or the people's names; never a message) |
+| `POST /api/admin/social/exports` `{conversationId, reason: 10 to 2000 characters, approverId}` | `201` export, `state: pending`. Needs a recent sign-in (`401 step_up`). The approver is another platform admin of the tenant (`403 step dual-control` for oneself, `422 field approverId` otherwise); one pending request per conversation (`409`). The reason is sealed; the approver is notified. Audited `messaging.export.requested {reason}` |
+| `POST /api/admin/social/exports/:id/approve` `{note?}` | `platform:manage`, a recent sign-in, and not the requester (`403 step dual-control`). Queues the job `messaging.conversation.export`. Audited `messaging.export.approved` |
+| `POST /api/admin/social/exports/:id/reject` `{note?}` | `platform:manage`, not the requester. Audited `messaging.export.rejected` |
+| `POST /api/admin/social/exports/:id/withdraw` | The requester only, while pending. Audited `messaging.export.withdrawn` |
+| `GET /api/admin/social/exports/:id/download` | The requester only (`404` for anyone else), once `ready`: `text/csv` with `message, sent, author, author_name, thread, reply_to, state, edits, attachments, label, text` (deleted messages as rows without text, attachments as file ids, cells defused against formulas, at most 50 000 messages). Audited `messaging.export.downloaded` |
+| `GET /api/admin/social/realtime` | `platform:manage`. This instance's counts: `{instance, kinds: [{kind: conversation \| group \| feed \| channel, rooms, sockets, signalsPerMinute: [12 numbers, oldest first], refusedLastHour}], sockets, authFailuresLastHour, signalsPerMinuteLimit, redis}` |
+| `GET /api/admin/social/people?q=` | `platform:manage`. Up to 200 active people of the tenant, for the Close rooms picker |
+| `POST /api/admin/social/realtime/close` `{userId}` | `platform:manage`. Every socket of the user closes on every instance (`TOPICS.roomsClose`; the client hears `rooms.closed` first); the session stays. Audited `realtime.rooms.closed` |
+| `GET /api/admin/social/relations` | `{counts: {follows, blocks, mutes, lists}, rules: [{workspaceId, name, contactRule}], mostBlocked: [{userId, displayName, username, blockedBy, workspace, sanction: {kind, endsAt} \| null}]}`: counts only, never who blocked whom |
+
+An export is `{id, conversationId, label, reason (the requester and platform admins only), requestedBy, approver,
+decidedBy, decidedAt, note, state: pending \| approved \| rejected \| withdrawn \| ready \| failed, jobId, file,
+messages, error, downloadedAt, createdAt, mine, canDecide}`. Platform admins see every request of the tenant; others
+their own. The job writes the CSV sealed with the tenant key (`exports/<tenant>/messaging/<id>.sealed`) and audits
+`messaging.conversation.exported {reason, requestedBy, approvedBy, messages, truncated}`; the members are not told.
+
+## Sprint 35b (1.6.0): the Overview and Jobs and queues (B-4202, B-4203)
+
+The two admin screens read and act on what already exists: the instances' readiness, the one `JobQueue`, the
+`Scheduler` and the tenant cache. Reading needs `tenant:manage` or `platform:manage`; what acts on every tenant
+(draining an instance, pausing a job type, running or pausing a schedule) needs `platform:manage`. A system admin sees
+every tenant's jobs and may filter by `tenant`; a tenant admin sees their own tenant's, and another tenant's id is
+`403` (decision Q9). Payloads are listed by key only. Every route answers `Cache-Control: no-store`. Migration
+`037b_platform_ops` adds `platform_instances`, `job_type_pauses`, `schedule_pauses` and `platform_alert_acks`.
+
+- **Instances.** Every server process writes its row of `platform_instances` at start and every 30 seconds: what its
+  `/readyz` answered (the same `checks`: `database`, `migrations`, `schema`, `kms`, `blobs`, `shutdown`), its schema
+  handshake, the jobs it is running, its sockets, its rate-limit store, its tracing counters and its last NTP offset.
+  Its id is the job queue's worker id (`host:pid`), so a job's `node` names it. A row whose beat is older than three
+  intervals reads `not answering`; a clean shutdown removes the row; rows a day old are removed.
+- **Drain** (decision Q14): the instance stops claiming jobs (the job queue's gate, beside the schema handshake) and
+  answers `/readyz` with `503` and `checks.shutdown: draining`, so a load balancer sends it nothing new; it finishes
+  what it has. It takes the drain from `TOPICS.instanceDrain` at once or from its row at its next beat. Nothing is
+  restarted from the console; a restart is a new instance.
+- **Alerts** are computed when asked, never stored: an instance behind the schema (`schema`) or not answering
+  (`instance`), the backup RPO watch (`rpo`), zone drift in the cluster (`drift`), platform certificates expiring within
+  7 days (`certs`) and the rate-limit probe (`ratelimit`) for system admins; the tenant's own certificates expiring
+  within 7 days (`pki`, with `pki:manage`) for everyone on the screen. Each has a `key` naming its occurrence; an
+  acknowledgement (decision Q15) hides that key for every administrator of the tenant.
+- **Pausing a job type** keeps it queuing and stops every instance claiming it: each poll reads `job_type_pauses`
+  again, so the pause holds everywhere within one poll (`JOB_POLL_MS`; in BullMQ mode a dispatch that arrives while
+  paused is left to the 30-second poll after the resume). **Pausing a schedule** makes the `Scheduler` skip its
+  buckets; missed buckets are not caught up. **Run now** queues one run per target outside its bucket, with a dedupe key
+  `<name>:<target>:now:<ms>`, so it is listed with the schedule's last runs.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/overview?window=1h\|24h\|7d` | `{scope: platform \| tenant, window, alerts: [{key, kind, tone, title, text, since, open: {route, params?, label} \| {instance, label}}], counters: {jobsScope, queued, oldestQueuedAt, running, failed, flags: {open, overdue}, heldReplies, signins, refusedBySanction, workspaces, sockets: {total, instances} \| null, runningOn}, schedules: {total, items}, audit: [{id, seq, ts, action, actor, object, label, redacted}] \| null, instances: [instance] \| null, heartbeatSeconds, capacity: {database: {client, bytes, pool: {used, max}}, vectors: {count, store}, blobs: {kind, ok}, rateLimit, cache} \| null, metricsUrl, metricsToken}`. `instances`, `capacity` and `metricsUrl` only for system admins; `audit` needs `audit:read`. An instance: `{id, node, pid, role, version, state: ready \| not ready \| draining \| not answering, checks, schema: {state, detail}, jobsClaimed, sockets, runtime: {rateLimit, tracing, ntpOffsetMs, jobQueue, concurrency, workersEnabled}, drain, drainedBy, drainedAt, startedAt, heartbeatAt, self}` |
+| `POST /api/admin/overview/alerts/acknowledge` `{keys}` | Acknowledges the open alerts named (at most 50) for the tenant; `409` when none is open. Audited `platform.alert.acknowledged {alerts} {titles, kinds}`. `{alerts}` still open |
+| `POST /api/admin/overview/instances/:id/drain` | `platform:manage`, a browser session and a recent sign-in (`401` with `step_up` otherwise). `404` unknown, `409` already draining or not answering. Audited `platform.instance.drained {instance} {node, pid, jobsClaimed, sockets}`. The instance |
+| `GET /api/admin/queues?tenant=` | `{backend: db \| bullmq, concurrency, items: [{type, domain, description, registered, queued, running, oldestQueuedAt, failed24h, succeeded24h, p50Ms, p95Ms, series: [8 three-hour buckets], timeoutMs, paused, pause: {reason, by, byName, at} \| null}], instances: {total, claiming, notClaiming: [{id, state, reason}]}}` |
+| `POST /api/admin/queues/:type/pause` `{reason?}` | `platform:manage`. `404` for a type not registered, `409` when paused. Audited `jobs.type.paused {type} {reason, queued}`. The queues |
+| `POST /api/admin/queues/:type/resume` | `platform:manage`. `409` when not paused. Audited `jobs.type.resumed`. The queues |
+| `GET /api/admin/jobs?state=&type=&window=&tenant=&q=&limit=` | `{items: [{id, type, domain, tenantId, tenantName, workspaceId, workspaceName, state, progress, attempts, maxAttempts, createdAt, runAt, startedAt, finishedAt, durationMs, node, message, error, payloadKeys, traceId, createdBy, createdByName}], counts: {queued, running, failed}, tracing}`. `q` is a job id or a trace id; at most 500 |
+| `GET /api/admin/jobs/:id` | One job in scope with `timeline: [{title, text?, at, tone}]` built from its timestamps; `404` outside the scope |
+| `POST /api/admin/jobs/:id/cancel` `{reason?}` | A queued job at once, a running one at its next step; `409` otherwise. Audited `jobs.cancelled {job, tenant} {type, state, reason}` |
+| `POST /api/admin/jobs/:id/retry` | A failed, cancelled or preempted job queued again with a fresh attempt count (same id); `409` otherwise. Audited `jobs.retried {job, tenant} {type, from, attempts}` |
+| `POST /api/admin/jobs/retry-failed` `{type?, window?, tenant?}` | Every failed job in scope created in the window (default `24h`), at most 500. `{retried}`; audited `jobs.retried {type, scope} {count, types}` when any |
+| `GET /api/admin/schedules` | `{items: [{name, type, everyMs, setting, description, targets: platform \| "<n> tenants", targetCount, nextAt, paused, pause, last, runs: [{job, state, at, manual, result, durationMs}]}]}`: the schedules registered on the answering instance (an instance with `WORKERS_ENABLED=false` registers none) |
+| `POST /api/admin/schedules/:name/run` | `platform:manage`. `202 {queued, jobs}`. Audited `jobs.schedule.run {schedule} {jobs}` |
+| `POST /api/admin/schedules/:name/pause` `{reason?}` / `.../resume` | `platform:manage`. `409` when already in that state. Audited `jobs.schedule.paused` / `jobs.schedule.resumed`. The schedules |
+| `GET /api/admin/dead-letters` | `{items: [{source: moderation \| workflow, id, item, reason, attempts, firstFailedAt, lastFailedAt, redrivesAs, link: {route, params}}], sources}`: the caller's tenant only, moderation jobs with `moderation:manage` and the current workspace's workflow runs within clearance with `workflows:manage` |
+| `POST /api/admin/dead-letters/:source/:id/redrive` | `201 {source, id, jobId, runId}`; needs the domain's permission (`403` otherwise). Audited by the domain: `moderation.job.redriven` or `workflow.dead_letter.redriven` |
+| `POST /api/admin/dead-letters/:source/:id/discard` `{reason}` | The row's state becomes `discarded`; `409` when it is not open. Audited `jobs.deadletter.discarded {source, deadLetter} {reason, type, error}`. The dead letters |
+| `GET /api/admin/cache` | `{store: memory \| redis, instances, ttlSeconds: {short, medium, long}, maxEntries, items: [{ns, tier, description, requests, hits, invalidations: {local, bus}, entries}]}`. Reads and invalidations are this instance's since it started; `entries` is the tenant's live entries in a memory store, `null` in Redis |
+| `POST /api/admin/cache/:ns/invalidate` | Drops the namespace for the caller's tenant here and over the bus on every instance; `404` for a namespace the server does not use. Audited `jobs.cache.invalidated {namespace} {store}`. The cache |
+
+`server/src/ops/instances.ts` has `s.instances` (`InstanceRegistry`: `beat`, `list`, `drain`, and `readiness`, which
+`/readyz` shares), `ops/overview.ts` `s.overview` (`alerts`, `acknowledge`, `counters`, `recentAudit`, `capacity`) and
+`ops/jobs-admin.ts` `s.jobsAdmin`; the routes are `routes/admin/operations.ts`.
+
+## Sprint 35c (1.6.0): Storage and Configuration (B-4204, B-4205)
+
+Both screens are for platform admins (`platform:manage`, an MFA-verified session); changes need a browser session.
+`server/src/ops/storage.ts` (`s.storage`, with `s.storage.integrity` in `ops/blob-integrity.ts`) and
+`server/src/config/settings.ts` (`s.settings`). Migration `037c_platform_storage`.
+
+### Storage (B-4204)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/storage/stores` | `{stores: [{id: blobs \| db \| vectors \| backups \| media \| datasets \| models, name, kind, location, usedBytes \| null, capacityBytes \| null, freeBytes?, objects, health: ok \| failing \| late, checkedAt, detail, settings: [name], growth: [bytes per day], verify?, migrate?, singleNode?, link?: {route, params, label}}], migration \| null, active: {label, migration \| null, mode}}`. The blob store's health is `/readyz`'s check on this instance, its size and object count come from the last verification, its capacity from `statfs` (a filesystem store; S3 reports none). The database row reports the dialect's own size and connections; growth lines are daily samples (`platform_storage_samples`, the `ops.storage.sample` job every 6 h and each verification) |
+| `GET /api/admin/storage/usage` | `{workspaces: [{id, workspace, tenantId, tenant, label, files, versions, trash, media, knowledge, attachments, total, quotaBytes \| null, quotaUsed, users: [{id, name, bytes}] (top five), growth}], users: [{id, name, bytes, workspaces}], kinds: [{kind, bytes}], quotaCounts: [files, versions, trash]}` in bytes. `files` is each file's current version, `versions` the others, `trash` the versions of trashed files; the file quota (B-2403) counts those three (`quotaUsed`). Set a quota with `PUT /api/admin/tenants/:tid/workspaces/:wid/file-quota` (`tenant:manage`) |
+| `GET /api/admin/storage/quarantine` | `{items: [{kind: attachment \| file \| knowledge \| media, id, object, label, workspace, workspaceId, tenantId, size, state, rawState, detail, at, by, holdsBytes, running, canRescan, canDelete}], scanner: {configured, host, reachable, error, engine, signatures: {version, date} \| null, scannedToday, refusedToday: {state: n}, failedToday}}`. Items wait for their scan (`state` scanning, or `scan failed` / `timed out` when the scan job failed) or were refused in the last 24 hours (`infected`, `type mismatch`, `too large`, `above the ceiling`, `refused`, `deleted`). The scanner panel asks clamd `PING` and `VERSION` with a 3-second timeout |
+| `POST /api/admin/storage/quarantine/:kind/:id/rescan` | `202 {job}`: queues the item's scan job again (`attachment.scan`, `file.scan`, `knowledge.scan`, `media.ingest`). `409` when nothing is held any more or a scan is running, `503 step scanner` while `CLAMD_HOST` is set and does not answer. Audited `file.quarantine.rescanned` in the item's tenant |
+| `POST /api/admin/storage/quarantine/:kind/:id/delete` `{reason?}` | `204`: deletes the quarantined bytes and refuses the item ("Deleted from quarantine by an administrator"); nothing was released, so no file, message or record changes. `409` while it is being scanned. Audited `file.quarantine.deleted` |
+| `GET /api/admin/storage/integrity` | `{runs: [Run], last: Run \| null, running: Run \| null, findings: [{id, kind: missing \| orphan \| mismatch, object, size, modifiedAt, referencedBy: [{table, column, id}] \| null, expected, actual, state: open \| deleted \| accepted \| gone, resolvedAt, note, foundAt}], graceHours, dryRunMinutes, everyMinutes}`; a Run is `{id, state, checksums, store, objects, bytes, missing, orphans, orphanBytes, mismatches, references, error, jobId, createdAt, startedAt, finishedAt}`. Findings are those of the latest finished run (at most 10,000 per kind; the counts are exact) |
+| `POST /api/admin/storage/integrity/verify` `{checksums?}` | `202` Run: queues `ops.blobs.verify` (also scheduled every `BLOBS_VERIFY_MINUTES`). `409` while one is queued or running. The job lists the store, walks every row of every table (the backups' B-903 reference walk, plus row ids in derived keys), and reports a `blob_key`, `manifest_key` or `report_key` the store does not have (checked twice) as **missing**, an object older than `BLOBS_ORPHAN_GRACE_HOURS` nothing references as an **orphan** (never backups or mirror files), and, with `checksums`, an object whose SHA-256 changed while its modification time did not as a **mismatch** (mirror files against their name). It never changes the store. Audited `platform.blobs.verify.started` and `platform.blobs.verified` |
+| `POST /api/admin/storage/orphans/dry-run` `{objects?: [key]}` | `{id, count, bytes, oldest, skipped, expiresAt, keys}` (the first 50): the open orphans of the latest run (or the ones named), each looked at again against a fresh walk of the references; nothing is deleted. `409` with no finished run or nothing left to delete. Audited `platform.blobs.orphans.dry-run` |
+| `POST /api/admin/storage/orphans/delete` `{dryRun, reason}` | `{deleted, bytes, failed}`: deletes exactly the dry run's objects (decision Q10: a dry run, then one admin with a reason). A dry run is used once and lasts `BLOBS_DRY_RUN_MINUTES` (`409 step dry-run` after). Audited `platform.blobs.orphans.deleted` with the reason and the list of objects |
+| `POST /api/admin/storage/findings/:id/accept` `{reason}` | The finding: takes an object's current SHA-256 as the one to compare against (a change that was expected). `409` for anything but an open mismatch, or a mirror file. Audited `platform.blobs.checksum.accepted` |
+| `GET /api/admin/storage/purges` | `[{what, policy, where: {route, params, label}, job, everyMinutes, setting, lastRun, lastState, removed, nextRun}]`: file trash, conversation and channel retention, memory purge, backup retention, feed indexes and the PDS trim, with the last finished run of each job and the next bucket |
+| `GET /api/admin/storage/migrations` | `{migrations: [Migration], active: {label, migration}}`; a Migration is `{id, state: queued \| copying \| switched \| retired \| failed \| cancelled, from, to, target: {kind, dir? \| endpoint, bucket, region, pathStyle, accessKeyId}, reason, objects, copied, bytes, verified, error, jobId, createdBy, createdAt, switchedAt, retiredAt}` (never the secret) |
+| `POST /api/admin/storage/migrations` `{kind: fs, dir, reason}` or `{kind: s3, endpoint, bucket, region?, pathStyle?, accessKeyId, secretAccessKey, reason}` | `202` Migration (decision Q16), with a recent sign-in (`401 step_up`). The target must answer its health check (`422`), an S3 endpoint passes the service URL checks, a directory is absolute and neither inside nor around the current one; one migration at a time (`409`). The job `ops.blobs.migrate` puts every instance in `dual` mode (writes and deletes also go to the target) and waits until each live instance reports it, copies every object with a SHA-256 check of the copy, makes a second pass for anything listed late, verifies the target has every object at the same size, then switches: reads and writes go to the target, reads of an object it lacks fall back to the old store. Any failure puts every instance back on the old store. The secret is sealed with the platform key. Audited `platform.blobs.migration.started`, `.switched`, `.failed` |
+| `POST /api/admin/storage/migrations/:id/retire` `{reason}` | Migration: stops reading from the old store (nothing is deleted there). Recent sign-in. Audited `platform.blobs.migration.retired` |
+
+### Configuration (B-4205)
+
+The settings descriptor `server/src/config/settings.generated.ts` is generated from `server/src/config/index.ts` by
+`npm run gen:settings -w server` (the suite fails when it is stale): for each of the environment schema's variables
+its section, type, constraint, default, whether it is a secret (the `<NAME>_FILE` variables, `S3_ACCESS_KEY_ID` and
+`OTEL_EXPORTER_OTLP_HEADERS`), whether a change applies `hot` (read from the live configuration at each use) or at the
+next `restart`, whether it may be overridden, and the description from the comment above it (or `docs/deploy.md`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/platform/settings` | `{build, instance, overridesEnabled, sections, instances: [{instance, host, version, startedAt, reportedAt, live, blobMode, self}], restartRequired: [{name, instances}], pending: [Proposal], settings: [Setting]}`. A Setting is the descriptor plus `{fileForm, file, mode?, chars?, value, source: env \| file \| default \| override, changed, differs, perInstance: [{instance, value, source, chars?, fingerprint?}], since, override: {value, applies, reason, proposedBy, approvedBy, appliedAt, waiting: [instance]} \| null, pending: Proposal \| null, history: [{action, from, to, reason, state, proposedBy, decidedBy, at, note}], deprecated}`. Every instance reports what it reads every `PLATFORM_INSTANCE_REPORT_SECONDS` under `INSTANCE_NAME` (default its host name); instances that reported within three periods are `live`, and a setting `differs` when live instances read different values. For a secret, `value` is `set` or `null` with its length, the file it came from and the file's mode, and a 16-hex fingerprint keyed with `SESSION_SECRET` so that instances can be compared; the value never leaves the server. `DATA_KEY_PREVIOUS` and `KMS_PREVIOUS_PROVIDER` are `deprecated` once a verified `kms:rewrap` is in the audit chain |
+| `GET /api/admin/platform/settings/export?changed=true` | `{text, lines}`: the settings this instance reads as a `.env` file by section, secrets as `********` with a comment naming their file; `changed` keeps only those not at their default. Audited `platform.settings.exported` |
+| `POST /api/admin/platform/settings/:name/proposals` `{value: string \| null, reason}` | `202` Proposal `{id, name, action: set \| clear, value, previous, reason, state, proposedBy, proposedAt, decidedBy, decidedAt, note}`: an override (or, with `value: null`, removing one) for a second platform admin to decide (decision Q2). The value is checked against the field's schema and the configuration's cross-field rules with every other override in force (`422 {setting, errors}`); one pending proposal per setting (`409`); secrets and what reaches the database (`DB_*`, `DATABASE_URL`, `SQLITE_FILENAME`, `NODE_ENV`, `PLATFORM_SETTINGS_OVERRIDES`, `INSTANCE_NAME`) are not overridable (`409 step not-overridable`); with `PLATFORM_SETTINGS_OVERRIDES=false` every proposal is `409 step overrides-disabled`. Audited `platform.setting.proposed` |
+| `POST /api/admin/platform/settings/proposals/:id/approve` `{note?}` | `{proposal, applies, applied}`: a second platform admin approves (the proposer gets `403 step dual-control`); the value is checked again, stored in `platform_setting_overrides` and, for a hot setting, applied to every instance's configuration (at once over the bus, and at each instance's next report). A restart setting is read at the next start of each instance (applied before the services are built; if the stored overrides no longer pass the schema the instance starts with its environment and logs why), and `restartRequired` names the instances still running without it. Audited `platform.setting.approved` |
+| `POST /api/admin/platform/settings/proposals/:id/reject` `{note?}` | The proposal, rejected; the proposer withdraws instead (`409`). Audited `platform.setting.rejected` |
+| `POST /api/admin/platform/settings/proposals/:id/withdraw` | The proposal, withdrawn; only by its proposer (`403`). Audited `platform.setting.withdrawn` |
+
+New settings: `PLATFORM_SETTINGS_OVERRIDES` (default `true`), `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`
+(30), `BLOBS_VERIFY_MINUTES` (1440; 0 turns the schedule off), `BLOBS_ORPHAN_GRACE_HOURS` (24) and
+`BLOBS_DRY_RUN_MINUTES` (60).

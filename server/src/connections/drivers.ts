@@ -4,11 +4,12 @@ import mysql from 'mysql2/promise';
 import { fetch, type Dispatcher } from 'undici';
 import { addressProblem, checkHost, guardedAgent, parseAllowList, type AllowList } from '../mcp/hosts.js';
 import type { Classification } from './classify.js';
+import { MongoDriver } from './mongo.js';
 import { dropSlot, PgReplicationStream, type ReplicationOptions, type ReplicationStream } from './replication.js';
 
 /** What the service hands a driver: the endpoint and the opened credential. */
 export interface ConnectionSpec {
-  engine: 'postgres' | 'opensearch' | 'mysql';
+  engine: 'postgres' | 'opensearch' | 'mysql' | 'mongodb';
   endpoint: string;
   database: string | null;
   tls: boolean;
@@ -58,7 +59,7 @@ export interface DataDriver {
    * B-1503) the read runs as that database role (`SET LOCAL ROLE` inside the read-only transaction), so the
    * database's grants and row security policies for the role decide which rows come back.
    */
-  rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number; role?: string | null }): Promise<QueryResult>;
+  rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number; role?: string | null; fields?: string[] | null }): Promise<QueryResult>;
   /** Checks that the connection's account can read an object as each role, and that row security applies (B-1503). */
   roleCheck?(object: string, roles: string[], timeoutMs: number): Promise<RoleCheck>;
   /** A logical replication stream of one table (PostgreSQL only, B-1003). */
@@ -426,7 +427,8 @@ export class OpenSearchDriver implements DataDriver {
 export const createDrivers = (allow: AllowList): Record<ConnectionSpec['engine'], DriverFactory> => ({
   postgres: (spec) => new PostgresDriver(spec, allow),
   opensearch: (spec) => new OpenSearchDriver(spec, allow),
-  mysql: (spec) => new MysqlDriver(spec, allow)
+  mysql: (spec) => new MysqlDriver(spec, allow),
+  mongodb: (spec) => new MongoDriver(spec, allow)
 });
 
 export const defaultDrivers = createDrivers(parseAllowList(''));

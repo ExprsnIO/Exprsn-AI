@@ -110,6 +110,11 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   classified for payment cards, IBANs, national identifiers, emails and phone numbers before a chat can use them;
   a file classified above its owner's clearance or the workspace ceiling is rejected.
 - Model output is rendered as text in the console, never as HTML.
+- Since 1.6.0 (B-43) an instance may be a Chat Completions server (`kind: openai`: Apple's `fm serve`,
+  `mlx_lm.server`, `llama-server`) on a URL, under the same egress check and mutual TLS, or on a Unix socket on the
+  server's host. Its bearer token is a vault secret read as the administrator who saved it. Its models are registered
+  from its `/v1/models` listing with `format: server` and no digest; the licence, the conformance run, the label
+  ceiling and dual-control approval apply as to a pulled model.
 
 ## Deployment hardening
 
@@ -119,6 +124,241 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
+  server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
+  behind the model id the server lists, that the file is GGUF or safetensors, or that it stays the same between the
+  conformance run and later requests; an operator who swaps the model behind the same id (an `mlx_lm.server` or
+  `llama-server` restarted on another file with the same alias) is not noticed. None of the servers targeted here
+  exposes a file hash in `/v1/models`, so the backlog's "where the server exposes it, the file's hash" is not
+  implemented; the model id is the only identity, and approval should be read as approval of the server's operator
+  as much as of the model. The probe and the evaluation trust what the server answers. A Unix socket is not checked
+  against the egress policy: its file permissions are the only access control, and `fm serve` itself has no
+  authentication (run it on a socket only the service user can open, or on loopback, never on `0.0.0.0`). A bearer
+  token is read from the vault once per client and kept in memory until the instance's address or token reference
+  changes or the server restarts, so a token rotated in the vault reaches the gateway only then; it resolves as the
+  person who saved it, and stops resolving when they lose `secrets:read` or leave. Chat Completions servers report no
+  residency, so the memory planner, the anti-thrash limit and pinned residency do not apply to them, and usage is
+  estimated at four characters a token when the server reports none (`fm serve` while streaming). When a server
+  refuses `/v1/embeddings`, embedding requests go to any other instance the embedding model is placed on, not
+  specifically one in the same zone. The Pools screen's own instance form still edits only Ollama settings; kind,
+  socket and token are set from the Models screen's Model servers.
+- Social and messaging administration (1.6.0, Sprint 35d, B-4206). The policies need `social:manage` (decision Q4);
+  turning the full `user-input` check off for a workspace's posts or changing who approves held posts also needs
+  `moderation:manage` and is audited (`social.policy.updated`, `weakened: feedGuard`). With the check off, posts
+  labelled internal or below are still checked against the platform baseline (the engine keeps platform sets only,
+  so no tenant setting relaxes the baseline) and anything above internal, and every comment, is checked in full. A
+  held post is decided only by holders of the permission the workspace names (any flag reviewer by default, or `feed:manage`,
+  `guardrails:manage` or `moderation:review`), never by its author. Exporting another member's conversation is under dual control
+  (decision Q5): a holder of `social:manage` asks with a sealed reason and a recent sign-in, a second platform admin
+  (`platform:manage`, another person, also with a recent sign-in) approves, and only then does a job read the
+  messages; the CSV is sealed with the tenant key in the blob store, downloadable by the requester alone (cells
+  defused against formulas), and the request, decision, export and download are audited with the reason and both
+  names. The members are not told, by design. A revoked calendar feed answers 404 like an unknown one. Closing a
+  user's rooms disconnects their sockets on every instance over the bus; it is not a sign-out. Gaps: realtime counts
+  are per instance (the screen says which), and signals are counted only when relayed or refused; an export holds at
+  most 50 000 messages (the CSV says when it was cut) and stays in the blob store until the tenant is offboarded; a
+  workspace contact rule of `admins` lets holders of `social:manage` or `tenant:manage` start conversations with
+  anyone in the workspace (each person's own contact rule and blocks still apply).
+
+- Tenant provisioning templates (1.6.0, Sprint 35d, B-4501). Only a system admin provisions a tenant from a
+  template (`POST /api/admin/tenants/from-template`, or `exprsn-ai tenant:create` on the host), and only a template
+  whose highest workspace ceiling the caller's clearance reaches. Templates are code, not data: their custom roles
+  hold member-baseline permissions only (a role with an admin permission stays under B-3302 dual control and is never
+  part of a template), their profiles are drafts without a model (a model admin of the tenant picks and publishes
+  them), and the first admin is a `tenant-admin` (never `system-admin`) who must enrol a second factor at first
+  sign-in. By default the first admin gets a single-use enrolment link (`PASSWORD_INVITE_HOURS`) that sets the
+  password and opens only factor enrolment; a password given instead passes the password policy before anything is
+  created, and is never stored or echoed. Every part is audited in the new tenant's chain and the provisioning
+  admin's (`tenant.created` with `detail.template`, the parts' own events, `tenant.template.applied`). The issuing CA
+  is made only when a platform root and key custody exist; otherwise it is reported as skipped. Gaps: provisioning
+  is not one transaction, so a failure part-way (a database fault after the tenant row) leaves a tenant with the parts
+  made so far (visible on Tenants and in its audit chain, to finish by hand or offboard); a template's workspaces get
+  no directory group mappings; templates cannot be edited from the console.
+- Overview and Jobs and queues (1.6.0, Sprint 35b, B-4202, B-4203). Reading needs `tenant:manage` or
+  `platform:manage`; a tenant admin sees and acts on their own tenant's jobs only (another tenant's id is `403`, its
+  jobs `404`), a system admin every tenant's (Q9). Draining an instance, pausing a job type and running or pausing a
+  schedule act on every tenant and need `platform:manage`; a drain also needs a browser session and a sign-in within
+  `STEPUP_WINDOW_SECONDS`. Every change is audited in the actor's tenant (`platform.alert.acknowledged`,
+  `platform.instance.drained`, `jobs.*`), including a system admin's cancel or retry of another tenant's job, which
+  that tenant's chain does not record. Payloads are shown as keys only; error messages and progress messages are shown
+  as the job wrote them, so a handler that puts tenant content in an error would show it to the tenant's admins (and
+  to system admins). Dead letters are the caller's own tenant only and need the domain's permission to redrive or
+  discard. Gaps: a drain lasts for the life of the process (a restart is a new, undrained instance) and does not end
+  open chat streams or sockets, which finish or move on their own; instance rows are written by the instances
+  themselves, so a process that can write the database can report any state for itself; the cache statistics are the
+  answering instance's since it started; the schedules listed are those registered on the answering instance (an
+  API-only instance lists none); signer and worker processes (training, images) are not instances here, their
+  health stays on their own screens.
+- Configuration (1.6.0, Sprint 35c, B-4205). The screen never receives a secret's value: instances report a secret
+  as set or unset, its length, the `<NAME>_FILE` path and mode, and an HMAC-SHA256 fingerprint keyed with
+  `SESSION_SECRET` (16 hex), stored in `platform_instance_settings` so that instances can be compared. Anyone who can
+  read that table and already knows `SESSION_SECRET` can confirm a guess of a secret; nobody else learns anything.
+  Plain values are scrubbed of URL credentials and `key=value` secrets before they are stored, but a credential in a
+  setting the descriptor does not mark as a secret and that the scrubber does not recognise would be shown to platform
+  admins; the secret list is `FILE_VARS`, `S3_ACCESS_KEY_ID` and `OTEL_EXPORTER_OTLP_HEADERS`. Overrides are dual
+  control (a second platform admin, never the proposer) and audited, but they move part of the configuration from the
+  deployment into the database: whoever can write `platform_setting_overrides` directly (a database admin) changes
+  the next start of every instance. Secrets, the database settings, `NODE_ENV`, `PLATFORM_SETTINGS_OVERRIDES` and
+  `INSTANCE_NAME` cannot be overridden; set `PLATFORM_SETTINGS_OVERRIDES=false` to keep every setting in the
+  environment. Hot settings are those the generator lists after reading their callers; one wrongly listed would need
+  a restart to take effect although the screen says it applied. An instance that is down or not yet reporting cannot
+  be compared, and stale rows age out after 24 hours.
+
+- Storage (1.6.0, Sprint 35c, B-4204). The integrity check treats an object as referenced when any row anywhere names
+  it, owns its directory, or has an id that appears in its key; that errs towards keeping objects, so a deleted row
+  whose id is still in another row leaves its objects in place (they are not found as orphans). Objects younger than
+  `BLOBS_ORPHAN_GRACE_HOURS`, backups and mirror files are never orphans. A dry run walks the references again and a
+  deletion removes only the dry run's objects, within `BLOBS_DRY_RUN_MINUTES`; a row that starts naming one of them
+  in that window (none of the server's writers reuse an old key) would lose its object. Checksums are first-seen
+  baselines, not a manifest sealed at write time: an object changed before its first checked run is not detected,
+  and a change through the store (which moves the modification time) is taken as legitimate, as is a change by
+  someone who also resets the time. Missing objects are restored from a backup by hand (Platform › Backups); there is
+  no per-object restore yet. Blob store migration copies with a SHA-256 check and dual writes while the copy runs, and
+  waits for every live instance to confirm dual writes before copying; an instance that is not reporting (stopped,
+  or started from an older build) would write only to the old store, so the migration fails rather than copy when a live instance
+  has not confirmed in time, and an instance started later reads the shared mode before it serves. The `exprsn-ai`
+  command line follows the shared mode too, but a restore into an empty database has no mode to follow and uses the
+  store the environment names, so after a migration update `BLOB_STORE` and its settings in the environment. The quarantine's Rescan re-queues the existing scan jobs and Delete removes held
+  bytes; neither releases anything without a clean scan.
+
+- WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
+  answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
+  CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30
+  seconds for a BullMQ worker); a scan that does not finish in time leaves the file unreadable until it does, and the
+  client sees a success without an ETag. Finder's AppleDouble and `.DS_Store` files are accepted and discarded rather
+  than stored. Locks are advisory to the API: the console and `/api/files` do not check WebDAV locks. Range requests
+  are not supported (whole files only). MOVE across workspaces is refused. Real client traffic (Finder, Windows,
+  DAVx5) is not yet replayed in CI; litmus is.
+
+- Profiles and presence (1.5.0, Sprint 34c, B-5801, B-5802). A profile is known only to people who share a workspace
+  with its owner; pronouns, bio and avatar further need the viewer's clearance to reach the profile's label and, when
+  the owner narrowed it, a shared workspace among those named. Two people in a block see each other's name only, the
+  same view a narrowed profile gives, and no presence. Pronouns and bio pass the `user-input` guardrail. An avatar is a
+  file-store upload and goes through its quarantine; only a ready image version that is not in the trash and whose
+  label the viewer clears is served, with the sandbox CSP and `nosniff`. Presence is decided by the server: a socket
+  asks to watch people and joins only the presence rooms of those it may see; each change is published with everyone
+  in a block with the person left out, so every instance relays the same filtered event, and a new block takes each
+  person out of the other's room at once. Gaps: presence visibility follows shared workspaces only (not the profile's
+  label or narrowed workspaces), so someone who sees a name-only profile still sees the status; idle is what the
+  console reports (a client could keep reporting active); the bio is stored as written (after the guardrail), not
+  sealed, like the display name; a chosen status has no expiry; the avatar's file stays in the uploader's workspace
+  file tree, where workspace members can see it as a file like any other upload.
+- The chain context and Workflows 2's sub-workflow, agent, map and loop steps (1.5.0, Sprint 32, B-4101, B-3901,
+  B-3902, B-3905). The chain covers what runs on this server; what leaves it (a webhook receiver or an MCP server that
+  calls the API back) starts a new chain, bounded only by its own rate limits. A chat turn is a chain node only when its
+  answer calls a registry tool, and the chat model's own tokens are metered per conversation, not charged to the chain.
+  Plugin event fan-out still carries its own chain of plugins (`PLUGIN_MAX_DEPTH`); only a plugin action that starts a
+  workflow is a chain node (the root of a new chain), so an agent → event → plugin → workflow path is two chains. An app
+  trigger owned by someone else than the chain's principal starts a chain of its own (it acts as its owner). "Cost" is
+  metered as GPU time; chains are not priced against the price books. Wall time is charged for leaf work only, so time a
+  run spends waiting on an approval is not counted, and a child executed inside its parent's step counts its own steps;
+  budgets are checked before each step, so the step that crosses a budget completes. A pending workflow tool's call node
+  stays `waiting` until the awaiting agent picks its result up. Skills on a model step: at most six rounds of tool
+  calls. Map items never pause one by one; a write tool in a map or loop needs an Approval step before it. A child
+  workflow runs inside its parent's step while it can, so a long child counts against the parent's step timeout.
+- Chaining across kinds (1.5.0, Sprint 34a, B-4102 to B-4107). Cross-kind cycles are now checked at publish (B-4105),
+  but only a cycle made entirely of steps that always run (sub-workflows, map and loop workflows, agent steps, skill
+  loads, a workflow tool's workflow) is refused; a cycle through a model's choice (an agent's delegates, listed
+  workflows or tools, which includes an agent delegating to itself) is published with a warning and bounded at run time
+  by `CHAIN_MAX_DEPTH`, `AGENT_MAX_DEPTH` and the root's budgets. Branches are not followed, so a sub-workflow cycle
+  behind a branch that would end is refused too. The graph is built from what is published now and checked when
+  something is published, from it: a later change elsewhere that closes a cycle is caught when that change is
+  published. References resolve tenant-wide (a workflow in the entry's own workspace); an entry published only to
+  other workspaces passes the check and is hidden at run time. A delegate's budgets are clamped to what the delegating
+  run has left when it starts, and its tokens are added to the delegating run's afterwards; its steps and wall time
+  count only at the root. A held call is decided where it waits with that place's rules; the chain view itself is for
+  the chain's principal and agent, tool and workflow admins, so another approver decides from the place, or through
+  `POST /api/chains/:id/held/:node/decision`, which answers `404` unless they may decide the call. A model step's held
+  call keeps the conversation so far sealed in the step until it is decided; the approved call passes the `tool-call`
+  checkpoint again when it runs. The audit `target` filter is a `LIKE` over the target JSON within the tenant (no index
+  of its own). The chain view lists at most 50 guardrail decisions and 20 audit entries per run. A replay from a node
+  is a new chain, not a branch of the old one.
+- Feed generators and relay commit verification (1.5.0, Sprint 31, B-3001 to B-3003, B-3604). Relay commits are
+  verified one at a time in the consumer's order: each repo DID new to the cache costs a DID resolution (up to five
+  seconds), so a subscription to the whole network over subscribeRepos falls behind where a Jetstream would not; use
+  author allow-lists. A DID that cannot be resolved, a `tooBig` commit and an operation whose tree nodes are missing
+  from the CAR are dropped, not retried. Commit `rev` order and `prev`/`prevData` chaining are not checked (a relay
+  could replay an old, validly signed commit), and `#sync` and `#account` frames are not acted on (a deactivated or
+  taken-down repo's posts are still taken until its relay stops sending them). Feeds index only what the firehose
+  subscriptions take (their collections, authors and sample) and what passed the moderation check; a post without text
+  is never indexed. Keyword matching is on the post text at ingest only; changing keywords or the ranking empties the
+  index, which refills from new posts (there is no backfill). A ranked feed orders by score alone, so an old post with
+  a high score stays at the top until its retention runs out. Rankings call the gateway for every post that passes the
+  rules (two embeddings per post: the query's is cached per feed version), without tenant quota metering. The service
+  JWT's `jti` is not remembered, so a captured token can be replayed until it expires (at most an hour); the viewer's
+  DID is not used for personalisation and not stored. A feed's rules and index are not labelled: feeds are built from
+  public AT-Protocol posts and served publicly, and any `firehose:manage` holder manages every feed of the tenant. A
+  feed is named, until B-3004 records its publication, by any `at://` authority with its record key. The feed
+  generator needs the tenant's own identity; the platform identity serves none.
+
+- The AT-Protocol PDS (1.5.0, Sprint 31, `docs/pds.md`): what a hosted repository holds is public by protocol and
+  served to anyone, including relays and AppViews that keep copies Exprsn-AI cannot withdraw; a takedown stops this
+  PDS serving the repo and publishes `!takedown`, but copies elsewhere remain until their operators act on the label
+  or the `#account` event. Hosting is off by default and enabled per tenant by a platform admin. Each commit rebuilds
+  the repo's Merkle search tree from its record list (canonical by construction, and checked against the interop
+  vectors), so the cost of a write grows with the repo's size; very large repos (hundreds of thousands of records)
+  write slowly. The repo's blocks are stored as base64 in the database, not in the blob store. Record content is not
+  sealed at rest (it is public, and the commit signature covers its exact bytes); blobs are sealed like files. Records
+  are not run through the guardrails or the moderation check when written: moderation acts on reports and on the
+  repo as a whole (`pds-repo`), not record by record, and labels from other labelers are not applied to what the PDS
+  serves. Sessions come from app passwords only; the Exprsn-AI password is never accepted over XRPC, and there is no
+  OAuth sign-in to the PDS, no email confirmation or password reset over XRPC, no `app.bsky.*` proxying to an AppView
+  and no preferences, so Bluesky clients that read timelines through their PDS need the AppView configured on their
+  side. Access tokens are HS256 under a key derived from `SESSION_SECRET` (rotating it ends every PDS session). Handles
+  live only under the tenant's subdomain of `PDS_HANDLE_DOMAIN`, resolved over HTTPS (the operator's wildcard DNS); a
+  tenant's own domain waits for 1.6. `createAccount` creates the Exprsn-AI user before the AT-Protocol account, so a
+  PLC directory that fails at that moment leaves a user without a PDS account (they create it from the console). The
+  move code for `signPlcOperation` is shown in the console instead of emailed. Blobs are typed from their first bytes
+  (PNG, JPEG, WebP, GIF, MP4) and scanned by ClamAV when configured; a video's content is not otherwise inspected. The
+  interop run against the reference AppView (`interop/run.ts`, the CI `interop` job) uses `@atproto/dev-env`, which
+  has no separate relay: the AppView reads the PDS directly, and the relay side is covered by the relay double.
+
+- Model-based memory management (1.5.0, Sprint 30): the tenant's memory profile reads the user's chat messages and
+  agent runs' tasks and answers (through the gateway, within the profile's label and the pool's ceiling). The text is
+  sent as JSON data with an instruction to treat it as such, and only a strictly valid JSON answer is used, but a
+  message can still steer the model into proposing a memory its author chose; the defence is that every proposal
+  passes the `memory` checkpoint and the credential ban and waits for a person. The profile's answers do not pass the
+  `model-output` checkpoint (each proposal passes the `memory` one instead), and its calls (extraction and
+  consolidation judgements) are neither admitted against nor metered in the tenant's quotas; embeddings are metered as
+  before. The rejection list compares one-line, lower-case text, so a paraphrase of a rejected memory can be proposed
+  again (a rejected merge pair is not judged again). Consolidation compares up to 300 memories per owner and judges at
+  most 50 pairs per run, in the job's process memory; larger sets are consolidated over several runs. While a reindex
+  runs, the whole tenant's recall is by recency; if it fails it stays `failed` (retried up to three times) and recall
+  uses only the vectors already made with the model in effect, until `POST /memory/reindex` succeeds.
+
+- CalDAV and CardDAV (1.5.0, Sprint 30, `docs/dav.md`): DAV clients authenticate with HTTP Basic and an app
+  password, so the password crosses every request (over TLS; plain HTTP is refused when `COOKIE_SECURE` is set, but a
+  deployment without it accepts Basic in the clear). A DAV request counts as MFA-verified because the app password was
+  created after a fresh second factor; it is narrowed to DAV scopes and never accepted by `/api`, `/v1` or the
+  console. Failed attempts are limited per address and per app password in the shared counter store, not by the
+  account lockout table. Group calendars and the directory are views without a change log: their sync tokens refuse a
+  removal they cannot name, so clients re-fetch the collection then. A time-range query on a recurring object is
+  inclusive (the span of all its instances), and a non-IANA TZID is read with its VTIMEZONE's standard offset.
+  Directory entries carry their person's clearance as their label; the directory lists the tenant's active users
+  who share a workspace with the caller (all of them when the caller is in a workspace open to the whole tenant),
+  within the caller's clearance (owner's decision, 2026-10-05). The conformance fixtures were written from the
+  clients' request formats, not captured from devices, so B-3104 counts as partial until real traffic from Apple
+  Calendar and Contacts, Thunderbird and DAVx5 is captured and replayed (owner's decision, 2026-10-05). That capture
+  (B-3606) was dropped by the owner on 2026-10-06 (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing
+  over TLS needs a per-host certificate trust on the capturing Mac that was not approved.
+
+- Import repositories and model import (1.5.0, Sprint 30, B-3801 to B-3803): the allow-list is enforced by the
+  platform's own egress (each hop of a redirect checked, credentials never forwarded along one); with
+  `IMPORT_PROXY_URL` the connection is the proxy's, and the proxy must enforce the exported allow-list itself
+  (`GET /api/imports/proxy-allowlist`): the platform cannot check the addresses the proxy dials. Hugging Face gates that
+  the publisher approves by hand stay pending; the platform only sends the access request with the recorded token and
+  records the acceptance once a file is readable. The licence is read from the model card at the pinned commit or the
+  Ollama license layer and recognised from a fixed list; a card that misstates its licence is recorded as stated (legal
+  review sees the source in the manifest). Staged weights are kept unsealed and content-addressed under
+  `imports/blobs/` (public repository content; the copies handed to the training worker are sealed per tenant), and
+  nothing expires them yet. Ollama registry imports pin the manifest digest and stage the layers, but the pools still
+  pull the tag from the registry their Ollama is configured for (the registry itself, or an internal mirror): the
+  platform does not serve the staged layers to Ollama, and on an air-gapped instance the pools need the bundle's
+  models in that mirror. Classifier engines, speech and other non-Ollama models are refused until B-3806. Repository
+  credentials resolve as the user who saved them (B-1705), so that user needs `secrets:read` and the vault path; a
+  model admin without vault access records repositories without credentials. DCAT-AP, SDMX and OpenML have no search
+  API, so they browse their snapshot only; OpenML licences are read for the first `detailLimit` datasets of a harvest.
+  Dataset import (B-3804) is not built: its quota check (`admitDataset`) exists but nothing calls it yet.
 - Permission matrices and custom roles (1.5.0, Sprint 29): custom roles are the tenant's; a workspace cannot define
   its own (the open decision in `Backlog-1.5.0.md` is settled that way for now). The roles in force are held in each
   instance's memory and reloaded through the bus when they change, so an instance without `REDIS_URL` sees another
@@ -182,6 +422,20 @@ filter, private `/tmp`, only the state directory writable.
   expire at its TTL. Writes through a connection are refused outright. Hosts must be internal unless
   `CONNECTIONS_ALLOWED_HOSTS` names them; a failed test still reports reachability for internal addresses. The MySQL
   classifier refuses vendor syntax it cannot lex safely rather than asking for confirmation.
+- MongoDB connections: read-only rests on the query model (only `find` and `aggregate` with allow-listed stages, no
+  `$where`, `$function`, `$accumulator` or Code values, re-checked by the driver) and on the account; MongoDB has no
+  read-only session the way PostgreSQL and MySQL have a read-only transaction, so an account with the `readWrite` role
+  is only reported (`degraded` on Test connection), not prevented. Use an account with the `read` role. The driver
+  dials one server directly (no replica-set discovery or SRV records), so a connection names one member; there is no
+  per-connection CA file for TLS (the system trust store, plus `NODE_EXTRA_CA_CERTS`, as for the other engines). The
+  schema is sampled from the first documents of each collection, so the tree and convention-based PII masking only
+  know the top-level fields seen there; values the classifier recognises are masked anywhere in a document. A
+  knowledge source's watermark is compared with `$gt` as each type its text can stand for, and documents sharing the
+  last watermark value with a later insert can be missed, as with the SQL watermark. A source added without `fields`
+  indexes the text fields seen in that sample, so a text field that first appears later is not indexed until the source
+  is added again with it named. Admin-marked PII paths inside sub-documents (`tickets.customer.email`) are masked when a
+  knowledge source names that path, not inside a whole sub-document returned by a query (there only field names like
+  `email` and values the classifier recognises are masked). OpenBao dynamic credentials do not apply to MongoDB.
 - With `REDIS_URL` set, rate limits, the failed-bearer throttle and the denial cap are shared by every instance; while
   Redis is unreachable (and without it) they are counted per instance, so a caller spread across N instances gets up
   to N times each limit. Since 1.3.0 an outage is visible: each instance probes Redis every `RATELIMIT_PROBE_SECONDS`,
@@ -473,8 +727,12 @@ filter, private `/tmp`, only the state directory writable.
   AsyncLocalStorage: work an action's callee defers to its own timers or connections opened during the action would
   carry it too, which only ever suppresses deliveries. A script handler holds its invocation's token (shown to it
   once, stored hashed, revoked when it ends); with the default sandbox it cannot use it except over its own stdin and
-  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. The
-  `records`, `files`, `groups` and `posts` calls answer `501` until their domains ship. The test suite runs handlers
+  stdout, but a sandbox with network could replay it to `/plugin-broker` until it expires or is revoked. Since 1.5.0
+  (B-3904) the `records`, `files`, `groups` and `posts` calls are live and act as the installing user (still active,
+  holding the domain permission, clearance capped at the plugin's max label), so a plugin reaches what its installer
+  can reach, not what the plugin needs: a narrower plugin needs a narrower installer (a service account), and a
+  plugin installed from the command line cannot make them. `read:files` returns contents (up to 256 kB a call), not
+  just metadata, and is still a low-risk capability, granted with the manifest. The test suite runs handlers
   as local processes (`server/test/sprint25d-fakes.ts`); the container path is the scripts' and is not exercised in CI.
   Plugin logs and invocation events are sealed, but kept until the plugin is removed from the database by hand (no
   retention yet).
@@ -576,9 +834,10 @@ filter, private `/tmp`, only the state directory writable.
   zone check reads the zone definitions, while the network itself is held by the zone's NetworkPolicy or nftables
   rules. Notices carry the moderator's reason, not the moderated content.
 - Firehose ingest (1.4.0, Sprint 27, B-1908): tested against a local Jetstream and relay double only, not yet against
-  the public Jetstream or a live relay. Records from subscribeRepos are read from the commit's CAR blocks without
-  verifying the commit signature or the repository's Merkle tree against the author's DID document, so a relay could
-  hand over records an author never wrote; Jetstream carries no proofs at all. Trust the endpoint you subscribe to.
+  the public Jetstream or a live relay. Since 1.5.0 (B-3604) a subscribeRepos commit is verified against the repo's
+  DID key and each record used is proven against its signed Merkle tree, and a commit that fails is dropped and
+  audited (see the Sprint 31 entry above); Jetstream still carries no proofs at all, so trust a Jetstream endpoint you
+  subscribe to.
   Ingested posts are an unregistered moderation type (`atproto-post`): they are checked with their text and get a flag
   and labels, but cannot be reported, hidden or appealed through the object registry (Exprsn-AI does not store them),
   and a deleted post's labels are not withdrawn. Images and video are not fetched; only text and alt text are checked.
@@ -597,8 +856,9 @@ filter, private `/tmp`, only the state directory writable.
   per-feed key rotation other than revoking and creating a new one). Feed fetches are not audited one by one (they
   record `lastUsedAt`); creation and revocation are. Events have no recurrence and no VTIMEZONE (times are UTC, which
   RFC 5545 allows); a wall-clock time in a daylight-saving gap moves forward by the gap. Reminders go to attendees
-  who said going or maybe, not to every member; capacity is checked in a transaction, which on SQLite and PostgreSQL's
-  default isolation can let two simultaneous RSVPs past the last place. Group posts are small discussion content
+  who said going or maybe, not to every member. Capacity is checked under a lock on the event row (since 1.5.0,
+  B-3603), so simultaneous RSVPs for the last place take turns; a check-in at the door still adds an attendee past the
+  capacity, on purpose. Group posts are small discussion content
   (no edit, no attachments, no threads); the workspace feed is B-27.
 - Customer-service channels (1.4.0, Sprint 28a, B-23). Customer sessions are public by design: the channel's public
   key is not a secret, so anyone can start an anonymous session on a chat channel that allows them, limited per client
@@ -618,7 +878,9 @@ filter, private `/tmp`, only the state directory writable.
   receiving mail server does not enforce SPF/DKIM/DMARC; an attacker who knows a customer's address and one of the
   thread's Message-IDs could add a message to that session (they still never see the replies, which go to the real
   address). IMAP polls read the mailbox read-only and never mark or move messages; messages over 10 MB are skipped.
-  The imapflow adapter itself is exercised only against a fake fetcher in the unit tests, not a real IMAP server.
+  Since Sprint 34 (B-3605) the imapflow adapter also runs in CI against GreenMail over implicit TLS with the
+  certificate verified against the host name (`server/test/integration/imap.test.ts`); the STARTTLS path (port 143)
+  is exercised only through imapflow's own handling, not against a server.
   Mailgun inbound is form-encoded only (routes that forward attachments post multipart, which is refused with `415`);
   Postmark, SendGrid and others use the generic shape through a relay. Bounces from IMAP are read from RFC 3464
   delivery reports only (not from free-text bounce mails). Held replies use the flag queue: a reviewer who can see the
@@ -724,3 +986,37 @@ filter, private `/tmp`, only the state directory writable.
   tools that call a model) ride on the slot the turn holds instead of queueing for it (Sprint 26a), so Ollama may
   receive more concurrent requests on that instance than its `parallel` setting while a turn's verdicts run, and
   queues them itself. The `/v1` API, agent runs and workflows still lease a separate slot for each call they make.
+- Workflow triggers, retries and bundles (1.5.0, Sprint 32b, B-3903, B-3906, B-3909): a workflow's own event and
+  schedule triggers start runs as the person who published the version, with what they hold when the trigger fires;
+  re-publishing makes the publisher the owner, so whoever publishes takes the runs on. The loop rule for event triggers
+  covers only workflows: an event caused by a chain of workflow runs is not delivered to a workflow in the chain, and
+  is dropped at `WORKFLOW_EVENT_MAX_DEPTH`, but the chain is not shared with plugins, app record triggers, sub-workflows
+  or agents until B-4101's chain context replaces it (a plugin that starts a workflow whose events start that plugin
+  again stops only at each kind's own limit and at the rate limits). The chain is carried in-process while a run
+  executes and on the firing row; an effect that leaves through another job (a file version a step writes, whose
+  `file.uploaded` comes from the scan job) is not traced, and `WORKFLOW_EVENT_RATE_PER_MINUTE` bounds it. Workspace
+  scoping relies on the event naming its workspace (`data.workspace`, or the audit target's `workspace`): audit
+  actions mostly name none, so only tenant-level workflows receive them. An event trigger's run input holds the event
+  envelope, sealed like any run input; the firing row keeps it sealed too. A retry of a step that writes (an HTTP
+  `POST` or `PUT`, a record step) may send it again (validation warns); retries are not idempotent beyond what the
+  remote side ensures. A redriven dead letter replays the failed run from its failed step as the admin who redrives it,
+  not as the run's original owner. Workflow bundles are signed with an HMAC key in the KMS
+  (`<OPENBAO_KEY_PREFIX>workflow-bundles`), so, like app bundles, they verify only on installations that share that
+  key; the signature proves where a bundle came from, not that its graph is safe, so an import is a draft that the
+  importer reviews and publishes, and publishing validates every re-bound reference again.
+- Workflows 2 steps (1.5.0, Sprint 32c). Domain built-ins (B-3904: `messages.send`, `feed.post`,
+  `files.write_version`, `groups.create_event`, `channels.answer`) are platform registry entries that every tenant
+  sees; a tenant cannot unpublish them, only keep them out of its agents and steps (and a write always needs an
+  approval or a confirmed call). They act as the caller, so an agent or workflow can do whatever its owner can do in
+  those domains once the call is approved; the label check stops data going somewhere labelled lower, but nothing
+  stops a write at or above the data's label. Only feed posts record their source (`workflow-run`, `agent-run`…);
+  messages, file versions, events and channel answers show the owner as the author, with the source only in the
+  workflow's own run and audit entries. Approval-form answers are validated like a submission but not written
+  anywhere, and are kept in full in the `workflow.approval.approved` audit entry at the run's label (as the run's
+  outputs are), so a field that must not reach the audit chain must not be on such a form. Notify steps tell cleared,
+  active users only, but resolve usernames in the whole tenant and skip unknown ones silently (counted, not named). A
+  webhook step's endpoint is checked against the operator's and the tenant's host rules at save and at run time; the
+  managed webhook it creates is visible on the Webhooks screen and removed with the workflow, but not when the step
+  is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
+  step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
+  confidential data from reaching it).

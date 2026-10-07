@@ -65,6 +65,8 @@ export function actorFrom(p: Principal | null | undefined, ip?: string | null): 
     name: p.displayName,
     session: p.sessionId,
     apiKey: p.apiKeyId,
+    // 1.5.0 (B-3101): a DAV request names the app password it came with.
+    ...(p.appPasswordId ? { via: `app-password:${p.appPasswordId}` } : {}),
     roles: p.roles,
     ip: ip ?? null
   };
@@ -86,6 +88,8 @@ export interface AuditQuery {
   /** Username or user id of the actor. */
   actor?: string;
   corrects?: string;
+  /** Sprint 34 (B-4107): an id the target names (a run, a chain, a registry entry), matched as a whole value. */
+  target?: string;
 }
 
 export class AuditLog {
@@ -179,12 +183,18 @@ export class AuditLog {
   query(tenantId: string, opts: AuditQuery = {}) {
     const q = this.db('audit_events').where({ tenant_id: tenantId });
     if (opts.kind) q.andWhere({ kind: opts.kind });
-    // Prefix match as a range, which needs no LIKE escaping and uses the (tenant_id, action) index.
-    if (opts.action) q.andWhere('action', '>=', opts.action).andWhere('action', '<', opts.action + '\uffff');
+    // Prefix match by equality on the leading characters: no LIKE escaping, and the same answer under every collation
+    // (a '>=' / '< prefix + U+FFFF' range comes back empty under PostgreSQL's en_US collations). The tenant_id part of the
+    // (tenant_id, action) index still applies.
+    if (opts.action) q.andWhereRaw('substr(action, 1, ?) = ?', [opts.action.length, opts.action]);
     if (opts.from) q.andWhere('ts', '>=', opts.from);
     if (opts.to) q.andWhere('ts', '<', opts.to);
     if (opts.label) q.andWhere({ label: opts.label });
     if (opts.corrects) q.andWhere({ corrects: opts.corrects });
+    if (opts.target) {
+      const v = JSON.stringify(opts.target).replace(/[%_!]/g, '!$&');
+      q.andWhereRaw("target LIKE ? ESCAPE '!'", [`%:${v}%`]);
+    }
     if (opts.actor) {
       // The actor is stored as canonical JSON; match its user or username field exactly.
       const v = JSON.stringify(opts.actor).replace(/[%_!]/g, '!$&');

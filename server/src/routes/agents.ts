@@ -7,6 +7,7 @@ import type { Permission } from '../authz/permissions.js';
 import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
 import { notFound } from '../http/problem.js';
 import { MAX_BUDGETS } from '../registry/service.js';
+import { rootHeld } from '../chain/view.js';
 import type { Services } from '../services.js';
 
 const budgets = z.object({ steps: z.number().int().min(1).max(MAX_BUDGETS.steps), tokens: z.number().int().min(100).max(MAX_BUDGETS.tokens), wallSeconds: z.number().int().min(5).max(MAX_BUDGETS.wallSeconds), toolCalls: z.number().int().min(0).max(MAX_BUDGETS.toolCalls) }).partial();
@@ -47,7 +48,10 @@ export function agentRoutes(s: Services): Router {
   });
 
   r.get('/runs/:id', anyOf('agents:run', 'tools:manage', 'agents:manage'), async (req, res) => {
-    res.json(await s.agents.view(principalOf(req), String(req.params.id)));
+    const p = principalOf(req);
+    const v = await s.agents.view(p, String(req.params.id));
+    // B-4106: a chain's root shows every call held below it, with its path, to decide from here.
+    res.json({ ...v, held: await rootHeld(s, p, v.chain) });
   });
 
   r.post('/runs/:id/cancel', anyOf('agents:run', 'agents:manage'), async (req, res) => {

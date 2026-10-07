@@ -508,8 +508,9 @@
         return UI.notice('<b>Memory planner: fits.</b> ' + need + '; ' + free + '. ' + esc(pl.reason) + '. The estimate is compared with /api/ps after the load.', 'ok');
       };
       const loadModal = (instId, modelName) => {
-        const act = allInst.filter((x) => x.state === 'active');
-        if (!act.length) { ctx.toast('No instance is in service. Add one or return a drained instance to service first.', 'warn'); return; }
+        // B-4302: a Chat Completions server holds its own models; loads go to Ollama instances only.
+        const act = allInst.filter((x) => x.state === 'active' && x.kind !== 'openai');
+        if (!act.length) { ctx.toast(allInst.some((x) => x.kind === 'openai') ? 'No Ollama instance is in service. Chat Completions servers keep their own models in memory; there is nothing to load on them.' : 'No instance is in service. Add one or return a drained instance to service first.', 'warn'); return; }
         const start = act.find((x) => x.id === instId) || act.find((x) => x.health === 'healthy') || act[0];
         const opts = act.map((x) => ({ value: x.id, label: x.name + (x.memory && x.memory.freeBytes != null ? ', free ' + gb(x.memory.freeBytes) : '') + (x.health !== 'healthy' ? ', ' + x.health : '') }));
         const modelOpts = (inst) => inst.available.map((a) => ({ value: a.name, label: a.name + ', ' + gb(a.sizeBytes) + (inst.loaded.some((m) => m.name === a.name) ? ', loaded' : '') }));

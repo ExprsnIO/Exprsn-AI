@@ -141,6 +141,17 @@ describe('registry', () => {
     expect(actions).toEqual(expect.arrayContaining(['registry.created', 'registry.submitted', 'registry.rejected', 'registry.published', 'registry.deprecated', 'registry.retired', 'registry.restored', 'registry.version.created', 'registry.scope.changed']));
   });
 
+  it('lists entries whose JSON columns were stored encoded twice (written by an early setup script)', async () => {
+    const { a, pa } = await admins();
+    const skill = (await pa('/api/admin/registry', skillBody({ name: 'twice-encoded' })).expect(201)).body;
+    const row = await h.s.db('registry_entries').where({ id: skill.id }).first();
+    await h.s.db('registry_entries').where({ id: skill.id }).update({ checks: JSON.stringify(row.checks), definition: JSON.stringify(row.definition) });
+    const list = (await a.agent.get('/api/admin/registry').expect(200)).body;
+    const got = list.find((e: { id: string }) => e.id === skill.id);
+    expect(Array.isArray(got.checks)).toBe(true);
+    expect(got.definition).toMatchObject({ instructions: expect.any(String) });
+  });
+
   it('checks agents: profile, referenced tools published, and limits', async () => {
     const { pa } = await admins();
     await pa('/api/admin/registry', agentBody()).expect(404); // no such profile

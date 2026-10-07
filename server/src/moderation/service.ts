@@ -454,6 +454,31 @@ export class ModerationService {
     return { flag: s.guard.flags.view(flag, p), action: actionView(action) };
   }
 
+  /**
+   * 1.5.0 (B-2905): an admin takes an object down directly, without a flag (an AT-Protocol repo hosted by the PDS).
+   * The action is recorded and audited as a reviewer's is, and its owner is told and may appeal it (B-1903).
+   */
+  async takeDown(ctx: ModCtx & { principal: Principal }, type: string, id: string, reason: string) {
+    const obj = await this.resolve(ctx, type, id);
+    return actionView(await this.applyHide(ctx, obj, null, 'reviewer', reason));
+  }
+
+  /** 1.5.0 (B-2905): an admin reverses an action outside an appeal; the object's state is put back. */
+  async reverse(ctx: ModCtx & { principal: Principal }, actionId: string, reason: string) {
+    const s = this.s();
+    const r = await s.db('moderation_actions').where({ tenant_id: ctx.tenantId, id: actionId }).first();
+    if (!r) throw notFound('Action');
+    const action = actionFrom(r);
+    if (action.state !== 'applied') throw conflict('This action was already reversed.');
+    const h = this.registry.get(action.object_type);
+    const obj = h ? await h.resolve(action.tenant_id, action.object_id) : null;
+    const restored = !!(obj && h?.restore && action.prev_state && (await h.restore(obj, action.prev_state)));
+    const at = Date.now();
+    await s.db('moderation_actions').where({ id: action.id, state: 'applied' }).update({ state: 'reversed', reversed_by: ctx.principal.userId, reversed_at: at });
+    await this.audit(ctx, 'moderation.action.reversed', { action: action.id, object: action.object_type, id: action.object_id.slice(0, 200) }, { restored, prevState: action.prev_state, reason: reason.slice(0, 500) }, obj?.label);
+    return { action: actionView({ ...action, state: 'reversed', reversed_by: ctx.principal.userId, reversed_at: at }), restored };
+  }
+
   async actions(p: Principal, q: { type?: string | undefined; id?: string | undefined; ownerId?: string | undefined }) {
     const ws = (await this.workspaces(p))!;
     const qb = this.s().db('moderation_actions').where({ tenant_id: p.tenantId });
@@ -803,7 +828,14 @@ export class ModerationService {
     const ws = (await this.workspaces(p))!;
     const rows = ((await s.db('guard_flags').where({ tenant_id: p.tenantId, queue_id: q.id, state: 'open' }).orderBy('due_at').limit(1000)) as Record<string, unknown>[]).map(flagFromRow).filter((f) => s.guard.flags.reviewable(f, p, ws));
     const now = Date.now();
-    return { queue: queueView(q), open: rows.length, overdue: rows.filter((f) => f.due_at < now).length, escalated: rows.filter((f) => f.escalated_to).length, items: rows.map((f) => ({ ...s.guard.flags.view(f, p), queueId: f.queue_id ?? null, escalatedAt: f.escalated_at ?? null })) };
+    return { queue: queueView(q), open: rows.length, overdue: rows.filter((f) => f.due_at < now).length, escalated: rows.filter((f) => f.escalated_to).length, items: rows.map((f) => {
+      const v = s.guard.flags.view(f, p);
+      // 1.5.0 (B-3405): the object the flag points at, so the console can name it and offer "Hide object" only when a
+      // registered type can be hidden (withheld above the reviewer's clearance, like the rest of the flag).
+      const h = f.source_kind ? this.registry.get(f.source_kind) : undefined;
+      const object = v.restricted || !f.source_kind || !f.source_id ? null : { type: f.source_kind, id: f.source_id, hideable: !!h?.hide && f.kind !== 'hold' };
+      return { ...v, queueId: f.queue_id ?? null, escalatedAt: f.escalated_at ?? null, object };
+    }) };
   }
 
   /** The sweep (B-1904, B-1905): routed flags past their SLA escalate; sanctions past their end expire. */

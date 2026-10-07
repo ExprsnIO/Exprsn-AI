@@ -4,6 +4,10 @@
   // and the problems point at the step. Save writes the draft (with the revision it was loaded at), Publish makes it
   // the next version. Runs execute on the server as checkpointed jobs; their steps arrive over the socket
   // (workflow.run, workflow.step) and paint the canvas of the version the run is pinned to.
+  // Sprint 32e (B-3910): every step kind the server has (record, notify, webhook, sub, agent, map, loop; skills on model
+  // steps, approval forms, vault references), event and schedule triggers, retries and failure edges, and the tabs of
+  // the board: run history, triggers and callers (/workflows/:id/triggers, /workflows/:id/callers), versions with
+  // bundles (/workflows/:id/bundle, /workflows/import), approvals waiting on me, and dead letters with redrive.
   const { UI, esc } = App;
 
   const W = 176, H = 74; // node card size on the canvas
@@ -15,9 +19,22 @@
   const CHECKPOINTS = ['context', 'user-input', 'model-output', 'tool-call', 'memory', 'script', 'db-query', 'media', 'image', 'export', 'context-transfer'];
   const OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'truthy', 'exists'];
   const ACTIVE = { queued: 1, running: 1, waiting: 1 };
-  // kind, palette label, worker class (the dot)
-  const PALETTE = [['model', 'Model call', 'Thinking'], ['transform', 'Transform', 'Doing'], ['http', 'HTTP call', 'Doing'], ['calc', 'Calculate', 'Calculating'], ['branch', 'Branch', 'control'], ['guardrail', 'Guardrail check', 'control'], ['approval', 'Approval', 'control'], ['wait', 'Wait', 'control'], ['tool', 'Tool or MCP call', 'Doing']];
-  const CLS = { trigger: 'control', model: 'Thinking', transform: 'Doing', http: 'Doing', calc: 'Calculating', branch: 'control', guardrail: 'control', approval: 'control', wait: 'control', tool: 'Doing' };
+  // kind: palette label, worker class (the dot). The two palette groups follow the board; the board's remaining
+  // proposals (skill step, script, media preset, query, plugin action) are not offered: the server has no such kinds.
+  const KINDS = { trigger: ['Trigger', 'control'], model: ['Model call', 'Thinking'], transform: ['Transform', 'Doing'], branch: ['Branch', 'control'], guardrail: ['Guardrail check', 'control'], approval: ['Approval', 'control'], http: ['HTTP call', 'Doing'], calc: ['Calculate', 'Calculating'], wait: ['Wait', 'control'], tool: ['Tool or MCP call', 'Doing'], record: ['Record', 'Doing'], notify: ['Notify', 'Doing'], webhook: ['Webhook', 'Doing'], sub: ['Sub-workflow', 'Doing'], agent: ['Agent run', 'Thinking'], map: ['Map (fan-out)', 'control'], loop: ['Loop (bounded)', 'control'] };
+  const PALETTE = ['model', 'transform', 'branch', 'guardrail', 'approval', 'http', 'calc', 'wait', 'tool', 'record', 'notify', 'webhook'].map((k) => [k, KINDS[k][0], KINDS[k][1]]);
+  const PALETTE_WF2 = ['sub', 'agent', 'map', 'loop'].map((k) => [k, KINDS[k][0], KINDS[k][1]]);
+  const CLS = Object.fromEntries(Object.keys(KINDS).map((k) => [k, KINDS[k][1]]));
+  // Kinds a retry policy makes no sense for (server/src/workflows/retry.ts), and kinds that write.
+  const NO_RETRY = { trigger: 1, approval: 1, wait: 1, branch: 1, sub: 1, agent: 1, map: 1, loop: 1 };
+  const WRITES = { record: 1, notify: 1, webhook: 1 };
+  const host = (u) => String(u || '').replace(/^https?:\/\//, '').split(/[/?#]/)[0];
+  /** `Bearer vault:apps/erp#token` as its parts, for the vault reference editor. */
+  function vaultParts(v) {
+    const m = /^((Bearer|Basic|Token) )?vault:([^#\s]+)#(\S+)$/.exec(v || '');
+    return m ? { scheme: m[2] || 'raw', path: m[3], key: m[4] } : { scheme: v ? 'literal' : 'none', path: '', key: '' };
+  }
+  const authOf = (c) => { const h = c.headers || {}; const k = Object.keys(h).find((x) => x.toLowerCase() === 'authorization'); return k ? h[k] : ''; };
   const clsPill = (c) => (c === 'control' ? UI.pill('control', '') : UI.pill(c, 'outline'));
   const statusPill = (s) => (!s ? '' : UI.pill(s, s === 'passed' ? 'ok' : s === 'running' || s === 'waiting on approval' || s === 'waiting' ? 'info' : s === 'blocked' || s === 'failed' ? 'danger' : s === 'skipped' ? 'outline' : ''));
   const runPill = (s) => UI.pill(s, s === 'succeeded' ? 'ok' : s === 'waiting on approval' || s === 'running' || s === 'waiting' || s === 'queued' ? 'info' : s === 'failed' || s === 'rejected' ? 'danger' : s === 'cancelled' ? 'outline' : '');
@@ -54,8 +71,8 @@
   function subOf(n) {
     const c = n.config || {};
     switch (n.kind) {
-      case 'trigger': return c.source === 'api' ? 'API or console' : 'manual from the console';
-      case 'model': return 'profile ' + (c.profile || 'not set') + (c.format === 'json' ? ', JSON schema' : ', text');
+      case 'trigger': return c.source === 'api' ? 'API or console' : c.source === 'event' ? 'event ' + (c.event || 'not set') : c.source === 'schedule' ? (c.cron ? 'cron ' + c.cron + ' UTC' : 'an app\'s schedule trigger') : c.source === 'record' ? 'an app\'s record trigger' : 'manual from the console';
+      case 'model': return 'profile ' + (c.profile || 'not set') + (c.skills && c.skills.length ? ' + skill ' + c.skills.join(', ') : c.format === 'json' ? ', JSON schema' : ', text');
       case 'transform': return 'fields ' + Object.keys(c.fields || {}).join(', ');
       case 'branch': return c.left + ' ' + c.op + (c.right != null && c.op !== 'truthy' && c.op !== 'exists' ? ' ' + c.right : '');
       case 'guardrail': return 'checkpoint ' + (c.checkpoint || 'context');
@@ -64,6 +81,13 @@
       case 'calc': return 'calc ' + (c.expression || '');
       case 'wait': return 'timer ' + dur(c.ms || 0);
       case 'tool': return (c.tool || 'no tool') + (c.args && typeof c.args === 'object' ? ', ' + Object.keys(c.args).length + ' arguments' : '');
+      case 'record': return (c.action || 'create') + ' ' + (c.entity || 'entity not set') + (c.action === 'transition' && c.to ? ' → ' + c.to : '');
+      case 'notify': return 'notify ' + ((c.users || []).concat((c.roles || []).map((r) => 'role ' + r)).join(', ') || 'nobody yet') + (c.email ? ', email' : '');
+      case 'webhook': return 'signed POST ' + (host(c.url) || 'no endpoint');
+      case 'sub': return 'workflow ' + (c.workflow || 'not set') + (c.version ? ' v' + c.version : '');
+      case 'agent': return 'agent ' + (c.agent || 'not set') + ', awaited';
+      case 'map': return 'map over ' + (c.over || '…') + ', ' + (c.maxParallel || 10) + ' at once';
+      case 'loop': return 'up to ' + (c.max || 5) + ' iterations' + (c.while ? ' while ' + c.while.left + ' ' + c.while.op : '');
       default: return '';
     }
   }
@@ -78,15 +102,44 @@
       guardrail: { checkpoint: 'context', text: '{{input}}', approverRole: 'workflow-admin' },
       approval: { role: 'workflow-admin', timeoutMs: 24 * 3600000, show: '' },
       wait: { ms: 60000 },
-      tool: { tool: (st.tools && st.tools[0] && st.tools[0].name) || '', approverRole: 'workflow-admin' }
+      tool: { tool: (st.tools && st.tools[0] && st.tools[0].name) || '', approverRole: 'workflow-admin' },
+      record: { action: 'create', app: (st.apps && st.apps[0] && st.apps[0].name) || '', entity: '', values: {} },
+      notify: { users: [], roles: ['workflow-admin'], title: 'A workflow run needs a look', body: '', email: false },
+      webhook: { url: 'https://hooks.internal/workflows', event: 'workflow.webhook' },
+      sub: { workflow: ((st.callees && st.callees.workflows || []).find((w) => !st.wf || w.id !== st.wf.id) || {}).name || '' },
+      agent: { agent: ((st.callees && st.callees.agents || [])[0] || {}).name || '' },
+      map: { over: '{{input.items}}', profile, prompt: 'Summarise {{item}} in one sentence.', maxParallel: 10, maxItems: 200, as: 'results' },
+      loop: { profile, prompt: 'Improve this draft: {{last}}', max: 5 }
     }[kind] || {};
   }
 
   // ---------- data ----------
   function loadList() {
     const st = S();
-    return Promise.all([App.get('/api/workflows'), App.get('/api/workflow-approvals'), App.can('chat:read') ? App.get('/api/chat/profiles').catch(() => []) : Promise.resolve([]), App.get('/api/workflow-tools').catch(() => [])])
-      .then(([list, approvals, profiles, tools]) => { Object.assign(st, { list, approvals, profiles, tools, loaded: true, loadError: null }); });
+    const opt = (perm, url, pick) => (App.can(perm) ? App.get(url).then(pick || ((x) => x)).catch(() => null) : Promise.resolve(null));
+    return Promise.all([App.get('/api/workflows'), App.get('/api/workflow-approvals'), App.can('chat:read') ? App.get('/api/chat/profiles').catch(() => []) : Promise.resolve([]), App.get('/api/workflow-tools').catch(() => []),
+      App.get('/api/workflow-callees').catch(() => null), opt('records:read', '/api/apps', (x) => x.apps), opt('secrets:read', '/api/vault/kv', (x) => x.secrets), opt(['workflows:manage', 'webhooks:manage', 'plugins:manage'], '/api/events/catalogue')])
+      .then(([list, approvals, profiles, tools, callees, apps, vault, catalogue]) => { Object.assign(st, { list, approvals, profiles, tools, callees: callees || { workflows: [], agents: [], skills: [], limits: {} }, apps, vault, catalogue, appDetail: st.appDetail || {}, loaded: true, loadError: null }); });
+  }
+  /** An app's entities and forms, for the record step and approval forms (fetched once per app). */
+  function loadApp(ref) {
+    const st = S(); st.appDetail = st.appDetail || {};
+    if (!ref || st.appDetail[ref] || !App.can('records:read')) return;
+    const app = (st.apps || []).find((a) => a.id === ref || a.name === ref);
+    if (!app) return;
+    st.appDetail[ref] = { loading: true };
+    App.get('/api/apps/' + enc(app.id)).then((d) => { st.appDetail[ref] = d; st.appDetail[app.id] = d; st.appDetail[app.name] = d; schedule(); }).catch(() => { st.appDetail[ref] = { failed: true }; schedule(); });
+  }
+  /** What the lower tabs show: the own trigger and callers, and dead letters (workflow admins). */
+  function loadTab(tab) {
+    const st = S(); if (!st.wfId) return;
+    const id = st.wfId;
+    if (tab === 'callers') {
+      Promise.all([App.get('/api/workflows/' + enc(id) + '/triggers?limit=20').catch(() => null), App.get('/api/workflows/' + enc(id) + '/callers').catch(() => null)])
+        .then(([t, c]) => { if (st.wfId === id) { st.triggerView = t; st.callers = c; st.tabLoaded = 'callers:' + id; schedule(); } });
+    } else if (tab === 'dead' && App.can('workflows:manage')) {
+      App.get('/api/workflow-dead-letters?workflow=' + enc(id)).then((d) => { if (st.wfId === id) { st.dead = d.items; st.tabLoaded = 'dead:' + id; schedule(); } }).catch(() => { st.dead = []; st.tabLoaded = 'dead:' + id; schedule(); });
+    } else st.tabLoaded = tab + ':' + id;
   }
   function loadWorkflow(id, keepDraft) {
     const st = S();
@@ -156,7 +209,7 @@
         if (d.workflowId !== st.wfId) return;
         const r = (st.runs || []).find((x) => x.id === d.runId);
         if (r) { r.state = d.state; r.error = d.error; } else loadRuns();
-        if (!ACTIVE[d.state]) loadRuns();
+        if (!ACTIVE[d.state]) { loadRuns(); st.tabLoaded = null; st.tabLoading = null; }
         if (st.run && st.run.id === d.runId) { st.run.state = d.state; st.run.error = d.error; refreshRunSoon(); }
         schedule();
       }),
@@ -183,7 +236,7 @@
   window.addEventListener('hashchange', () => { if (App.parse().route !== 'workflows') detach(); });
 
   App.register({
-    id: 'workflows', title: 'Workflows', live: true, summary: 'Graph editor, typed ports, versions, triggers, run history, replay, approvals',
+    id: 'workflows', title: 'Workflows', live: true, summary: 'Graph editor on every server step kind, typed ports, event and schedule triggers, callers, retries and failure edges, versions and bundles, run history, replay, approvals, dead letters',
     crumb(st) { return ['Workflows'].concat(st.wf ? [st.wf.name, st.run ? 'run ' + shortId(st.run.id) : st.wf.publishedVersion && !st.wf.dirty && !st.unsaved ? 'v' + st.wf.publishedVersion + ' published' : 'draft'] : []); },
     label: (st) => (st.wf ? st.wf.label : null),
     commands: [{ label: 'Dry run the open workflow', sub: 'Workflows', run(app) { app.stateFor('workflows').autoRun = true; app.render(); } }],
@@ -204,6 +257,21 @@
         const a = (st.approvals || [])[0];
         if (a) { st.wfId = a.workflowId; st.wf = null; st.draft = null; st.runId = a.runId; st.run = null; ctx.rerender(); return; }
         ctx.toast('<span>No run is waiting on an approval. A run that reaches an Approval step pauses without holding a worker until someone with the role decides.</span>', '', 7000);
+      } },
+      { title: 'Failed run in the dead letters', tone: 'warn', text: 'A run that fails for good after its retries, with no on-failure edge to take, is a dead letter; a workflow admin redrives it from the failed step.', apply(ctx) {
+        const st = ctx.state;
+        if (!App.can('workflows:manage')) { ctx.toast('<span>Dead letters are for workflow admins (workflows:manage).</span>', '', 7000); return; }
+        st.tab = 'dead'; st.tabLoaded = null; st.tabLoading = null; st.runId = null; st.run = null; ctx.rerender();
+      } },
+      { title: 'Vault reference refused at save (403)', tone: 'danger', text: 'An HTTP step whose Authorization names a secret the saver cannot read is refused at save with step vault-policy; a literal credential is refused with 400.', apply(ctx) {
+        const st = ctx.state; const n = st.draft && st.draft.nodes.find((x) => x.kind === 'http');
+        if (n) { st.runId = null; st.run = null; st.sel = n.id; ctx.rerender(); }
+        ctx.toast('<span>Authorization takes a vault reference (vault:path#key, optionally after Bearer, Basic or Token). Saving checks that you may read the secret; a secret you cannot read is refused with 403, a literal credential with 400.</span>', '', 8000);
+      } },
+      { title: 'Delete refused: still in use', tone: 'danger', text: 'Deleting a workflow a published agent lists, or another published workflow runs, is refused (409 Still in use). The used-by view names every agent, workflow tool and workflow step that references it.', apply(ctx) {
+        const st = ctx.state;
+        if (!App.can('workflows:manage')) { ctx.toast('<span>Deleting workflows is for workflow admins (workflows:manage).</span>', '', 7000); return; }
+        st.openUsedBy = 'delete-blocked'; ctx.rerender();
       } },
       { title: 'Keyboard operation', tone: 'neutral', text: 'Arrow keys move between nodes, Enter opens the inspector, C starts a connection from the selected port.', apply(ctx) { ctx.state.kbd = true; ctx.rerender(); const c = ctx.$('.wf-canvas'); if (c) c.focus(); } }
     ],
@@ -285,7 +353,7 @@
       const edges = graph.edges.filter((e) => byId(e.from) && byId(e.to)).map((e) => {
         const iss = edgeIssue(e);
         const skipped = run && status[e.to] === 'skipped';
-        return Object.assign({}, e, { label: iss ? (iss.code === 'cycle' ? 'cycle' : iss.code === 'schema' ? 'schema mismatch' : iss.code) : e.branch || '', tone: iss ? 'danger' : '', dashed: !!iss || skipped, cycle: iss && iss.code === 'cycle' && byId(e.to).y <= byId(e.from).y });
+        return Object.assign({}, e, { label: iss ? (iss.code === 'cycle' ? 'cycle' : iss.code === 'schema' ? 'schema mismatch' : iss.code) : e.branch === 'failure' ? 'on failure' : e.branch || '', tone: iss ? 'danger' : e.branch === 'failure' ? 'warn' : '', dashed: !!iss || skipped || e.branch === 'false', dotted: !iss && e.branch === 'failure', cycle: iss && iss.code === 'cycle' && byId(e.to).y <= byId(e.from).y });
       });
       const canvasW = Math.max(700, nodes.reduce((m, n) => Math.max(m, n.x + W + 40), 0));
       const canvasH = Math.max(560, nodes.reduce((m, n) => Math.max(m, n.y + H + 40), 0));
@@ -299,8 +367,8 @@
       };
       const labelPos = (e) => { const a = byId(e.from), b = byId(e.to); if (e.cycle) return [b.x + W / 2 + 24, Math.min(a.y, b.y) - 18]; if (Math.abs(b.y - a.y) < 2) return [(b.x > a.x ? a.x : b.x) + W + 4, a.y + H / 2 - 8]; if (Math.abs(b.x - a.x) < 2) return [a.x + W / 2 + 6, (b.y > a.y ? a.y + H : b.y + H) + 16]; return [a.x + W / 2 + 8, b.y + H / 2 - 8]; };
       const svg = '<svg width="' + canvasW + '" height="' + canvasH + '" viewBox="0 0 ' + canvasW + ' ' + canvasH + '" aria-hidden="true" style="position:absolute;left:0;top:0"><defs><marker id="wf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="var(--meter)"></path></marker><marker id="wf-arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="var(--danger-fg)"></path></marker></defs>'
-        + edges.map((e) => '<path d="' + path(e) + '" fill="none" stroke="' + (e.tone === 'danger' ? 'var(--danger-fg)' : 'var(--meter)') + '" stroke-width="' + (e.tone === 'danger' ? 2 : 1.5) + '"' + (e.dashed ? ' stroke-dasharray="4 4"' : '') + ' marker-end="url(#' + (e.tone === 'danger' ? 'wf-arrow-d' : 'wf-arrow') + ')"></path>').join('')
-        + edges.filter((e) => e.label).map((e) => { const p = labelPos(e); return '<text x="' + p[0] + '" y="' + p[1] + '" font-size="10" fill="' + (e.tone === 'danger' ? 'var(--danger-fg)' : 'var(--muted)') + '" font-family="inherit">' + esc(e.label) + '</text>'; }).join('') + '</svg>';
+        + edges.map((e) => '<path d="' + path(e) + '" fill="none" stroke="' + (e.tone === 'danger' ? 'var(--danger-fg)' : e.tone === 'warn' ? 'var(--warn-fg)' : 'var(--meter)') + '" stroke-width="' + (e.tone === 'danger' ? 2 : 1.5) + '"' + (e.dotted ? ' stroke-dasharray="2 3"' : e.dashed ? ' stroke-dasharray="4 4"' : '') + ' marker-end="url(#' + (e.tone === 'danger' ? 'wf-arrow-d' : 'wf-arrow') + ')"></path>').join('')
+        + edges.filter((e) => e.label).map((e) => { const p = labelPos(e); return '<text x="' + p[0] + '" y="' + p[1] + '" font-size="10" font-weight="600" fill="' + (e.tone === 'danger' ? 'var(--danger-fg)' : e.tone === 'warn' ? 'var(--warn-fg)' : 'var(--muted)') + '" font-family="inherit">' + esc(e.label) + '</text>'; }).join('') + '</svg>';
       const nodeHtml = nodes.map((n) => {
         const bad = issuesOf(n.id).some((x) => !x.warning) || status[n.id] === 'blocked' || status[n.id] === 'failed';
         return '<button type="button" class="wf-node' + (sel && n.id === sel.id ? ' sel' : '') + (bad ? ' danger' : '') + (st.connectFrom === n.id ? ' connecting' : '') + (editable ? ' movable' : '') + '" data-node="' + esc(n.id) + '" style="left:' + n.x + 'px;top:' + n.y + 'px"><span class="wf-port in"></span><span class="wf-port out"></span><div class="t">' + esc(n.title) + '</div><div class="s">' + esc(subOf(n)) + '</div><div class="hstack gap4">' + clsPill(CLS[n.kind]) + statusPill(status[n.id]) + '</div></button>';
@@ -321,7 +389,7 @@
 
       const approvalPanel = (a, stepTitle) => {
         const shown = a.shown == null ? 'Withheld: the run is above your clearance.' : typeof a.shown === 'string' ? a.shown : json(a.shown);
-        return UI.panel('Waiting on approval', UI.kv([['Step', esc(stepTitle)], ['Who must approve', 'anyone with the <b>' + esc(a.role) + '</b> role' + (run && run.mode === 'dry' ? ', or you: it is your dry run' : '')], ['Waiting since', esc(when(a.createdAt))], ['Times out', esc(when(a.dueAt)) + ', then the run fails'], ['Data they will see', UI.ctx('shown to the approver', shown || '(nothing configured)', run ? run.label : wf.label)]], 1)
+        return UI.panel('Waiting on approval', UI.kv([['Step', esc(stepTitle)], ['Who must approve', 'anyone with the <b>' + esc(a.role) + '</b> role' + (run && run.mode === 'dry' ? ', or you: it is your dry run' : '')], ['Waiting since', esc(when(a.createdAt))], ['Times out', esc(when(a.dueAt)) + ', then the run fails'], ['Data they will see', UI.ctx('shown to the approver', shown || '(nothing configured)', run ? run.label : wf.label)]].concat(a.form ? [['Form', esc(a.form.title || a.form.form) + ' (' + esc(a.form.app) + '), ' + (a.form.fields || []).length + ' fields']] : []).concat(a.answers ? [['Answers', '<span class="mono">' + esc(JSON.stringify(a.answers)) + '</span>']] : []), 1)
           + (a.canDecide ? '<div class="hstack">' + UI.btn('Reject', { size: 'sm', attrs: 'data-reject="' + esc(a.id) + '"' }) + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-approve="' + esc(a.id) + '"' }) + '</div>' : '<div class="muted" style="font-size:12px">You do not hold the ' + esc(a.role) + ' role, so you cannot decide this step.</div>'), { cls: 'tint' });
       };
 
@@ -341,6 +409,8 @@
             if (s.error) return esc(s.error);
             if (d.reused) return 'reused the checkpoint of ' + esc(shortId(d.reused));
             if (s.state === 'running') return 'running' + (s.attempts > 1 ? ', attempt ' + s.attempts : '');
+            if (s.state === 'waiting' && d.retryAt) return 'retry ' + esc(d.retries || 1) + ' at ' + esc(when(d.retryAt)) + (d.lastError ? ' after: ' + esc(d.lastError) : '');
+            if (s.state === 'waiting' && (n.kind === 'sub' || n.kind === 'agent' || n.kind === 'map' || n.kind === 'loop')) return 'waiting on ' + (run.children || []).filter((k) => k.step === n.id && ACTIVE[k.state]).length + ' child run(s)';
             if (s.state === 'waiting') return n.kind === 'wait' ? 'waiting until ' + esc(when(s.resumeAt || d.resumeAt)) : 'waiting on ' + esc((pending.find((a) => a.nodeId === n.id) || {}).role || 'an approver');
             if (d.mocked) return 'mocked in the dry run';
             if (n.kind === 'model') return (d.tokens != null ? d.tokens.toLocaleString() + ' tokens, ' : '') + dur(d.ms || 0) + (d.model ? ', ' + esc(d.model) : '');
@@ -350,6 +420,16 @@
             if (n.kind === 'guardrail') return 'guardrails: ' + esc(d.action || 'allow');
             if (n.kind === 'tool') return esc(d.tool || 'tool') + ' ' + esc(d.version || '') + (d.approvedBy ? ', approved at ' + esc(d.approvedBy) : '') + (d.toolMs != null ? ', ' + dur(d.toolMs) : '') + (d.warning ? ', ' + esc(d.warning) : '');
             if (n.kind === 'approval' && d.approvedBy) return 'approved';
+            const o = s.output && typeof s.output === 'object' ? s.output : {};
+            if (n.kind === 'notify' && o.notified != null) return o.notified + ' told, ' + (o.skipped || 0) + ' skipped';
+            if (n.kind === 'webhook' && o.delivery) return 'delivery ' + esc(String(o.delivery).slice(-6)) + ' queued';
+            if (n.kind === 'record' && o.id) return 'record ' + esc(String(o.id).slice(-6)) + (o.state ? ', ' + esc(o.state) : '');
+            if (n.kind === 'sub' && o.run) return 'child run ' + esc(shortId(o.run)) + ' finished';
+            if (n.kind === 'agent' && o.run) return 'agent run ' + esc(String(o.run).slice(-6)) + ' finished';
+            if (n.kind === 'map' && o.count != null) return o.count + ' items';
+            if (n.kind === 'loop' && o.iterations != null) return o.iterations + ' iterations, stopped at ' + esc(o.stopped || 'max');
+            if (n.kind === 'model' && Array.isArray(d.toolCalls) && d.toolCalls.length) return (d.tokens != null ? d.tokens.toLocaleString() + ' tokens, ' : '') + d.toolCalls.length + ' tool call(s) through ' + esc((d.skills || []).join(', '));
+            if (s.detail && s.detail.failedEdge) return 'failed; took the on-failure edge';
             return s.state + (d.ms != null ? ', ' + dur(d.ms) : '');
           };
           const replayable = nodes.filter((n) => n.kind !== 'trigger' && stepOf(n.id));
@@ -357,6 +437,11 @@
             + '<div class="hstack wrap gap6">' + runPill(rs) + UI.label(run.label, { sm: true }) + (run.mode === 'dry' ? UI.pill('dry run', 'outline') : UI.pill('v' + run.version, 'outline')) + '</div>'
             + UI.kv([['Trigger', esc(trig)], ['Started', esc(when(run.startedAt || run.createdAt))], ['Duration', run.startedAt ? dur((run.finishedAt || Date.now()) - run.startedAt) + (run.finishedAt ? '' : ' so far') : 'queued'], ['Runs as', 'delegated from ' + esc(run.createdByName || 'the person who started it')], ['Engine', 'job queue, ' + run.steps.filter((s) => s.state === 'passed').length + ' checkpoints'], ['Tokens', (run.tokens || 0).toLocaleString()]], 1)
             + (run.error && !pending.length ? UI.notice(esc(run.error), run.state === 'cancelled' ? 'warn' : 'danger') : '')
+            + (run.caller || run.chain || (run.children || []).length || (run.items || []).length ? '<div class="eyebrow">Chain</div>' + UI.kv([].concat(run.caller ? [['Called by', run.caller.kind === 'workflow-run' ? '<a href="#" data-openwfrun="' + esc(run.caller.id) + '">workflow run ' + esc(shortId(run.caller.id)) + '</a>' + (run.caller.node ? ', step ' + esc(run.caller.node) : '') : run.caller.kind === 'agent-run' ? '<a href="#" data-goagentrun="' + esc(run.caller.id) + '">agent run ' + esc(String(run.caller.id).slice(-6)) + '</a>' : esc(run.caller.kind + ' ' + run.caller.id)]] : [])
+              .concat(run.chain ? [['Chain', '<span class="mono">' + esc(String(run.chain.id).slice(-8)) + '</span>' + (run.caller ? '' : ', the root') + ' ' + UI.btn('Chain tree', { size: 'xs', kind: 'ghost', icon: 'branch', attrs: 'data-gochain="' + esc(run.chain.id) + '" data-chainnode="' + esc(run.chain.node || '') + '"' })]] : [])
+              .concat((run.children || []).map((k) => [esc((byId(k.step) || {}).title || k.step || 'child'), (k.kind === 'workflow-run' ? '<a href="#" data-openwfrun="' + esc(k.id) + '">workflow run ' + esc(shortId(k.id)) + '</a>' : '<a href="#" data-goagentrun="' + esc(k.id) + '">agent ' + esc(k.agent || '') + '</a>') + ' ' + runPill(k.state) + (k.error ? ' <span class="muted">' + esc(k.error) + '</span>' : '')]))
+              .concat(Object.keys((run.items || []).reduce((m, i) => { m[i.nodeId] = 1; return m; }, {})).map((id) => { const its = run.items.filter((i) => i.nodeId === id); const ok = its.filter((i) => i.state === 'passed').length; const bad = its.find((i) => i.state === 'failed'); return [esc((byId(id) || {}).title || id), ok + ' of ' + its.length + ' items passed' + (bad ? ', item ' + bad.index + ' failed: ' + esc(bad.error || '') : '')]; })), 1) : '')
+            + (run.held || []).filter((h) => h.at && h.at.run !== run.id).map((h) => UI.notice('<b>Held down the chain, depth ' + esc(String(h.path && h.path.length ? h.path[h.path.length - 1].depth : '')) + '.</b> <span class="mono">' + esc(h.tool || 'a call') + '</span> waits on ' + esc(h.approvers || 'an approver') + '; this run waits with it.<div class="wf-path" style="margin-top:6px;font-size:12px;overflow-wrap:anywhere">' + (h.path || []).map((x) => esc(x.name || x.kind)).join(' › ') + '</div>', 'info', UI.btn(h.canDecide ? 'Decide in the chain tree' : 'Open the chain tree', { size: 'sm', attrs: 'data-gochain="' + esc(run.chain ? run.chain.id : '') + '" data-chainnode="' + esc(h.node) + '"' }))).join('')
             + pending.map((a) => approvalPanel(a, (byId(a.nodeId) || {}).title || a.nodeId)).join('')
             + (retried.length ? UI.notice('The worker stopped during <b>' + esc(retried.map((s) => (byId(s.nodeId) || {}).title || s.nodeId).join(', ')) + '</b>. The run resumed after its last checkpoint; completed steps were not run again.', 'warn') : '')
             + (reused.length ? UI.notice(reused.length + ' step' + (reused.length === 1 ? '' : 's') + ' reused the checkpoints of ' + esc(shortId(run.replayOf)) + '; the rest ran again.', 'info') : '')
@@ -375,15 +460,50 @@
         const profiles = (st.profiles || []).map((p) => ({ value: p.name, label: p.name + ' · ' + p.label }));
         if (c.profile && !profiles.some((p) => p.value === c.profile)) profiles.unshift({ value: c.profile, label: c.profile + ' (not published or not visible)' });
         let fields = '';
-        if (n.kind === 'trigger') fields = UI.field('Trigger', cfgSel('source', [{ value: 'manual', label: 'manual from the console' }, { value: 'api', label: 'API or console' }], c.source || 'manual'), 'Runs start from the console or POST /api/workflows/:id/runs');
+        const cat = st.catalogue;
+        const eventOpts = cat ? (cat.groups || []).map((g) => ({ value: g.pattern, label: g.pattern + ' (group)' })).filter((g) => g.value !== '*').concat((cat.types || []).map((t) => ({ value: t.type, label: t.type + (t.status === 'reserved' ? ' (reserved)' : '') }))) : [];
+        if (c.event && !eventOpts.some((o) => o.value === c.event)) eventOpts.unshift({ value: c.event, label: c.event });
+        const action = (kind) => {
+          // What a map runs for each item, or a loop each iteration: a model prompt, a registry tool or a workflow.
+          const ak = c.tool != null ? 'tool' : c.workflow != null ? 'workflow' : 'model';
+          const wfs = ((st.callees || {}).workflows || []).filter((w) => w.id !== wf.id).map((w) => ({ value: w.name, label: w.name + ' v' + w.version }));
+          if (c.workflow && !wfs.some((w) => w.value === c.workflow)) wfs.unshift({ value: c.workflow, label: c.workflow + ' (not published here)' });
+          const tls = (st.tools || []).map((x) => ({ value: x.name, label: x.name + ' · ' + x.sideEffect }));
+          if (c.tool && !tls.some((x) => x.value === c.tool)) tls.unshift({ value: c.tool, label: c.tool + ' (not published here)' });
+          return UI.field(kind === 'map' ? 'Each item runs' : 'Each iteration runs', UI.select([{ value: 'model', label: 'a model prompt' }, { value: 'tool', label: 'a registry tool' }, { value: 'workflow', label: 'a published workflow' }], ak, 'data-action' + ro))
+            + (ak === 'model' ? '<div class="grid2" style="gap:10px">' + UI.field('Profile', profiles.length ? cfgSel('profile', profiles, c.profile) : cfgIn('profile', c.profile)) + UI.field('Answer', cfgSel('format', [{ value: 'text', label: 'text' }, { value: 'json', label: 'JSON' }], c.format || 'text')) + '</div>' + UI.field('Prompt', cfgTa('prompt', c.prompt, 3), kind === 'map' ? 'Reads {{item}} and {{index}}' : 'Reads {{iteration}}, {{last}} and {{results}}') : '')
+            + (ak === 'tool' ? UI.field('Tool', cfgSel('tool', [{ value: '', label: 'choose a tool' }].concat(tls), c.tool || ''), 'A write tool needs an Approval step before this one on every path: items never pause one by one') + UI.field('Arguments', cfgTa('args', lines(c.args), 2, 'query: {{item}}'), 'One per line: name: template. Empty: ' + (kind === 'map' ? 'the item itself' : 'the step\'s input')) : '')
+            + (ak === 'workflow' ? UI.field('Workflow', cfgSel('workflow', [{ value: '', label: 'choose a workflow' }].concat(wfs), c.workflow || ''), 'Runs as a child in this run\'s chain; default input ' + (kind === 'map' ? '{item, index}' : '{iteration, last, results}')) : '');
+        };
+        if (n.kind === 'trigger') fields = UI.field('Trigger', cfgSel('source', [{ value: 'manual', label: 'manual from the console' }, { value: 'api', label: 'API or console' }, { value: 'event', label: 'event from the catalogue' }, { value: 'schedule', label: 'schedule (UTC cron)' }, { value: 'record', label: 'record (an app\'s record trigger)' }], c.source || 'manual'), c.source === 'event' || c.source === 'schedule' ? 'Starts by itself once a version is published, as the person who published it' : c.source === 'record' ? 'An app\'s record trigger (Apps → Triggers) starts it with the record as the input' : 'Runs start from the console or POST /api/workflows/:id/runs')
+          + (c.source === 'event' ? UI.field('Catalogue event', eventOpts.length ? cfgSel('event', [{ value: '', label: 'choose an event' }].concat(eventOpts), c.event || '') : cfgIn('event', c.event, { placeholder: 'file.uploaded' }), 'A type, or a group such as file.*. Only events naming this workflow\'s workspace and at or below its label start it; events of its own runs and chain never do.') : '')
+          + (c.source === 'schedule' ? UI.field('Cron (UTC)', cfgIn('cron', c.cron, { placeholder: '0 6 * * 1' }), 'Five fields. Each due time is claimed once across instances. Leave it empty when an app\'s schedule trigger starts the workflow.') : '')
+          + (c.source === 'record' ? '<div class="muted" style="font-size:12px">Record triggers live on the app: <a href="#" data-goapps>open Apps</a>. The run input is {event, app, entity, record, trigger}.</div>' : '');
         else if (n.kind === 'model') fields = UI.field('Profile', profiles.length ? cfgSel('profile', profiles, c.profile) : cfgIn('profile', c.profile), c.profile ? '<a href="#" data-goprofile="' + esc(c.profile) + '">Open profile</a>' : 'Published profiles only; the call goes through the gateway')
           + '<div class="grid2" style="gap:10px">' + UI.field('Think level', cfgSel('think', [{ value: '', label: 'profile default' }, 'off', 'low', 'medium', 'high'], c.think || '')) + UI.field('Answer', cfgSel('format', [{ value: 'text', label: 'text' }, { value: 'json', label: 'JSON (output schema)' }], c.format || 'text')) + '</div>'
-          + UI.field('Prompt template', cfgTa('prompt', c.prompt, 4), 'Reads {{input.…}} and {{steps.&lt;id&gt;.…}} of earlier steps');
+          + UI.field('Prompt template', cfgTa('prompt', c.prompt, 4), 'Reads {{input.…}} and {{steps.&lt;id&gt;.…}} of earlier steps')
+          + UI.field('Skills', (((st.callees || {}).skills || []).length || (c.skills || []).length ? '<div class="hstack wrap gap6">' + ((st.callees || {}).skills || []).map((k) => ({ name: k.name, sub: k.version })).concat((c.skills || []).filter((x) => !((st.callees || {}).skills || []).some((k) => k.name === x)).map((x) => ({ name: x, sub: 'not published here' }))).map((k) => { const on = (c.skills || []).indexOf(k.name) >= 0; return UI.chip(esc(k.name) + ' <span class="muted">' + esc(k.sub) + '</span>', on, 'data-skill="' + esc(k.name) + '"' + ro); }).join('') + '</div>' : '<div class="muted" style="font-size:12px">No skills are published to this workspace.</div>'), 'Up to 8. Their instructions join the system prompt and their tools are offered through the dispatcher; a write tool runs only after an Approval step on every path.');
         else if (n.kind === 'transform') fields = UI.field('Fields', cfgTa('fields', lines(c.fields), 3, 'summary: {{steps.summarise.text}}'), 'One per line: name: template');
         else if (n.kind === 'branch') fields = UI.field('Left', cfgIn('left', c.left)) + '<div class="grid2" style="gap:10px">' + UI.field('Operator', cfgSel('op', OPS, c.op)) + UI.field('Right', cfgIn('right', c.right, { placeholder: c.op === 'truthy' || c.op === 'exists' ? 'not used' : '' })) + '</div><div class="muted" style="font-size:12px">Edges out of a branch carry true or false; the other side is skipped.</div>';
         else if (n.kind === 'guardrail') fields = UI.field('Checkpoint', cfgSel('checkpoint', CHECKPOINTS, c.checkpoint || 'context')) + UI.field('Text to check', cfgTa('text', c.text, 2)) + UI.field('Approver when rules ask for one', cfgSel('approverRole', ROLES, c.approverRole || 'workflow-admin'), 'Block fails the step; redact passes the masked text on') + UI.field('Approval timeout', cfgIn('approvalTimeoutMs', Math.round((c.approvalTimeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. The run fails if nobody decides in time');
-        else if (n.kind === 'approval') fields = UI.field('Role', cfgSel('role', ROLES, c.role)) + UI.field('Timeout', cfgIn('timeoutMs', Math.round((c.timeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. The run fails if nobody decides in time') + UI.field('Data the approver sees', cfgTa('show', c.show, 2, '{{steps.summarise.text}}'));
-        else if (n.kind === 'http') fields = '<div class="grid2" style="gap:10px;grid-template-columns:90px 1fr">' + UI.field('Method', cfgSel('method', ['GET', 'POST', 'PUT'], c.method || 'GET')) + UI.field('URL', cfgIn('url', c.url)) + '</div>' + UI.field('Body', cfgTa('body', c.body, 2)) + UI.field('Headers', cfgTa('headers', lines(c.headers), 2, 'X-Request-Source: exprsn'), 'Content-Type, Accept and X- headers only') + '<div class="muted" style="font-size:12px">Internal hosts only: private addresses, never link-local or the internet. The host cannot come from a template.</div>';
+        else if (n.kind === 'approval') {
+          if (c.form) loadApp(c.form.app);
+          const fa = c.form ? (st.appDetail || {})[c.form.app] : null;
+          const apps = (st.apps || []).map((a) => ({ value: a.name, label: a.title || a.name }));
+          if (c.form && !apps.some((a) => a.value === c.form.app)) apps.unshift({ value: c.form.app, label: c.form.app + ' (not visible to you)' });
+          const forms = fa && fa.forms ? fa.forms.map((f) => ({ value: f.name, label: (f.title || f.name) + ' · ' + f.entity })) : [];
+          if (c.form && c.form.form && !forms.some((f) => f.value === c.form.form)) forms.unshift({ value: c.form.form, label: c.form.form });
+          fields = UI.field('Role', cfgSel('role', ROLES, c.role)) + UI.field('Timeout', cfgIn('timeoutMs', Math.round((c.timeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. The run fails if nobody decides in time') + UI.field('Data the approver sees', cfgTa('show', c.show, 2, '{{steps.summarise.text}}'))
+            + UI.field('Form the approver fills in', '<div class="grid2" style="gap:10px">' + UI.select([{ value: '', label: 'none: approve or reject' }].concat(apps), c.form ? c.form.app : '', 'data-formapp aria-label="App"' + ro) + (c.form ? UI.select([{ value: '', label: fa && fa.loading ? 'loading…' : 'choose a form' }].concat(forms), c.form.form || '', 'data-formname aria-label="Form"' + ro) : '') + '</div>', apps.length ? 'An app form: its answers, validated like a submission, become the output {…input, approved, by, answers}. Nothing is written to the app.' : 'Forms come from Apps; you need records:read to pick one.');
+        }
+        else if (n.kind === 'http') fields = '<div class="grid2" style="gap:10px;grid-template-columns:90px 1fr">' + UI.field('Method', cfgSel('method', ['GET', 'POST', 'PUT'], c.method || 'GET')) + UI.field('URL', cfgIn('url', c.url)) + '</div>' + UI.field('Body', cfgTa('body', c.body, 2)) + UI.field('Headers', cfgTa('headers', lines(Object.fromEntries(Object.keys(c.headers || {}).filter((k) => k.toLowerCase() !== 'authorization').map((k) => [k, c.headers[k]]))), 2, 'X-Request-Source: exprsn'), 'Content-Type, Accept and X- headers; Authorization below')
+          + (() => {
+            const a = vaultParts(authOf(c)); const vs = (st.vault || []).map((x) => ({ value: x.path, label: 'kv/' + x.path + ' · ' + x.label }));
+            if (a.path && !vs.some((x) => x.value === a.path)) vs.unshift({ value: a.path, label: 'kv/' + a.path });
+            return UI.field('Authorization from the vault', '<div class="grid2" style="gap:10px;grid-template-columns:100px 1fr">' + UI.select([{ value: 'none', label: 'none' }, 'Bearer', 'Basic', 'Token', { value: 'raw', label: 'as is' }], a.path ? a.scheme : 'none', 'data-vscheme aria-label="Scheme"' + ro) + (st.vault ? UI.select([{ value: '', label: 'choose a secret' }].concat(vs), a.path, 'data-vpath aria-label="Secret path"' + ro) : UI.input(a.path, { placeholder: 'apps/erp', attrs: 'data-vpath aria-label="Secret path"' + ro })) + '</div>' + UI.input(a.key, { placeholder: 'key, such as token', attrs: 'data-vkey aria-label="Key in the secret"' + ro }),
+              (a.scheme === 'literal' ? '<span style="color:var(--danger-fg)">A literal credential is refused at save.</span> ' : '') + (authOf(c) ? 'Sent as <span class="mono">' + esc(authOf(c)) + '</span>, resolved when the step runs as the run\'s owner. ' : '') + 'Saving checks you may read the secret (403 vault-policy otherwise).' + (App.can('secrets:read') ? ' <a href="#" data-govault>Vault</a>' : ''));
+          })()
+          + '<div class="muted" style="font-size:12px">Internal hosts only: private addresses, never link-local or the internet. The host cannot come from a template.</div>';
         else if (n.kind === 'calc') fields = UI.field('Expression', cfgTa('expression', c.expression, 2), 'Exact arithmetic; placeholders are filled first') + '<div class="muted" style="font-size:12px">Exact, deterministic; the result records the fraction and whether it is exact.</div>';
         else if (n.kind === 'wait') fields = UI.field('Duration', cfgIn('ms', Math.round((c.ms || 60000) / 1000), { type: 'number' }), 'Seconds. The run pauses without holding a worker');
         else if (n.kind === 'tool') {
@@ -399,6 +519,60 @@
             + UI.field('Approver before the call', cfgSel('approverRole', ROLES, c.approverRole || 'workflow-admin'), writes ? 'This is a ' + esc(t.sideEffect) + ' tool: unless an Approval step comes before it on every path, the run pauses for this role, then makes the call' : 'Used when the tool-call guardrail holds the call')
             + UI.field('Approval timeout', cfgIn('approvalTimeoutMs', Math.round((c.approvalTimeoutMs || 86400000) / 3600000), { type: 'number' }), 'Hours. When the step pauses for its approver, the run fails if nobody decides in time')
             + '<div class="muted" style="font-size:12px">Dry runs mock the result from the tool\'s output schema and call nothing.</div>';
+        } else if (n.kind === 'record') {
+          loadApp(c.app);
+          const apps = (st.apps || []).map((a) => ({ value: a.name, label: a.title || a.name }));
+          if (c.app && !apps.some((a) => a.value === c.app)) apps.unshift({ value: c.app, label: c.app + (st.apps ? ' (not visible to you)' : '') });
+          const ad = (st.appDetail || {})[c.app];
+          const ent = ad && ad.entities ? ad.entities.find((e) => e.name === c.entity || e.id === c.entity) : null;
+          const ents = ad && ad.entities ? ad.entities.map((e) => ({ value: e.name, label: e.title || e.name })) : [];
+          if (c.entity && !ents.some((e) => e.value === c.entity)) ents.unshift({ value: c.entity, label: c.entity });
+          const states = ent && ent.definition && ent.definition.states ? ent.definition.states.states.map((x) => x.name) : [];
+          const fieldNames = ent && ent.definition ? (ent.definition.fields || []).map((f) => f.name) : [];
+          fields = '<div class="grid2" style="gap:10px">' + UI.field('Action', cfgSel('action', ['create', 'update', 'transition'], c.action || 'create')) + UI.field('App', apps.length ? cfgSel('app', [{ value: '', label: 'choose an app' }].concat(apps), c.app || '') : cfgIn('app', c.app, { placeholder: 'crm' })) + '</div>'
+            + UI.field('Entity', ents.length ? cfgSel('entity', [{ value: '', label: 'choose an entity' }].concat(ents), c.entity || '') : cfgIn('entity', c.entity, { placeholder: ad && ad.loading ? 'loading…' : 'deal' }))
+            + (c.action !== 'create' ? UI.field('Record', cfgIn('record', c.record, { placeholder: '{{input.record.id}}' }), 'A template giving the record id') : '')
+            + (c.action === 'transition' ? UI.field('To state', states.length ? cfgSel('to', [{ value: '', label: 'choose a state' }].concat(states), c.to || '') : cfgIn('to', c.to, { placeholder: 'approved' }), 'Only a transition the entity lists; refused otherwise') : '')
+            + UI.field('Values', cfgTa('values', lines(c.values), 3, (fieldNames[0] || 'title') + ': {{steps.summarise.text}}'), 'One per line: field: template.' + (fieldNames.length ? ' Fields: ' + esc(fieldNames.join(', ')) : ''))
+            + '<div class="muted" style="font-size:12px">Writes as the run\'s owner (records:write). A new record is at least the run\'s label; writing a record below it blocks the step. Mocked in dry runs; never fires this workflow\'s own triggers.' + (App.can('records:read') ? ' <a href="#" data-goapps>Open Apps</a>' : '') + '</div>';
+        } else if (n.kind === 'notify') {
+          fields = UI.field('Users', cfgIn('users', (c.users || []).join(', '), { placeholder: '{{input.record.owner}}, mara.okafor' }), 'Comma-separated templates giving user ids or usernames')
+            + UI.field('Roles', '<div class="hstack wrap gap6">' + ROLES.map((r) => UI.chip(esc(r), (c.roles || []).indexOf(r) >= 0, 'data-nrole="' + esc(r) + '"' + ro)).join('') + '</div>')
+            + UI.field('Title', cfgIn('title', c.title)) + UI.field('Body', cfgTa('body', c.body, 2))
+            + '<div class="grid2" style="gap:10px">' + UI.field('Email', cfgSel('email', [{ value: 'false', label: 'in-app only' }, { value: 'true', label: 'in-app and email' }], String(!!c.email))) + UI.field('Opens', cfgIn('route', c.route, { placeholder: 'workflows?run=…' }), 'Console route; the run by default') + '</div>'
+            + '<div class="muted" style="font-size:12px">Only active users cleared for the step\'s label are told (members only, in a members-only workspace); the rest are skipped and counted. Output {notified, skipped}.</div>';
+        } else if (n.kind === 'webhook') {
+          fields = UI.field('Endpoint', cfgIn('url', c.url, { placeholder: 'https://hooks.internal/workflows' }), 'Fixed, no templates. Refused at save when the operator\'s or the tenant\'s outbound host rules do not allow it.')
+            + UI.field('Event type', cfgIn('event', c.event || 'workflow.webhook'), 'Under workflow., such as workflow.vendor.approved')
+            + UI.field('Body', cfgTa('body', typeof c.body === 'string' ? c.body : lines(c.body), 2, 'empty: the step\'s input'), 'One per line field: template, or one template; empty sends the step\'s input')
+            + '<div class="muted" style="font-size:12px">One delivery per run and step, signed with the tenant\'s Ed25519 webhook key, with the webhook path\'s retries and breaker. Output {webhook, delivery, event}; mocked in dry runs.</div>';
+        } else if (n.kind === 'sub') {
+          const wfs = ((st.callees || {}).workflows || []).filter((w) => w.id !== wf.id).map((w) => ({ value: w.name, label: w.name + ' v' + w.version + ' · ' + w.label }));
+          if (c.workflow && !wfs.some((w) => w.value === c.workflow)) wfs.unshift({ value: c.workflow, label: c.workflow + ' (not published here)' });
+          const callee = ((st.callees || {}).workflows || []).find((w) => w.name === c.workflow || w.id === c.workflow);
+          fields = UI.field('Workflow', cfgSel('workflow', [{ value: '', label: wfs.length ? 'choose a workflow' : 'no other workflow is published here' }].concat(wfs), c.workflow || ''), callee ? 'Takes <span class="mono">' + esc(fmtSchema(callee.input)) + '</span>' + (list.some((x) => x.id === callee.id) ? '. <a href="#" data-opensub="' + esc(callee.id) + '">Open it</a>' : '') : 'Published workflows of this workspace')
+            + '<div class="grid2" style="gap:10px">' + UI.field('Pinned version', cfgIn('version', c.version, { type: 'number', placeholder: callee ? 'v' + callee.version : 'published' })) + UI.field('Input', cfgTa('input', typeof c.input === 'string' ? c.input : lines(c.input), 2, 'period: {{input.period}}'), 'One per line field: template; empty: this step\'s input') + '</div>'
+            + '<div class="muted" style="font-size:12px">The child runs as this run\'s owner under the higher label, in this run\'s chain. When it waits on an approval, this step and the run wait; cancelling the run cancels it. Output {run, output}.</div>';
+        } else if (n.kind === 'agent') {
+          const ags = ((st.callees || {}).agents || []).map((a) => ({ value: a.name, label: a.name + ' ' + a.version + ' · ' + a.label }));
+          if (c.agent && !ags.some((a) => a.value === c.agent)) ags.unshift({ value: c.agent, label: c.agent + ' (not published here)' });
+          const ag = ((st.callees || {}).agents || []).find((a) => a.name === c.agent);
+          const b = c.budgets || {}; const bud = (k, label) => UI.field(label, UI.input(b[k] != null ? b[k] : '', { type: 'number', placeholder: ag && ag.budgets && ag.budgets[k] != null ? String(ag.budgets[k]) : 'agent\'s', attrs: 'data-budget="' + k + '"' + ro }));
+          fields = UI.field('Agent', cfgSel('agent', [{ value: '', label: ags.length ? 'choose an agent' : 'no agent is published here' }].concat(ags), c.agent || ''), ag && ag.description ? esc(ag.description) : 'Published registry agents')
+            + UI.field('Task', cfgTa('input', c.input, 2, 'Write meeting notes from {{steps.summary.text}}'), 'A template; empty: this step\'s input as JSON')
+            + '<div class="grid2" style="gap:10px">' + bud('steps', 'Steps') + bud('tokens', 'Tokens') + bud('wallSeconds', 'Seconds') + bud('toolCalls', 'Tool calls') + '</div>'
+            + '<div class="muted" style="font-size:12px">Runs as this run\'s owner under the agent\'s ceiling; the step waits without a worker and continues when the agent run ends. Output {run, text}.</div>';
+        } else if (n.kind === 'map') {
+          fields = UI.field('Over', cfgIn('over', c.over, { placeholder: '{{steps.frames.frames}}' }), 'A template rendering to a list') + action('map')
+            + '<div class="grid2" style="gap:10px">' + UI.field('At once', cfgIn('maxParallel', c.maxParallel, { type: 'number', placeholder: '10' }), '1 to 20') + UI.field('Most items', cfgIn('maxItems', c.maxItems, { type: 'number', placeholder: '200' }), 'A run\'s maps cover at most ' + (((st.callees || {}).limits || {}).maxItems || 200)) + '</div>'
+            + UI.field('Results field', cfgIn('as', c.as, { placeholder: 'results' }))
+            + '<div class="muted" style="font-size:12px">Each item is a checkpoint, so a map resumes without running finished items again; the first failing item fails the step.</div>';
+        } else if (n.kind === 'loop') {
+          const w = c.while || {};
+          fields = action('loop')
+            + UI.field('While', '<div class="grid2" style="gap:6px;grid-template-columns:1fr 90px 1fr">' + UI.input(w.left || '', { placeholder: '{{last.done}}', attrs: 'data-while="left" aria-label="While: left"' + ro }) + UI.select(OPS, w.op || 'ne', 'data-while="op" aria-label="While: operator"' + ro) + UI.input(w.right == null ? '' : String(w.right), { placeholder: 'true', attrs: 'data-while="right" aria-label="While: right"' + ro }) + '</div>', 'Checked before every iteration; empty: run until the most iterations')
+            + UI.field('Most iterations', cfgIn('max', c.max, { type: 'number', placeholder: '5' }), '1 to 40; each beyond the first counts toward the ' + L.maxSteps + '-step limit')
+            + '<div class="muted" style="font-size:12px">Output {iterations, last, results, stopped: condition | max}.</div>';
         }
         const mine = issuesOf(n.id);
         const schemaErr = mine.find((x) => x.code === 'schema');
@@ -407,7 +581,10 @@
         const schemaBox = (key, s, hint) => (editable ? UI.field(hint, UI.textarea(s ? json(s) : '', { rows: 3, placeholder: '{ "type": "object", "properties": { … }, "required": [ … ] }', attrs: 'data-schema="' + key + '"' + (schemaErr && key === 'input' ? ' style="border-color:var(--danger-fg)"' : '') })) : '')
           + '<pre class="codebox" style="' + (schemaErr && key === 'input' ? 'border-color:var(--danger-fg)' : '') + '">' + esc(s ? fmtSchema(s) : key === 'input' ? 'accepts whatever the steps before it send' : 'object') + '</pre>';
         const toolOf = n.kind === 'tool' ? (st.tools || []).find((x) => x.name === c.tool) : null;
-        const retry = n.kind === 'model' ? 'retried after a restart; the gateway falls back within the profile' : n.kind === 'calc' || n.kind === 'transform' || n.kind === 'branch' ? 'freely, deterministic' : n.kind === 'http' ? (c.method && c.method !== 'GET' ? 'a replay sends it again' : 'safe to repeat') : n.kind === 'tool' ? (toolOf && toolOf.sideEffect !== 'read' ? 'a replay calls it again, after a new approval' : 'safe to repeat') : 'not applicable';
+        const rp = n.retry;
+        const retry = rp ? rp.max + ' more attempt' + (rp.max === 1 ? '' : 's') + ', ' + (rp.backoff || 'exponential') + ' from ' + dur(rp.delayMs || 5000) : n.kind === 'model' ? 'retried after a restart; the gateway falls back within the profile' : n.kind === 'calc' || n.kind === 'transform' || n.kind === 'branch' ? 'freely, deterministic' : n.kind === 'http' ? (c.method && c.method !== 'GET' ? 'a replay sends it again' : 'safe to repeat') : n.kind === 'tool' ? (toolOf && toolOf.sideEffect !== 'read' ? 'a replay calls it again, after a new approval' : 'safe to repeat') : WRITES[n.kind] ? 'a replay sends it again' : 'not applicable';
+        const writes = WRITES[n.kind] || (n.kind === 'http' && c.method && c.method !== 'GET') || (toolOf && toolOf.sideEffect !== 'read');
+        const retryBox = NO_RETRY[n.kind] ? '' : UI.field('Retry after a failure', '<div class="grid2" style="gap:6px;grid-template-columns:1fr 1fr 1fr">' + UI.select([{ value: '0', label: 'no retry' }, { value: '1', label: '1 more' }, { value: '2', label: '2 more' }, { value: '3', label: '3 more' }, { value: '5', label: '5 more' }], String(rp ? rp.max : 0), 'data-retry="max" aria-label="Retries"' + ro) + (rp ? UI.input(Math.round((rp.delayMs || 5000) / 1000), { type: 'number', attrs: 'data-retry="delayMs" aria-label="First wait in seconds"' + ro }) + UI.select(['exponential', 'fixed'], rp.backoff || 'exponential', 'data-retry="backoff" aria-label="Backoff"' + ro) : '') + '</div>', rp ? 'Seconds before the first retry. The step waits without a worker; label and guardrail blocks and rejections are not retried.' + (writes ? ' This step writes: a retry may write twice.' : '') : 'A failing step fails the run unless an on-failure edge leaves it.');
         const outs = graph.edges.filter((e) => e.from === n.id);
         insp = '<div class="hstack"><div class="eyebrow grow">Step: ' + esc(n.title) + '</div>' + (editable ? UI.iconbtn('trash', n.kind === 'trigger' ? 'The trigger cannot be removed' : 'Remove step', { cls: 'sm ghost', attrs: 'data-remove' + (n.kind === 'trigger' ? ' disabled' : '') }) : '') + '</div>'
           + '<div class="hstack gap6">' + clsPill(CLS[n.kind]) + (CLS[n.kind] !== 'control' ? '<span class="muted" style="font-size:12px">' + (CLS[n.kind] === 'Thinking' ? 'gateway slot' : CLS[n.kind] === 'Calculating' ? 'calculation worker' : 'workflow worker') + '</span>' : '') + '</div>'
@@ -421,8 +598,9 @@
           + '<div class="grid2" style="gap:10px">' + UI.field('Ceiling', UI.select([{ value: '', label: 'none' }].concat(LABELS), n.ceiling || '', 'data-f="ceiling"' + ro), 'Highest label it may handle') + UI.field('Raises to', UI.select([{ value: '', label: 'nothing' }].concat(LABELS), n.raises || '', 'data-f="raises"' + ro), 'Label of data it brings in') + '</div>'
           + (n.kind !== 'trigger' ? UI.field('Step timeout', UI.input(n.timeoutMs ? Math.round(n.timeoutMs / 1000) : '', { type: 'number', placeholder: String(L.defaultStepTimeoutMs / 1000), attrs: 'data-f="timeoutMs"' + ro }), 'Seconds, up to ' + L.maxStepTimeoutMs / 60000 + ' minutes') : '')
           + UI.kv([['Label in', UI.label(v.labels[n.id] || wf.label, { sm: true })], ['Runs as', n.kind === 'trigger' ? 'not applicable' : 'the person who started the run'], ['Retry', esc(retry)]], 1)
-          + (outs.length ? '<div class="eyebrow">Connects to</div><div class="vstack gap4">' + outs.map((e) => '<div class="hstack gap6" style="font-size:12px"><span class="grow">' + esc((byId(e.to) || {}).title || e.to) + '</span>' + (n.kind === 'branch' ? UI.btn(e.branch || 'set', { size: 'xs', kind: 'ghost', attrs: 'data-flip="' + esc(e.to) + '"' + (editable ? '' : ' disabled'), title: 'Switch between true and false' }) : '') + (editable ? UI.iconbtn('x', 'Remove the edge to ' + ((byId(e.to) || {}).title || e.to), { cls: 'sm ghost', attrs: 'data-unlink="' + esc(e.to) + '"' }) : '') + '</div>').join('') + '</div>' : '')
-          + '<div class="hstack wrap">' + (editable ? UI.btn(st.connectFrom === n.id ? 'Pick a target' : 'Connect from here', { size: 'sm', icon: 'link', attrs: 'data-connect', cls: st.connectFrom === n.id ? 'active' : '' }) : '') + (n.kind !== 'trigger' ? UI.btn('Replay step', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-replaystepbtn' }) : '') + '</div>'
+          + retryBox
+          + (outs.length ? '<div class="eyebrow">' + (n.kind === 'branch' ? 'Decision edges' : 'Connects to') + '</div><div class="vstack gap4">' + outs.map((e) => '<div class="hstack gap6" style="font-size:12px">' + (e.branch === 'failure' ? UI.pill('on failure', 'warn') : '') + '<span class="grow">' + esc((byId(e.to) || {}).title || e.to) + (e.branch === 'failure' ? ' receives {error, step}' : '') + '</span>' + (n.kind === 'branch' && e.branch !== 'failure' ? UI.btn(e.branch || 'set', { size: 'xs', kind: 'ghost', attrs: 'data-flip="' + esc(e.to) + '"' + (editable ? '' : ' disabled'), title: 'Switch between true and false' }) : '') + (editable ? UI.iconbtn('x', 'Remove the edge to ' + ((byId(e.to) || {}).title || e.to), { cls: 'sm ghost', attrs: 'data-unlink="' + esc(e.to) + '"' }) : '') + '</div>').join('') + '</div>' : '')
+          + '<div class="hstack wrap">' + (editable ? UI.btn(st.connectFrom === n.id && !st.connectFailure ? 'Pick a target' : 'Connect from here', { size: 'sm', icon: 'link', attrs: 'data-connect', cls: st.connectFrom === n.id && !st.connectFailure ? 'active' : '' }) : '') + (editable && n.kind !== 'trigger' ? UI.btn(st.connectFrom === n.id && st.connectFailure ? 'Pick the failure target' : 'Connect on failure', { size: 'sm', icon: 'branch', attrs: 'data-connectfail', cls: st.connectFrom === n.id && st.connectFailure ? 'active' : '' }) : '') + (n.kind !== 'trigger' ? UI.btn('Replay step', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-replaystepbtn' }) : '') + '</div>'
           // Moving a step without dragging (WCAG 2.5.7): one button press per 20 px.
           + (editable ? '<div class="hstack wrap gap6" role="group" aria-label="Move this step on the canvas"><span class="muted" style="font-size:12px">Move</span>' + [['left', -20, 0], ['up', 0, -20], ['down', 0, 20], ['right', 20, 0]].map((d) => UI.btn(d[0].charAt(0).toUpperCase() + d[0].slice(1), { size: 'xs', kind: 'ghost', attrs: 'data-nudge="' + d[1] + ',' + d[2] + '" aria-label="Move step ' + d[0] + '"' })).join('') + '</div>' : '')
           + limits;
@@ -435,6 +613,48 @@
       const workflows = list.map((w) => ({ value: w.id, label: w.name + (w.publishedVersion ? ' v' + w.publishedVersion + ' published' : ' draft') }));
       if (manage) workflows.push({ value: '__new', label: 'New workflow…' });
 
+      const palBtn = (p) => '<button type="button" data-add="' + p[0] + '" title="' + esc(editable ? 'Add ' + p[1] + ' (' + p[2] + ')' : manage ? 'Close the run to edit the draft' : 'Editing needs the workflows:manage permission') + '"' + (editable ? '' : ' disabled') + '><span>' + esc(p[1]) + '</span><i class="' + (p[2] === 'Thinking' ? 'think' : p[2] === 'Doing' ? 'do' : p[2] === 'Calculating' ? 'calc' : '') + '"></i></button>';
+      // ---- lower tabs (the board's): runs, triggers and callers, versions, approvals waiting on me, dead letters ----
+      const tab = st.tab || 'runs';
+      if (st.tabLoaded !== tab + ':' + wf.id && st.tabLoading !== tab + ':' + wf.id) { st.tabLoading = tab + ':' + wf.id; loadTab(tab); }
+      const tabReady = st.tabLoaded === tab + ':' + wf.id;
+      const myApprovals = st.approvals || [];
+      const deadOpen = (st.dead || []).filter((d) => d.state === 'open' && st.tabLoaded === 'dead:' + wf.id).length;
+      const tabItems = [{ id: 'runs', label: 'Run history', count: runs.length }, { id: 'callers', label: 'Triggers and callers' }, { id: 'versions', label: 'Versions', count: wf.versions.length }, { id: 'approvals', label: 'Approvals waiting on me', count: myApprovals.length }].concat(manage ? [{ id: 'dead', label: 'Dead letters', count: st.tabLoaded === 'dead:' + wf.id ? deadOpen : undefined }] : []);
+      const lower = (runsTable) => {
+        if (tab === 'runs') return runsTable + '<div class="hstack"><span class="muted grow" style="font-size:12px">Runs pin the version they started on. Workflow admins see everyone\'s runs; others their own. Outputs above your clearance are withheld.</span>' + UI.btn('Open in Runs', { size: 'sm', kind: 'ghost', attrs: 'data-goruns' }) + '</div>';
+        if (!tabReady && tab !== 'versions' && tab !== 'approvals') return UI.notice('Loading…', 'info');
+        if (tab === 'callers') {
+          const tv = st.triggerView || {}; const t = tv.trigger; const cs = st.callers || { appTriggers: [], workflows: [], tools: [], plugins: [], lastRuns: {} };
+          const lr = (k) => { const x = cs.lastRuns && cs.lastRuns[k]; return x ? esc(when(x.at)) + ' ' + runPill(x.state) + (x.count > 1 ? ' <span class="muted">' + x.count + ' runs</span>' : '') : 'never'; };
+          const trig = st.draft.nodes.find((n) => n.kind === 'trigger'); const tc = (trig && trig.config) || {};
+          const own = t ? UI.panel('Own trigger', UI.kv([['Kind', t.kind === 'event' ? 'event <span class="mono">' + esc(t.event) + '</span>' : 'schedule <span class="mono">' + esc(t.cron) + '</span> UTC'], ['State', UI.pill(t.enabled ? 'enabled' : 'off', t.enabled ? 'ok' : 'outline')], ['Version', 'v' + esc(t.version)], ['Runs as', 'the person who published v' + esc(t.version)], ['Next run', t.nextRunAt ? esc(when(t.nextRunAt)) : t.kind === 'event' ? 'on the next matching event' : '—'], ['Last fired', t.lastFiredAt ? esc(when(t.lastFiredAt)) + (t.lastResult ? ', ' + esc(t.lastResult) : '') : 'never']], 2)
+              + (manage ? '<div class="hstack">' + UI.btn(t.enabled ? 'Turn off' : 'Turn on', { size: 'sm', attrs: 'data-trigtoggle' }) + '<span class="muted" style="font-size:12px">' + (t.kind === 'schedule' ? 'Turning it on again recomputes the next due time.' : 'Events that arrive while it is off start nothing.') + '</span></div>' : '')
+              + ((tv.firings || []).length ? UI.table(['Firing', 'Event', 'State', 'Run', 'Reason', 'At'], tv.firings.map((f) => ['<span class="mono">' + esc(String(f.id).slice(-6)) + '</span>', esc(f.event || (t.kind === 'schedule' ? 'schedule' : '')), UI.pill(f.state, f.state === 'started' ? 'ok' : f.state === 'skipped' ? 'warn' : 'info'), f.runId ? '<a href="#" data-openrun="' + esc(f.runId) + '" class="mono">' + esc(shortId(f.runId)) + '</a>' : '—', esc(f.reason || ''), esc(when(f.createdAt))]), { clickable: false, minWidth: '640px', cls: 'bare' }) : '<div class="muted" style="font-size:12px">It has not fired yet.</div>'), {})
+            : (tc.source === 'event' || (tc.source === 'schedule' && tc.cron) ? UI.notice('The draft\'s ' + (tc.source === 'event' ? 'event trigger (' + esc(tc.event || 'no event yet') + ')' : 'schedule (' + esc(tc.cron) + ')') + ' is written when you publish; it then starts runs as you.', 'info') : '');
+          const rows = [{ cells: ['<b>manual and API</b>', 'Console or POST /api/workflows/:id/runs (agents:run)', 'whoever starts it', lr('manual') === 'never' ? lr('api') : lr('manual'), UI.pill(wf.publishedVersion ? 'always' : 'after publishing', wf.publishedVersion ? 'ok' : 'outline'), ''] }]
+            .concat(cs.appTriggers.map((x) => ({ cells: ['<b>' + esc(x.kind) + ' trigger</b>', esc((x.appTitle || x.appName) + ' → ' + (x.entityTitle || x.entity || '')) + ': ' + esc(x.kind === 'record' ? x.events.join(', ') : 'cron ' + (x.cron || '') + ' UTC'), esc(x.ownerName || 'its owner'), x.lastRunAt ? esc(when(x.lastRunAt)) + (x.lastResult ? ' <span class="muted">' + esc(x.lastResult) + '</span>' : '') : 'never', UI.pill(x.enabled ? 'enabled' : 'off', x.enabled ? 'ok' : 'outline'), App.can('records:read') ? UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-goapp="' + esc(x.appName) + '"' }) : ''] })))
+            .concat(cs.workflows.map((x) => ({ cells: ['<b>' + (x.kind === 'sub' ? 'sub-workflow step' : x.kind + ' step') + '</b>', esc(x.workflow + ' → ' + x.stepTitle) + (x.version ? ', pinned v' + esc(x.version) : '') + ' (' + esc(x.in) + ')', 'the parent run\'s owner', lr('workflow'), UI.pill(/published/.test(x.in) ? 'published' : 'draft', /published/.test(x.in) ? 'ok' : 'info'), list.some((w) => w.id === x.workflowId) ? UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-opensub="' + esc(x.workflowId) + '"' }) : ''] })))
+            .concat(cs.tools.map((x) => ({ cells: ['<b>tool call</b>', esc(x.name + ' ' + x.version) + ' pins v' + esc(x.workflowVersion) + '; agents await its approvals', 'the calling agent run\'s owner', lr('tool'), UI.pill(String(x.status).replace('_', ' '), x.status === 'published' ? 'ok' : x.status === 'in_review' ? 'info' : 'outline'), App.can('tools:manage') ? UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-gotool="' + esc(x.id) + '"' }) : ''] })))
+            .concat(cs.plugins.map((x) => ({ cells: ['<b>plugin action</b>', esc(x.name || x.key) + ' (call:workflow) may start any published workflow', esc(x.installedByName || 'the installer'), lr('plugin'), UI.pill(x.state, x.state === 'enabled' ? 'ok' : 'outline'), App.can('plugins:manage') ? UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-goplugin="' + esc(x.key) + '"' }) : ''] })));
+          return UI.notice('<b>How runs start.</b> Manual and API runs, the workflow\'s own event or schedule trigger (as the person who published the version), an app\'s record and schedule triggers (as the trigger\'s owner), another workflow\'s sub-workflow, map or loop step, a plugin\'s call:workflow action (as the installer), and a tool call when it is published as a tool. Every run is a node of one chain.', 'info')
+            + own
+            + UI.table(['Caller', 'Detail', 'Runs as', 'Last run', 'State', ''], rows, { clickable: false, minWidth: '820px' })
+            + '<div class="hstack wrap">' + (App.can('apps:design') ? UI.btn('Add a trigger in Apps', { size: 'sm', attrs: 'data-goapps' }) : '') + UI.btn('Refresh', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-retab' }) + '</div>';
+        }
+        if (tab === 'versions') {
+          const vrows = [['draft', UI.pill(st.unsaved ? 'unsaved' : 'draft', st.unsaved ? 'warn' : ''), 'revision ' + wf.draftRev, esc(when(wf.updatedAt)), '']].concat(wf.versions.map((x) => ['v' + x.version, UI.pill(x.state, x.state === 'published' ? 'ok' : 'warn'), esc(x.note || ''), esc(when(x.publishedAt)), UI.btn('Diff against the draft', { size: 'xs', attrs: 'data-diffv="' + x.version + '"' })]));
+          return UI.table(['Version', 'State', 'Note', 'Changed', ''], vrows, { clickable: false, minWidth: '640px' }) + (st.diffOut ? UI.notice(st.diffOut, '') : '')
+            + UI.notice('Saving the draft sends the revision you loaded; a save after someone else\'s is refused. Runs pin the version they started on; publishing a new version does not change runs in progress.', 'info')
+            + (manage ? '<div class="hstack wrap">' + UI.btn('Export bundle', { size: 'sm', icon: 'download', attrs: 'data-export' }) + UI.btn('Import bundle', { size: 'sm', icon: 'upload', attrs: 'data-import' }) + UI.btn('Used by', { size: 'sm', attrs: 'data-wfusedby' }) + UI.btn('Delete workflow', { size: 'sm', kind: 'danger', attrs: 'data-delwf' }) + '<span class="muted" style="font-size:12px">exprsn-workflow/1, signed; tool, profile, app, vault and trigger references are re-bound on import.</span></div>' : '');
+        }
+        if (tab === 'approvals') return UI.table(['Workflow', 'Run', 'Step', 'Role', 'Due', 'Mode', ''], myApprovals.map((a) => ['<b>' + esc(a.workflow || '') + '</b>', '<span class="mono">' + esc(shortId(a.runId)) + '</span>', esc(a.step || a.nodeId) + (a.form ? ' ' + UI.pill('form', 'outline') : ''), '<span class="mono">' + esc(a.role) + '</span>', esc(when(a.dueAt)), a.mode === 'dry' ? UI.pill('dry run', 'outline') : 'run', '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-openapproval="' + esc(a.workflowId) + '|' + esc(a.runId) + '"' }) + (a.canDecide ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-approve="' + esc(a.id) + '"' }) : '') + '</span>']), { clickable: false, minWidth: '760px', emptyTitle: 'Nothing waits on you', emptyText: 'Approvals appear here when a run pauses for a role you hold.' })
+          + '<div class="muted" style="font-size:12px">Across every workflow you may see. You decide when you hold the role and are cleared for the run\'s label; a dry run\'s approvals wait on whoever started it.</div>';
+        const dl = st.dead || [];
+        return UI.table(['Run', 'Failed step', 'Error', 'Failed', 'State', ''], dl.map((d) => ['<a href="#" data-openrun="' + esc(d.runId) + '" class="mono">' + esc(shortId(d.runId)) + '</a>', esc(d.nodeId ? ((st.draft.nodes.find((n) => n.id === d.nodeId) || {}).title || d.nodeId) : '—'), esc(d.error || ''), esc(when(d.failedAt)), UI.pill(d.state, d.state === 'open' ? 'warn' : 'ok') + (d.redriveRunId ? ' <a href="#" data-openrun="' + esc(d.redriveRunId) + '" class="mono">' + esc(shortId(d.redriveRunId)) + '</a>' : ''), d.state === 'open' ? UI.btn('Redrive', { size: 'xs', kind: 'primary', attrs: 'data-redrive="' + esc(d.id) + '"' }) : '']), { clickable: false, minWidth: '720px', emptyTitle: 'No dead letters', emptyText: 'A run that fails for good, after its retries and with no on-failure edge to take, lands here.' })
+          + '<div class="muted" style="font-size:12px">A redrive replays the run from the failed step; the steps before it keep their checkpoints. Each dead letter is redriven once.</div>';
+      };
+
       root.innerHTML = '<style>'
         + '.wf-page > *{flex-shrink:0}.wf-insp > *{flex-shrink:0}'
         + '.wf-palette{display:flex;flex-direction:column;gap:2px}.wf-palette button{display:flex;align-items:center;justify-content:space-between;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line);border-radius:5px;background:var(--panel);font-size:12px;color:var(--fg);cursor:pointer;text-align:left;font-family:inherit}.wf-palette button:hover{border-color:var(--muted)}.wf-palette button[disabled]{opacity:.45;cursor:not-allowed}.wf-palette button i{width:6px;height:6px;border-radius:50%;background:var(--meter);flex-shrink:0}.wf-palette button i.think{background:var(--info-fg)}.wf-palette button i.do{background:var(--warn-fg)}.wf-palette button i.calc{background:var(--ok-fg)}'
@@ -446,11 +666,11 @@
         + '.wf-port{position:absolute;top:50%;width:7px;height:7px;border-radius:50%;background:var(--panel);border:1px solid var(--muted);transform:translateY(-50%)}.wf-port.in{left:-4px}.wf-port.out{right:-4px}'
         + '.wf-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}'
         + '</style>'
-        + '<div class="leftpane w170"><div class="eyebrow">Steps</div><div class="wf-palette">' + PALETTE.map((p) => '<button type="button" data-add="' + p[0] + '" title="' + esc(editable ? 'Add ' + p[1] + ' (' + p[2] + ')' : manage ? 'Close the run to edit the draft' : 'Editing needs the workflows:manage permission') + '"' + (editable ? '' : ' disabled') + '><span>' + esc(p[1]) + '</span><i class="' + (p[2] === 'Thinking' ? 'think' : p[2] === 'Doing' ? 'do' : p[2] === 'Calculating' ? 'calc' : '') + '"></i></button>').join('') + '</div><div class="muted" style="font-size:11px;margin-top:auto">Click a step to add it to the canvas. Dot: thinking, doing or calculating worker class. Drag steps to arrange them.</div></div>'
+        + '<div class="leftpane w170" aria-label="Step palette"><div class="eyebrow">Steps</div><div class="wf-palette">' + PALETTE.map(palBtn).join('') + '</div><div class="eyebrow" style="margin-top:12px">Chaining and iteration</div><div class="wf-palette">' + PALETTE_WF2.map(palBtn).join('') + '</div><div class="muted" style="font-size:11px;margin-top:auto">Click a step to add it to the canvas. Dot: thinking, doing or calculating worker class. Drag steps to arrange them.</div></div>'
         + '<div class="page wf-page">'
-        + '<div class="wf-toolbar">' + UI.select(workflows, wf.id, 'data-wf aria-label="Workflow" style="width:auto"') + UI.pill(published ? 'published' : 'draft', published ? 'ok' : '') + (st.unsaved ? UI.pill('unsaved changes', 'warn') : '') + '<span class="muted" style="font-size:12px">trigger: ' + esc(trigger ? subOf(trigger) : 'none') + ' · engine job queue · limits ' + L.maxSteps + ' steps, ' + Math.round(L.maxTokens / 1000) + 'k tokens, ' + hours(L.maxRunTimeoutMs) + '</span>' + (approvalsHere.length ? '<a href="#" class="right" data-pending style="font-size:12px">' + approvalsHere.length + ' run' + (approvalsHere.length > 1 ? 's' : '') + ' waiting on approval</a>' : '') + UI.btn('Versions', { size: 'sm', kind: 'ghost', attrs: 'data-versions', cls: approvalsHere.length ? '' : 'right' }) + '</div>'
+        + '<div class="wf-toolbar">' + UI.select(workflows, wf.id, 'data-wf aria-label="Workflow" style="width:auto"') + UI.pill(published ? 'published' : 'draft', published ? 'ok' : '') + (st.unsaved ? UI.pill('unsaved changes', 'warn') : '') + '<span class="muted" style="font-size:12px">trigger: ' + esc(trigger ? subOf(trigger) : 'none') + ' · engine job queue · limits ' + L.maxSteps + ' steps, ' + Math.round(L.maxTokens / 1000) + 'k tokens, ' + hours(L.maxRunTimeoutMs) + '</span>' + (approvalsHere.length ? '<a href="#" class="right" data-pending style="font-size:12px">' + approvalsHere.length + ' run' + (approvalsHere.length > 1 ? 's' : '') + ' waiting on approval</a>' : '') + (manage ? UI.btn('New workflow', { size: 'sm', icon: 'plus', attrs: 'data-newwf', cls: approvalsHere.length ? '' : 'right' }) : '') + '</div>'
         + (st.kbd ? UI.notice('<b>Keyboard operation.</b> Arrow keys move between nodes, Enter opens the inspector, C starts a connection from the selected port, Shift and an arrow completes it, Delete removes the step, Escape cancels.', 'info', UI.btn('Dismiss', { size: 'sm', attrs: 'data-dismisskbd' })) : '')
-        + (st.connectFrom && !viewing ? UI.notice('Connecting from <b>' + esc((byId(st.connectFrom) || {}).title) + '</b>. Click a target step, or press Escape.', 'accent', UI.btn('Cancel', { size: 'sm', attrs: 'data-cancelconnect' })) : '')
+        + (st.connectFrom && !viewing ? UI.notice((st.connectFailure ? 'Connecting the <b>on-failure</b> edge from <b>' : 'Connecting from <b>') + esc((byId(st.connectFrom) || {}).title) + '</b>. Click a target step, or press Escape.' + (st.connectFailure ? ' The target receives {error, step} when the step fails for good.' : ''), 'accent', UI.btn('Cancel', { size: 'sm', attrs: 'data-cancelconnect' })) : '')
         + (viewing && run ? UI.notice('Showing run <b>' + esc(shortId(run.id)) + '</b> on ' + (run.mode === 'dry' ? 'draft revision ' + run.draftRev : 'version ' + run.version) + '. Runs pin the graph they started on.', 'info', UI.btn('Back to the draft', { size: 'sm', attrs: 'data-closerun' })) : '')
         + (st.conflict ? UI.notice('<b>The draft changed since you opened it.</b> ' + esc(st.conflict) + ' Your unsaved edits stay here until you reload.', 'warn', UI.btn('Reload the draft', { size: 'sm', attrs: 'data-reloaddraft' })) : '')
         + (st.parseError && !viewing ? UI.notice('<b>The draft cannot be checked.</b> ' + esc(st.parseError), 'danger') : '')
@@ -464,8 +684,8 @@
         + (manage ? UI.btn(published ? 'Published' : 'Publish', { size: 'sm', kind: 'primary', attrs: 'data-publish', disabled: !!published || !!st.saving, title: blocking ? blocking + ' problem' + (blocking === 1 ? '' : 's') + ' to fix first' : '' }) : '')
         + (viewing ? UI.btn('Clear run', { size: 'sm', kind: 'ghost', attrs: 'data-closerun' }) : '')
         + ((wf.tools || []).length ? '<span class="muted" style="font-size:12px">As a tool: ' + wf.tools.map((x) => (App.can('tools:manage') ? '<a href="#" data-gotool="' + esc(x.id) + '">' + esc(x.name) + ' ' + esc(x.version) + '</a>' : esc(x.name) + ' ' + esc(x.version)) + ' ' + UI.pill(x.status.replace('_', ' '), x.status === 'published' ? 'ok' : x.status === 'in_review' ? 'info' : '')).join(', ') + '</span>' : '')
-        + '<span class="muted right" style="font-size:12px">' + nodes.length + ' steps, ' + graph.edges.length + ' edges' + (viewing ? '' : blocking ? ', <span style="color:var(--danger-fg)">' + blocking + ' problem' + (blocking === 1 ? '' : 's') + '</span>' : v.warnings.length ? ', ' + v.warnings.length + ' warning' + (v.warnings.length === 1 ? '' : 's') : ', valid') + '</span></div>'
-        + UI.panel('Run history', UI.table(['Run', 'Trigger', 'Started', 'Duration', 'Label', 'State'], runs.map((r) => ({ cells: ['<span class="mono">' + esc(shortId(r.id)) + '</span>', esc(r.mode === 'dry' ? 'dry run, ' + (r.createdByName || '') : r.trigger === 'replay' ? 'replay of ' + shortId(r.replayOf) : r.trigger + ', ' + (r.createdByName || '')), esc(when(r.startedAt || r.createdAt)), r.startedAt ? dur((r.finishedAt || Date.now()) - r.startedAt) : '—', UI.label(r.label, { sm: true }), runPill(runState(r))], attrs: 'data-run="' + esc(r.id) + '"', selected: st.runId === r.id })), { cls: 'bare', minWidth: '0', emptyTitle: 'No runs yet', emptyText: wf.publishedVersion ? 'Start a run of the published version, or dry run the draft.' : 'Dry run the draft, or publish it and start a run.' }), { actions: UI.btn('Open in Runs', { size: 'sm', kind: 'ghost', attrs: 'data-goruns' }), cls: 'pad0' }).replace('class="panel pad0"', 'class="panel" style="padding:14px"')
+        + '<span class="muted right" style="font-size:12px">' + nodes.length + (nodes.length === 1 ? ' step, ' : ' steps, ') + graph.edges.length + (graph.edges.length === 1 ? ' edge' : ' edges') + (viewing ? '' : blocking ? ', <span style="color:var(--danger-fg)">' + blocking + ' problem' + (blocking === 1 ? '' : 's') + '</span>' : v.warnings.length ? ', ' + v.warnings.length + ' warning' + (v.warnings.length === 1 ? '' : 's') : ', valid') + '</span></div>'
+        + '<div class="wf-lower">' + UI.tabs(tabItems, tab, 'aria-label="Workflow details"') + '<div class="vstack gap6">' + lower(UI.table(['Run', 'Trigger', 'Started', 'Duration', 'Label', 'State'], runs.map((r) => ({ cells: ['<span class="mono">' + esc(shortId(r.id)) + '</span>', esc(r.mode === 'dry' ? 'dry run, ' + (r.createdByName || '') : r.trigger === 'replay' ? 'replay of ' + shortId(r.replayOf) : (/^workflow:/.test(r.trigger) ? 'sub-workflow of ' + shortId(r.trigger.slice(9)) : r.trigger.split(':')[0]) + ', ' + (r.createdByName || '')), esc(when(r.startedAt || r.createdAt)), r.startedAt ? dur((r.finishedAt || Date.now()) - r.startedAt) : '—', UI.label(r.label, { sm: true }), runPill(runState(r))], attrs: 'data-run="' + esc(r.id) + '"', selected: st.runId === r.id })), { cls: 'bare', minWidth: '0', emptyTitle: 'No runs yet', emptyText: wf.publishedVersion ? 'Start a run of the published version, or dry run the draft.' : 'Dry run the draft, or publish it and start a run.' })) + '</div></div>'
         + '</div>'
         + '<aside class="inspector w300 wf-insp" aria-label="Inspector">' + insp + '</aside>';
 
@@ -480,12 +700,14 @@
       };
       const after = (t) => (t.tagName === 'SELECT' ? changed() : softChanged());
       const selNode = () => st.draft.nodes.find((x) => x.id === st.sel);
-      const addEdge = (from, to) => {
+      const addEdge = (from, to, failure) => {
         const g = st.draft; const a = g.nodes.find((x) => x.id === from);
         if (from === to) return;
         if (g.edges.some((e) => e.from === from && e.to === to)) { toast('Those steps are already connected.', 'warn'); return; }
         const e = { from, to };
-        if (a && a.kind === 'branch') e.branch = g.edges.some((x) => x.from === from && x.branch === 'true') ? 'false' : 'true';
+        if (failure) e.branch = 'failure';
+        else if (a && a.kind === 'branch') e.branch = g.edges.some((x) => x.from === from && x.branch === 'true') ? 'false' : 'true';
+        if (failure) { g.edges.push(e); changed('Connected on failure: when ' + esc(a ? a.title : from) + ' fails for good, ' + esc((g.nodes.find((x) => x.id === to) || {}).title || to) + ' receives {error, step} and the run goes on.'); return; }
         g.edges.push(e);
         const back = g.edges.some((x) => x.from === to && x.to === from);
         changed(back ? 'That edge creates a cycle. Publishing is refused until it is removed.' : 'Connected' + (e.branch ? ' on the ' + e.branch + ' side' : '') + '. The output is checked against the target\'s input port.');
@@ -543,19 +765,38 @@
         } });
       };
       const decide = async (id, approve) => {
-        const a = run && run.approvals.find((x) => x.id === id); if (!a) return;
-        const title = (byId(a.nodeId) || {}).title || a.nodeId;
+        const a = (run && run.approvals.find((x) => x.id === id)) || (st.approvals || []).find((x) => x.id === id); if (!a) return;
+        const title = a.step || (byId(a.nodeId) || {}).title || a.nodeId;
+        const after = () => { if (run) loadRun(run.id); loadRuns(); };
+        const rlabel = run && run.id === a.runId ? run.label : a.label || wf.label;
+        if (approve && a.form) {
+          const f = a.form; const fid = (x) => 'wf-ans-' + x.name;
+          const input = (x) => (x.options && x.options.length ? UI.select([{ value: '', label: 'choose' }].concat(x.options.map((o) => (typeof o === 'object' ? { value: String(o.value), label: String(o.label || o.value) } : String(o)))), '', 'data-ans="' + esc(x.name) + '" id="' + fid(x) + '"') : x.type === 'boolean' ? UI.select([{ value: '', label: 'choose' }, { value: 'true', label: 'yes' }, { value: 'false', label: 'no' }], '', 'data-ans="' + esc(x.name) + '" data-bool id="' + fid(x) + '"') : x.type === 'text' || x.type === 'long_text' ? UI.textarea('', { rows: 2, attrs: 'data-ans="' + esc(x.name) + '" id="' + fid(x) + '"' }) : UI.input('', { type: x.type === 'number' || x.type === 'integer' ? 'number' : x.type === 'date' ? 'date' : 'text', attrs: 'data-ans="' + esc(x.name) + '"' + (x.type === 'number' || x.type === 'integer' ? ' data-num' : '') + ' id="' + fid(x) + '"' }));
+          ctx.modal({ title: 'Approve step: ' + esc(title), body: '<p class="fg2" style="margin:0">' + esc(f.title || f.form) + ' (' + esc(f.app) + '). The answers are validated like a submission of the form and become the step\'s output; they are audited with your decision.</p>'
+              + (f.fields || []).map((x) => UI.field(esc(x.label || x.name) + (x.required ? ' <span class="muted">(required)</span>' : ''), input(x), x.help ? esc(x.help) : '')).join('') + '<div data-anserr></div>',
+            actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(esc(f.submitLabel || 'Approve'), { kind: 'primary', attrs: 'data-go' }),
+            onMount(m) {
+              m.querySelector('[data-go]').addEventListener('click', async (ev) => {
+                const answers = {};
+                m.querySelectorAll('[data-ans]').forEach((el) => { const v = el.value.trim(); if (v === '') return; answers[el.dataset.ans] = el.hasAttribute('data-bool') ? v === 'true' : el.hasAttribute('data-num') ? Number(v) : v; });
+                ev.target.disabled = true;
+                try { await App.post('/api/workflow-approvals/' + enc(id), { decision: 'approve', answers }); App.closeOverlay(); toast('Approved with your answers. The run continues; its steps report on the canvas.', 'ok'); after(); }
+                catch (err) { ev.target.disabled = false; const pr = (err.problem && err.problem.problems) || []; m.querySelector('[data-anserr]').innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc((err.problem && err.problem.detail) || err.message) + (pr.length ? '<br>' + pr.map((x) => esc(typeof x === 'string' ? x : x.message || JSON.stringify(x))).join('<br>') : ''), 'danger'); }
+              });
+            } });
+          return;
+        }
         if (approve) {
-          const ok = await ctx.confirm({ title: 'Approve step: ' + title, tag: 'approval', tone: 'info', body: '<p class="fg2" style="margin:0">Your decision is written to the audit chain and the run continues from this step.</p>', kv: [['Role', esc(a.role)], ['Label', UI.label(run.label, { sm: true })]], ok: 'Approve' });
+          const ok = await ctx.confirm({ title: 'Approve step: ' + title, tag: 'approval', tone: 'info', body: '<p class="fg2" style="margin:0">Your decision is written to the audit chain and the run continues from this step.</p>', kv: [['Role', esc(a.role)], ['Label', UI.label(rlabel, { sm: true })]], ok: 'Approve' });
           if (!ok) return;
-          try { await App.post('/api/workflow-approvals/' + enc(id), { decision: 'approve' }); toast('Approved. The run continues; its steps report on the canvas.', 'ok'); loadRun(run.id); loadRuns(); } catch (err) { App.fail(err, 'Could not approve'); }
+          try { await App.post('/api/workflow-approvals/' + enc(id), { decision: 'approve' }); toast('Approved. The run continues; its steps report on the canvas.', 'ok'); after(); } catch (err) { App.fail(err, 'Could not approve'); }
           return;
         }
         ctx.modal({ title: 'Reject approval ' + UI.pill('reject', 'danger'), body: UI.field('Reason', UI.textarea('', { placeholder: 'Sent to the run owner', rows: 2, attrs: 'data-reason' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-go' }),
           onMount(m) {
             m.querySelector('[data-go]').addEventListener('click', async () => {
               const reason = m.querySelector('[data-reason]').value.trim() || null; App.closeOverlay();
-              try { await App.post('/api/workflow-approvals/' + enc(id), { decision: 'reject', reason }); toast('Rejected. The run ended; the owner can see your reason.', 'warn'); loadRun(run.id); loadRuns(); } catch (err) { App.fail(err, 'Could not reject'); }
+              try { await App.post('/api/workflow-approvals/' + enc(id), { decision: 'reject', reason }); toast('Rejected. The run ended; the owner can see your reason.', 'warn'); after(); } catch (err) { App.fail(err, 'Could not reject'); }
             });
           } });
       };
@@ -590,12 +831,12 @@
       ctx.on('click', '[data-node]', (e, t) => {
         if (suppressClick) { suppressClick = false; return; }
         const id = t.dataset.node;
-        if (st.connectFrom && !viewing && st.connectFrom !== id) { const from = st.connectFrom; st.connectFrom = null; addEdge(from, id); return; }
+        if (st.connectFrom && !viewing && st.connectFrom !== id) { const from = st.connectFrom; const fail = !!st.connectFailure; st.connectFrom = null; st.connectFailure = false; addEdge(from, id, fail); return; }
         st.sel = id; ctx.rerender();
       });
       ctx.on('click', '[data-add]', (e, t) => {
         if (!editable) return;
-        const p = PALETTE.find((x) => x[0] === t.dataset.add); const ns = st.draft.nodes;
+        const p = PALETTE.concat(PALETTE_WF2).find((x) => x[0] === t.dataset.add); const ns = st.draft.nodes;
         const slots = []; [24, 152, 282, 412, 542, 672].forEach((y) => [20, 230, 440].forEach((x) => slots.push([x, y])));
         const free = slots.find((s) => !ns.some((n) => Math.abs(n.x - s[0]) < W && Math.abs(n.y - s[1]) < H)) || [20, ns.reduce((m, n) => Math.max(m, n.y), 0) + 130];
         let i = 1; while (ns.some((n) => n.id === p[0] + i)) i++;
@@ -619,7 +860,15 @@
       ctx.on('change', '[data-c]', (e, t) => {
         const n = selNode(); if (!n || !editable) return;
         const k = t.dataset.c; const raw = t.value; const c = n.config = n.config || {};
-        if (k === 'fields' || k === 'headers') c[k] = unlines(raw);
+        if (k === 'fields' || k === 'values') c[k] = unlines(raw);
+        else if (k === 'headers') { const auth = authOf(c); c.headers = unlines(raw); Object.keys(c.headers).forEach((h) => { if (h.toLowerCase() === 'authorization') delete c.headers[h]; }); if (auth) c.headers.Authorization = auth; }
+        else if (k === 'users') { c.users = raw.split(',').map((x) => x.trim()).filter(Boolean); }
+        else if (k === 'email') c.email = raw === 'true';
+        else if (k === 'version' || k === 'maxParallel' || k === 'maxItems' || k === 'max') { if (raw.trim() === '') delete c[k]; else c[k] = Math.round(Number(raw)); }
+        else if ((k === 'input' || k === 'body') && (n.kind === 'sub' || n.kind === 'webhook' || n.kind === 'map' || n.kind === 'loop')) { const t = raw.trim(); if (!t) delete c[k]; else if (/^[A-Za-z_][A-Za-z0-9_]*\s*:/.test(t) && !/^\s*\{/.test(t)) c[k] = unlines(t); else c[k] = t; }
+        else if ((k === 'route' || k === 'to' || k === 'record' || k === 'cron' || k === 'event' || k === 'as' || k === 'input' || k === 'prompt' && n.kind !== 'model') && !raw.trim()) delete c[k];
+        else if (k === 'source') { c.source = raw; if (raw !== 'event') delete c.event; if (raw !== 'schedule') delete c.cron; if (n.title === 'Trigger: manual' || /^Trigger: /.test(n.title)) n.title = 'Trigger: ' + raw; }
+        else if (k === 'app' && n.kind === 'record') { c.app = raw; c.entity = ''; delete c.to; loadApp(raw); }
         else if (k === 'timeoutMs' || k === 'approvalTimeoutMs') c[k] = Math.max(1, Number(raw) || 24) * 3600000;
         else if (k === 'ms') c[k] = Math.max(1, Number(raw) || 60) * 1000;
         else if (k === 'right') { const s = raw.trim(); if (s === '') delete c.right; else c.right = s === 'true' ? true : s === 'false' ? false : !isNaN(Number(s)) ? Number(s) : s; }
@@ -627,6 +876,154 @@
         else if ((k === 'think' || k === 'body' || k === 'args') && !raw.trim()) delete c[k];
         else c[k] = raw;
         after(t);
+      });
+      // Sprint 32e: the Workflows 2 editors.
+      ctx.on('change', '[data-retry]', (e, t) => {
+        const n = selNode(); if (!n || !editable) return;
+        const k = t.dataset.retry;
+        if (k === 'max') { const m = Number(t.value); if (!m) delete n.retry; else n.retry = Object.assign({ delayMs: 5000, backoff: 'exponential' }, n.retry || {}, { max: m }); }
+        else if (n.retry && k === 'delayMs') n.retry.delayMs = Math.min(3600000, Math.max(1000, Math.round(Number(t.value) || 5) * 1000));
+        else if (n.retry) n.retry.backoff = t.value;
+        after(t);
+      });
+      ctx.on('click', '[data-skill]', (e, t) => { const n = selNode(); if (!n || !editable) return; const c = n.config; c.skills = c.skills || []; const i = c.skills.indexOf(t.dataset.skill); if (i >= 0) c.skills.splice(i, 1); else c.skills.push(t.dataset.skill); if (!c.skills.length) delete c.skills; changed(i >= 0 ? 'Skill removed.' : 'Skill ' + esc(t.dataset.skill) + ' attached: its instructions and tools load into the step when it runs.'); });
+      ctx.on('click', '[data-nrole]', (e, t) => { const n = selNode(); if (!n || !editable) return; const c = n.config; c.roles = c.roles || []; const i = c.roles.indexOf(t.dataset.nrole); if (i >= 0) c.roles.splice(i, 1); else c.roles.push(t.dataset.nrole); changed(); });
+      ctx.on('change', '[data-formapp]', (e, t) => { const n = selNode(); if (!n || !editable) return; if (!t.value) delete n.config.form; else { n.config.form = { app: t.value, form: '' }; loadApp(t.value); } changed(t.value ? 'Choose the form the approver fills in.' : 'No form: the approver approves or rejects.'); });
+      ctx.on('change', '[data-formname]', (e, t) => { const n = selNode(); if (!n || !editable || !n.config.form) return; n.config.form.form = t.value; changed(t.value ? 'The approver fills in this form; the answers become the step\'s output.' : ''); });
+      ctx.on('change', '[data-vscheme], [data-vpath], [data-vkey]', (e, t) => {
+        const n = selNode(); if (!n || !editable) return; const c = n.config; c.headers = c.headers || {};
+        const sc = ctx.$('[data-vscheme]').value; const path = (ctx.$('[data-vpath]').value || '').trim().replace(/^kv\//, ''); const key = (ctx.$('[data-vkey]').value || '').trim() || 'token';
+        Object.keys(c.headers).forEach((h) => { if (h.toLowerCase() === 'authorization') delete c.headers[h]; });
+        if (path && sc !== 'none') c.headers.Authorization = (sc === 'raw' ? '' : sc + ' ') + 'vault:' + path + '#' + key;
+        after(t);
+      });
+      ctx.on('change', '[data-budget]', (e, t) => { const n = selNode(); if (!n || !editable) return; const c = n.config; c.budgets = c.budgets || {}; if (t.value.trim() === '') delete c.budgets[t.dataset.budget]; else c.budgets[t.dataset.budget] = Math.round(Number(t.value)); if (!Object.keys(c.budgets).length) delete c.budgets; after(t); });
+      ctx.on('change', '[data-while]', (e, t) => {
+        const n = selNode(); if (!n || !editable) return; const c = n.config; const w = Object.assign({ left: '', op: 'ne' }, c.while || {});
+        const k = t.dataset.while; const v = t.value.trim();
+        if (k === 'right') { if (v === '') delete w.right; else w.right = v === 'true' ? true : v === 'false' ? false : !isNaN(Number(v)) ? Number(v) : v; } else w[k] = v;
+        if (!w.left) delete c.while; else c.while = w;
+        after(t);
+      });
+      ctx.on('change', '[data-action]', (e, t) => {
+        const n = selNode(); if (!n || !editable) return; const c = n.config;
+        ['profile', 'prompt', 'format', 'tool', 'args', 'workflow', 'version', 'input'].forEach((k) => delete c[k]);
+        if (t.value === 'model') Object.assign(c, { profile: (st.profiles && st.profiles[0] && st.profiles[0].name) || '', prompt: n.kind === 'map' ? 'Summarise {{item}} in one sentence.' : 'Improve this draft: {{last}}' });
+        else if (t.value === 'tool') c.tool = (st.tools && st.tools[0] && st.tools[0].name) || '';
+        else c.workflow = (((st.callees || {}).workflows || []).find((w) => w.id !== wf.id) || {}).name || '';
+        changed();
+      });
+      ctx.on('click', '[data-tab]', (e, t) => { if (t.closest('.wf-lower')) { st.tab = t.dataset.tab; st.diffOut = null; ctx.rerender(); } });
+      ctx.on('click', '[data-retab]', () => { st.tabLoaded = null; st.tabLoading = null; ctx.rerender(); });
+      ctx.on('click', '[data-trigtoggle]', async () => {
+        const t = st.triggerView && st.triggerView.trigger; if (!t) return;
+        try { await App.patch('/api/workflows/' + enc(wf.id) + '/triggers', { enabled: !t.enabled }); toast(t.enabled ? 'Trigger turned off. Nothing starts the workflow by itself until it is on again.' : 'Trigger on again' + (t.kind === 'schedule' ? '; its next due time was recomputed.' : '.'), t.enabled ? 'warn' : 'ok'); st.tabLoaded = null; st.tabLoading = null; ctx.rerender(); }
+        catch (err) { App.fail(err, 'Could not change the trigger'); }
+      });
+      ctx.on('click', '[data-redrive]', async (e, t) => {
+        const d = (st.dead || []).find((x) => x.id === t.dataset.redrive); if (!d) return;
+        const ok = await ctx.confirm({ title: 'Redrive the failed run', tag: 'redrive', tone: 'info', body: '<p class="fg2" style="margin:0">A new run replays ' + esc(shortId(d.runId)) + ' from the step that failed. The steps before it keep their checkpoints.</p>', kv: [['Run', '<span class="mono">' + esc(shortId(d.runId)) + '</span>'], ['From', esc(d.nodeId || 'the start')], ['Error', esc(d.error || '')]], ok: 'Redrive' });
+        if (!ok) return;
+        try { const out = await App.post('/api/workflow-dead-letters/' + enc(d.id) + '/redrive', {}); toast('Redriven as <span class="mono">' + esc(shortId(out.redriveRunId)) + '</span>.', 'ok'); st.tabLoaded = null; st.tabLoading = null; loadRuns(); ctx.rerender(); }
+        catch (err) { App.fail(err, 'Could not redrive'); }
+      });
+      ctx.on('click', '[data-openrun]', (e, t) => { e.preventDefault(); st.runId = t.dataset.openrun; st.run = null; st.runError = null; ctx.rerender(); });
+      ctx.on('click', '[data-openwfrun]', (e, t) => {
+        e.preventDefault(); const id = t.dataset.openwfrun;
+        App.get('/api/workflow-runs/' + enc(id)).then((r) => { if (r.workflowId !== st.wfId) { st.wfId = r.workflowId; st.wf = null; st.draft = null; st.unsaved = false; st.tabLoaded = null; } st.runId = r.id; st.run = r; st.runError = null; ctx.rerender(); }).catch((err) => App.fail(err, 'Could not open the run'));
+      });
+      ctx.on('click', '[data-goagentrun]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { run: t.dataset.goagentrun }); });
+      ctx.on('click', '[data-opensub]', async (e, t) => {
+        e.preventDefault(); const id = t.dataset.opensub; if (!list.some((x) => x.id === id)) return;
+        if (st.unsaved) { const ok = await ctx.confirm({ title: 'Discard unsaved changes', tag: 'draft', tone: 'warn', body: '<p class="fg2" style="margin:0">The changes to ' + esc(wf.name) + ' are not saved. Open the other workflow anyway?</p>', ok: 'Discard and open' }); if (!ok) return; }
+        st.wfId = id; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.problem = null; st.unsaved = false; st.tabLoaded = null; ctx.rerender();
+      });
+      ctx.on('click', '[data-goapp]', (e, t) => ctx.navigate('apps', { app: t.dataset.goapp, tab: 'triggers' }));
+      ctx.on('click', '[data-goapps]', (e) => { e.preventDefault(); ctx.navigate('apps'); });
+      ctx.on('click', '[data-goplugin]', (e, t) => ctx.navigate('plugins', { id: t.dataset.goplugin }));
+      ctx.on('click', '[data-govault]', (e) => { e.preventDefault(); ctx.navigate('vault'); });
+      ctx.on('click', '[data-openapproval]', (e, t) => { const [w, r] = t.dataset.openapproval.split('|'); if (w !== st.wfId) { st.wfId = w; st.wf = null; st.draft = null; st.unsaved = false; st.tabLoaded = null; } st.runId = r; st.run = null; st.runError = null; ctx.rerender(); });
+      ctx.on('click', '[data-diffv]', (e, t) => {
+        const x = wf.versions.find((y) => String(y.version) === t.dataset.diffv); if (!x) return; const g = x.graph;
+        const a = new Map(g.nodes.map((n) => [n.id, n])); const b = new Map(st.draft.nodes.map((n) => [n.id, n]));
+        const added = st.draft.nodes.filter((n) => !a.has(n.id)).map((n) => n.title); const removed = g.nodes.filter((n) => !b.has(n.id)).map((n) => n.title);
+        const edited = st.draft.nodes.filter((n) => a.has(n.id) && JSON.stringify(Object.assign({}, a.get(n.id), { x: 0, y: 0 })) !== JSON.stringify(Object.assign({}, n, { x: 0, y: 0 }))).map((n) => n.title);
+        const ek = (ed) => ed.from + '>' + ed.to + (ed.branch || ''); const ea = g.edges.map(ek), eb = st.draft.edges.map(ek);
+        const edges = eb.filter((k) => ea.indexOf(k) < 0).length + ea.filter((k) => eb.indexOf(k) < 0).length;
+        const parts = [];
+        if (added.length) parts.push('adds ' + added.join(', ')); if (removed.length) parts.push('removes ' + removed.join(', ')); if (edited.length) parts.push('changes ' + edited.join(', ')); if (edges) parts.push(edges + ' edge' + (edges === 1 ? '' : 's') + ' differ');
+        st.diffOut = '<b>v' + esc(x.version) + ' against the draft.</b> ' + esc(parts.length ? 'The draft ' + parts.join('; ') + '.' : 'The draft matches this version, apart from where steps sit on the canvas.');
+        ctx.rerender();
+      });
+      ctx.on('click', '[data-delwf]', () => wfUsedBy(wf, 'delete'));
+      ctx.on('click', '[data-wfusedby]', () => wfUsedBy(wf, 'view'));
+      ctx.on('click', '[data-gochain]', (e, t) => { e.preventDefault(); if (t.dataset.gochain) ctx.navigate('runs', Object.assign({ chain: t.dataset.gochain }, t.dataset.chainnode ? { node: t.dataset.chainnode } : {})); });
+      /** GET /api/workflows/:id/used-by, then the delete (refused with 409 while a published agent or workflow uses it). */
+      async function wfUsedBy(w, mode) {
+        let u;
+        try { u = await App.get('/api/workflows/' + enc(w.id) + '/used-by'); } catch (err) { App.fail(err, 'Used by could not be loaded'); return; }
+        const VIA = { workflow: 'lists it as a workflow it may start', 'workflow-tool': 'is its workflow tool', 'sub-workflow': 'runs it as a sub-workflow', 'agent-step': 'runs it in an agent step', 'tool-step': 'calls it in a tool step', delegate: 'delegates to it', tool: 'calls it as a tool', skill: 'loads it', 'model-skill': 'loads it in a model step' };
+        const usedBy = u.usedBy || [];
+        const blockers = usedBy.filter((x) => x.live && (x.kind === 'agent' || x.kind === 'workflow'));
+        const blocked = mode === 'delete' && !!u.deleteBlocked;
+        const table = UI.table(['Kind', 'Name', 'Version', 'Status', 'How it references ' + (u.name || w.name), 'Live'], usedBy.map((x) => [esc(x.kind), '<b>' + esc(x.name) + '</b>', '<span class="mono">' + esc(x.version == null ? '' : x.version) + '</span>', UI.pill(String(x.status || '').replace('_', ' ')), esc(VIA[x.via] || x.via) + ' <span class="muted mono">' + esc(x.via) + '</span>', x.live ? UI.pill('live', 'warn') : UI.pill('not live', 'outline')]), { clickable: false, minWidth: '640px', emptyTitle: 'Nothing uses ' + (u.name || w.name), emptyText: 'No agent, workflow tool or other workflow references it.' });
+        const note = mode === 'delete' ? (blocked ? UI.notice('<b>Delete refused (Still in use).</b> ' + esc(w.name) + ' is used by ' + esc(blockers.map((x) => x.kind + ' ' + x.name + (x.version != null ? ' ' + x.version : '')).join('; ')) + '. Remove it from them first. A workflow tool entry does not block the delete; it becomes unavailable.', 'danger') : UI.notice('The workflow, its versions and its run history are deleted. This is refused while a run is queued, running or waiting.' + (usedBy.length ? ' What still references it stops reaching it.' : ''), 'warn'))
+          : UI.notice('Agents that list it, workflow tools, and other workflows\' sub-workflow, map, loop and agent steps. Drafts are listed but not live.' + (u.deleteBlocked ? ' Deleting it is refused while a live agent or workflow uses it.' : ''), 'info');
+        ctx.modal({ cls: 'wide', title: (mode === 'delete' ? 'Delete ' : 'Used by: ') + esc(w.name), body: note + table, actions: UI.btn(mode === 'delete' ? 'Cancel' : 'Close', { attrs: 'data-close' }) + (mode === 'delete' ? UI.btn('Delete workflow', { kind: 'danger', attrs: 'data-ok', disabled: blocked, title: blocked ? 'Refused while a published agent or workflow uses it' : '' }) : ''), onMount(m) {
+          const ok = m.querySelector('[data-ok]'); if (!ok) return;
+          ok.addEventListener('click', async () => {
+            App.closeOverlay();
+            try { await App.del('/api/workflows/' + enc(w.id)); st.list = (st.list || []).filter((x) => x.id !== w.id); if (st.wfId === w.id) { st.wfId = null; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.unsaved = false; st.tab = 'runs'; } ctx.rerender(); toast(esc(w.name) + ' deleted. The audit log keeps the record.', 'ok'); } catch (err) { App.fail(err, 'Could not delete the workflow'); }
+          });
+        } });
+      }
+      if (st.openUsedBy) {
+        const mode = st.openUsedBy; st.openUsedBy = null;
+        setTimeout(async () => {
+          const pool = [wf].concat((st.list || []).filter((x) => x.id !== wf.id)).slice(0, 8);
+          for (const w of pool) { try { const u = await App.get('/api/workflows/' + enc(w.id) + '/used-by'); if (u.deleteBlocked) { wfUsedBy(w, 'delete'); return; } } catch (err) { /* next */ } }
+          toast('No workflow is used by a published agent or workflow yet, so nothing blocks a delete. Its used-by view lists what references it.', '', 7000);
+          wfUsedBy(wf, 'view');
+        }, 30);
+      }
+      ctx.on('click', '[data-export]', async () => {
+        let bundle;
+        try { bundle = await App.get('/api/workflows/' + enc(wf.id) + '/bundle'); } catch (err) { App.fail(err, 'Could not export the workflow'); return; }
+        const text = JSON.stringify(bundle, null, 2);
+        ctx.modal({ title: 'Export ' + esc(wf.name), cls: 'wide', body: UI.notice('The signed bundle of ' + (bundle.version ? 'v' + esc(bundle.version) : 'the draft') + ': the graph and its references, signed with the KMS key ' + esc(bundle.key || '') + '. Runs, versions, the registry tool and app triggers are not part of it. Audited workflow.exported.', 'info') + UI.code(text.slice(0, 40000), 'json'),
+          actions: UI.btn('Close', { attrs: 'data-close' }) + UI.btn('Download bundle', { kind: 'primary', icon: 'download', attrs: 'data-dl' }),
+          onMount(m) {
+            m.querySelector('[data-dl]').addEventListener('click', () => {
+              const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+              const a = document.createElement('a'); a.href = url; a.download = wf.name + '.workflow.json'; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+              App.closeOverlay(); toast(esc(wf.name) + '.workflow.json downloaded.', 'ok');
+            });
+          } });
+      });
+      ctx.on('click', '[data-import]', () => {
+        ctx.modal({ title: 'Import a workflow bundle', body: UI.field('Bundle (exprsn-workflow/1)', UI.textarea('', { rows: 7, placeholder: '{ "format": "exprsn-workflow/1", … }', attrs: 'data-ib' })) + '<div class="hstack wrap gap6">' + UI.btn('Read a file', { size: 'sm', icon: 'upload', attrs: 'data-ibfile' }) + '<input type="file" accept="application/json,.json" data-ibinput hidden aria-label="Bundle file"></div>'
+            + UI.field('Name', UI.input('', { placeholder: 'the bundle\'s name', attrs: 'data-ibname' }), 'Lower-case letters, digits and hyphens; a name in use is refused')
+            + UI.notice('The signature is checked before anything else: a bundle changed after signing is refused. References are re-bound by name; the workflow arrives as a draft in this workspace and its trigger starts nothing until you publish.', 'info') + '<div data-iberr></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Import', { kind: 'primary', attrs: 'data-ibgo' }),
+          onMount(m) {
+            const fileIn = m.querySelector('[data-ibinput]');
+            m.querySelector('[data-ibfile]').addEventListener('click', () => fileIn.click());
+            fileIn.addEventListener('change', () => { const f = fileIn.files && fileIn.files[0]; if (f) f.text().then((txt) => { m.querySelector('[data-ib]').value = txt; }); });
+            m.querySelector('[data-ibgo]').addEventListener('click', async (ev) => {
+              const errEl = m.querySelector('[data-iberr]');
+              let bundle; try { bundle = JSON.parse(m.querySelector('[data-ib]').value); } catch (x) { errEl.innerHTML = UI.notice('The bundle is not JSON.', 'danger'); return; }
+              const body = { bundle }; const name = m.querySelector('[data-ibname]').value.trim(); if (name) body.name = name;
+              ev.target.disabled = true;
+              try {
+                const out = await App.post('/api/workflows/import', body);
+                App.closeOverlay();
+                const w = out.workflow; st.list = [w].concat(list.filter((x) => x.id !== w.id)); st.wfId = w.id; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.tab = 'runs'; st.unsaved = false;
+                const missing = (out.bindings || []).filter((b) => b.status === 'missing');
+                ctx.rerender(); toast('Signature verified. ' + esc(w.name) + ' imported as a draft; ' + (out.bindings || []).filter((b) => b.status === 'bound').length + ' references bound' + (missing.length ? ', ' + missing.length + ' missing: ' + esc(missing.map((b) => b.from).join(', ')) : '') + '.', missing.length ? 'warn' : 'ok', 7000);
+              } catch (err) { ev.target.disabled = false; errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + ' ' + esc((err.problem && err.problem.title) || '') + '</b> ' + esc((err.problem && err.problem.detail) || err.message), 'danger'); }
+            });
+          } });
       });
       ctx.on('change', '[data-schema]', (e, t) => {
         const n = selNode(); if (!n || !editable) return;
@@ -646,8 +1043,9 @@
         const d = t.dataset.nudge.split(',').map(Number);
         n.x = Math.max(0, (n.x || 0) + d[0]); n.y = Math.max(0, (n.y || 0) + d[1]); st.unsaved = true; ctx.rerender();
       });
-      ctx.on('click', '[data-connect]', () => { st.connectFrom = st.connectFrom === st.sel ? null : st.sel; ctx.rerender(); });
-      ctx.on('click', '[data-cancelconnect]', () => { st.connectFrom = null; ctx.rerender(); });
+      ctx.on('click', '[data-connect]', () => { st.connectFrom = st.connectFrom === st.sel && !st.connectFailure ? null : st.sel; st.connectFailure = false; ctx.rerender(); });
+      ctx.on('click', '[data-connectfail]', () => { st.connectFrom = st.connectFrom === st.sel && st.connectFailure ? null : st.sel; st.connectFailure = !!st.connectFrom; ctx.rerender(); });
+      ctx.on('click', '[data-cancelconnect]', () => { st.connectFrom = null; st.connectFailure = false; ctx.rerender(); });
       ctx.on('click', '[data-dismisskbd]', () => { st.kbd = false; ctx.rerender(); });
       ctx.on('click', '[data-issue]', (e, t) => { e.preventDefault(); if (t.dataset.issue) { st.sel = t.dataset.issue; ctx.rerender(); } });
       ctx.on('click', '[data-limits]', () => {
@@ -665,31 +1063,6 @@
         if (t.value === '__new') { t.value = wf.id; newWorkflow(); return; }
         if (st.unsaved) { const ok = await ctx.confirm({ title: 'Discard unsaved changes', tag: 'draft', tone: 'warn', body: '<p class="fg2" style="margin:0">The changes to ' + esc(wf.name) + ' are not saved. Open the other workflow anyway?</p>', ok: 'Discard and open' }); if (!ok) { t.value = wf.id; return; } }
         st.wfId = t.value; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.problem = null; st.conflict = null; st.connectFrom = null; st.unsaved = false; ctx.rerender();
-      });
-      ctx.on('click', '[data-versions]', () => {
-        const diff = (g) => {
-          const a = new Map(g.nodes.map((n) => [n.id, n])); const b = new Map(st.draft.nodes.map((n) => [n.id, n]));
-          const added = st.draft.nodes.filter((n) => !a.has(n.id)).map((n) => n.title); const removed = g.nodes.filter((n) => !b.has(n.id)).map((n) => n.title);
-          const edited = st.draft.nodes.filter((n) => a.has(n.id) && JSON.stringify(Object.assign({}, a.get(n.id), { x: 0, y: 0 })) !== JSON.stringify(Object.assign({}, n, { x: 0, y: 0 }))).map((n) => n.title);
-          const ek = (e) => e.from + '>' + e.to + (e.branch || ''); const ea = g.edges.map(ek), eb = st.draft.edges.map(ek);
-          const edges = eb.filter((k) => ea.indexOf(k) < 0).length + ea.filter((k) => eb.indexOf(k) < 0).length;
-          const parts = [];
-          if (added.length) parts.push('adds ' + added.join(', ')); if (removed.length) parts.push('removes ' + removed.join(', ')); if (edited.length) parts.push('changes ' + edited.join(', ')); if (edges) parts.push(edges + ' edge' + (edges === 1 ? '' : 's') + ' differ');
-          return parts.length ? 'The draft ' + parts.join('; ') + '.' : 'The draft matches this version, apart from where steps sit on the canvas.';
-        };
-        const rows = [['draft', UI.pill(st.unsaved ? 'unsaved' : 'draft', st.unsaved ? 'warn' : ''), 'revision ' + wf.draftRev, esc(when(wf.updatedAt)), '']].concat(wf.versions.map((x) => ['v' + x.version, UI.pill(x.state, x.state === 'published' ? 'ok' : 'warn'), esc(x.note || ''), esc(when(x.publishedAt)), UI.btn('Diff against the draft', { size: 'sm', attrs: 'data-diffv="' + x.version + '"' })]));
-        ctx.modal({ cls: 'wide', title: 'Versions of ' + esc(wf.name), body: UI.table(['Version', 'State', 'Note', 'Changed', ''], rows, { clickable: false, minWidth: '0' }) + '<div data-diffout></div>' + UI.notice('Runs pin the version they started on. Publishing a new version does not change runs in progress.', 'info'),
-          actions: (manage ? UI.btn('Delete workflow', { kind: 'danger', attrs: 'data-delwf' }) : '') + UI.btn('Close', { attrs: 'data-close' }),
-          onMount(m) {
-            m.querySelectorAll('[data-diffv]').forEach((b) => b.addEventListener('click', () => { const x = wf.versions.find((y) => String(y.version) === b.dataset.diffv); m.querySelector('[data-diffout]').innerHTML = UI.notice('<b>v' + esc(x.version) + ' against the draft.</b> ' + esc(diff(x.graph)), ''); }));
-            const del = m.querySelector('[data-delwf]');
-            if (del) del.addEventListener('click', async () => {
-              App.closeOverlay();
-              const ok = await ctx.confirm({ title: 'Delete ' + wf.name, tag: 'delete', tone: 'danger', body: '<p class="fg2" style="margin:0">The workflow, its versions and its run history are deleted. This is refused while a run is queued, running or waiting.</p>', ok: 'Delete workflow' });
-              if (!ok) return;
-              try { await App.del('/api/workflows/' + enc(wf.id)); st.list = list.filter((x) => x.id !== wf.id); st.wfId = null; st.wf = null; st.draft = null; st.runId = null; st.run = null; st.unsaved = false; ctx.rerender(); toast(esc(wf.name) + ' deleted. The audit log keeps the record.', 'ok'); } catch (err) { App.fail(err, 'Could not delete the workflow'); }
-            });
-          } });
       });
       ctx.on('click', '[data-gotool]', (e, t) => { e.preventDefault(); ctx.navigate('registry', { entry: t.dataset.gotool }); });
       ctx.on('click', '[data-pubtool]', () => {
@@ -724,6 +1097,7 @@
           } });
       });
       ctx.on('click', '[data-dryrun]', () => openRunModal(true));
+      ctx.on('click', '[data-newwf]', newWorkflow);
       ctx.on('click', '[data-startrun]', () => openRunModal(false));
       ctx.on('click', '[data-save]', () => save(false));
       ctx.on('click', '[data-approve]', (e, t) => decide(t.dataset.approve, true));
@@ -761,6 +1135,8 @@
           const out = await App.post('/api/workflows/' + enc(cur.id) + '/publish', { note: null });
           st.wf = out.workflow; st.draft = clone(out.workflow.draft); st.validation = out.workflow.validation; st.problem = null;
           const i = list.findIndex((x) => x.id === cur.id); if (i >= 0) list[i] = Object.assign({}, list[i], { publishedVersion: out.version });
+          App.get('/api/workflow-callees').then((c) => { st.callees = c; schedule(); }).catch(() => undefined);
+          st.tabLoaded = null; st.tabLoading = null;
           ctx.rerender(); toast(esc(cur.name) + ' v' + out.version + ' published. New runs start on v' + out.version + '; runs in progress stay on their version.', 'ok', 5000);
         } catch (err) {
           const p = err.problem || {};

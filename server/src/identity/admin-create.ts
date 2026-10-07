@@ -3,6 +3,7 @@ import { LABELS, type Label } from '../authz/labels.js';
 import { isRole } from '../authz/permissions.js';
 import type { Services } from '../services.js';
 import type { UserRow } from '../repos/users.js';
+import type { AuditActor } from '../audit/chain.js';
 import { checkPasswordPolicy, hashPassword } from './passwords.js';
 
 export interface AdminCreateInput {
@@ -14,6 +15,9 @@ export interface AdminCreateInput {
   clearance?: string;
   /** The password, or null for a single-use enrolment link (B-810): no password is usable until the link sets one. */
   password: string | null;
+  /** Who the audit events name (1.6.0, B-4501: the system admin provisioning a tenant); the CLI by default. */
+  actor?: AuditActor;
+  traceId?: string | null;
 }
 
 export interface AdminCreated {
@@ -60,10 +64,12 @@ export async function createAdmin(s: Services, input: AdminCreateInput): Promise
     return u;
   });
   const enrolLink = input.password === null;
-  await s.audit.append({ tenantId: tenant.id, action: 'user.created', kind: 'admin', actor: { service: 'cli' }, target: { user: user.id, username }, detail: { roles, clearance, store: local.name, enrolLink } });
+  const actor: AuditActor = input.actor ?? { service: 'cli' };
+  const traceId = input.traceId ?? null;
+  await s.audit.append({ tenantId: tenant.id, action: 'user.created', kind: 'admin', actor, target: { user: user.id, username }, detail: { roles, clearance, store: local.name, enrolLink }, traceId });
   if (!enrolLink) return { user, tenantSlug: tenant.slug, roles, enrol: null };
   const hours = s.cfg.PASSWORD_INVITE_HOURS;
   const { token } = await s.account.issueToken({ tenantId: tenant.id, userId: user.id, kind: 'enrol', ttlMs: hours * 3600_000 });
-  await s.audit.append({ tenantId: tenant.id, action: 'user.enrol_link.issued', kind: 'admin', actor: { service: 'cli' }, target: { user: user.id, username }, detail: { hours } });
+  await s.audit.append({ tenantId: tenant.id, action: 'user.enrol_link.issued', kind: 'admin', actor, target: { user: user.id, username }, detail: { hours }, traceId });
   return { user, tenantSlug: tenant.slug, roles, enrol: { link: s.account.resetLink(token, tenant.slug), hours } };
 }

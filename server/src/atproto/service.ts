@@ -10,7 +10,7 @@ import { TOPICS } from '../platform/bus.js';
 import type { Scheduler } from '../platform/jobs.js';
 import type { Services } from '../services.js';
 import { parseMultikey, type Curve } from './crypto.js';
-import { didDocument, DidResolver, didWebFor, GuardedFetch, labelerFromDocument, plcDidForGenesis, plcOperationCid, signPlcOperation, type DidDocument, type PlcOperation } from './did.js';
+import { didDocument, DidResolver, didWebFor, GuardedFetch, labelerFromDocument, plcDidForGenesis, plcOperationCid, signPlcOperation, type DidDocument, type PlcOperation, type PlcService } from './did.js';
 import { AT_CUSTODY_MESSAGE, AtCustodyError, AtprotoKeys, type AtKeyRef } from './keys.js';
 import { LABEL_VALUE_RE, LABELS_TOPIC, labelsForDecision, labelsForFlag, labelSigningBytes, readLabel, SUBJECT_RE, verifyLabel, type Label } from './labels.js';
 import { pullLabelStream } from './stream.js';
@@ -252,7 +252,30 @@ export class AtprotoService {
   async document(identity: IdentityRow): Promise<DidDocument> {
     if (identity.method === 'plc' && identity.plc_op) return didDocument(identity.did, identity.plc_op);
     const label = await this.activeKey(identity.id, 'label');
-    return didDocument(identity.did, { alsoKnownAs: identity.handle ? [`at://${identity.handle}`] : [], verificationMethods: { atproto_label: `did:key:${label.multikey}` }, services: { atproto_labeler: { type: 'AtprotoLabeler', endpoint: identity.endpoint } } });
+    // B-3001: a tenant with feeds also serves them here (`#bsky_fg`, feeds.ts).
+    const extra = (await this.s().feedGenerators?.didServices(identity)) ?? {};
+    return didDocument(identity.did, { alsoKnownAs: identity.handle ? [`at://${identity.handle}`] : [], verificationMethods: { atproto_label: `did:key:${label.multikey}` }, services: { atproto_labeler: { type: 'AtprotoLabeler', endpoint: identity.endpoint }, ...extra } });
+  }
+
+  /**
+   * B-3001: makes sure a did:plc document carries a service (the feed generator's `#bsky_fg`): when it does not, a
+   * new operation adding it, signed by the rotation key in force, is accepted by the PLC directory before anything
+   * changes here. A did:web needs nothing (its document is computed). Returns the identity as it is now.
+   */
+  async ensurePlcService(by: AtActor, identity: IdentityRow, id: string, svc: PlcService): Promise<IdentityRow> {
+    if (identity.method !== 'plc') return identity;
+    const prevOp = identity.plc_op;
+    if (!prevOp || !identity.plc_prev) throw new AtprotoError(409, 'This did:plc has no recorded operation to follow.');
+    const cur = prevOp.services[id];
+    if (cur && cur.type === svc.type && cur.endpoint === svc.endpoint) return identity;
+    const rotation = await this.activeKey(identity.id, 'rotation');
+    const op: PlcOperation = { type: 'plc_operation', rotationKeys: prevOp.rotationKeys, verificationMethods: prevOp.verificationMethods, alsoKnownAs: prevOp.alsoKnownAs, services: { ...prevOp.services, [id]: svc }, prev: identity.plc_prev };
+    const signed = await signPlcOperation(op, (bytes) => this.keys.sign(refOf(rotation), bytes));
+    await this.submitPlc(identity.did, signed);
+    const plcPrev = plcOperationCid(signed);
+    await this.db('atproto_identities').where({ id: identity.id }).update({ plc_op: JSON.stringify(signed), plc_prev: plcPrev, updated_at: Date.now() });
+    await this.audit(by, 'atproto.identity.service-added', { identity: identity.id, did: identity.did }, { service: `#${id}`, type: svc.type, endpoint: svc.endpoint, plcCid: plcPrev });
+    return (await this.identityById(identity.id))!;
   }
 
   private requireCustody(curve: Curve): void {

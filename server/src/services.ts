@@ -22,6 +22,9 @@ import { Metrics } from './observability/index.js';
 import { createKms, type Kms } from './platform/kms.js';
 import { DataKeys, PLATFORM_SCOPE } from './platform/datakeys.js';
 import { createBlobStore, type BlobStore } from './platform/blob.js';
+import { SwitchableBlobStore } from './platform/blob-switch.js';
+import { SettingsService } from './config/settings.js';
+import { StorageService } from './ops/storage.js';
 import { Bus, TOPICS, type MembershipEvent } from './platform/bus.js';
 import { JobQueue, Scheduler } from './platform/jobs.js';
 import { Notifications, type MailTransport } from './platform/notifications.js';
@@ -46,6 +49,11 @@ import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
+import { ChainRefs } from './chain/refs.js';
+import { ChainService } from './chain/context.js';
+import { WorkflowBundles } from './workflows/bundles.js';
+import { WorkflowDeadLetters } from './workflows/dead-letters.js';
+import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
@@ -76,6 +84,9 @@ import { OpenAiService } from './openai/service.js';
 import { createCounterStore, type CounterStore } from './platform/ratelimit.js';
 import { EventCatalogue } from './events/catalogue.js';
 import { createCacheStore, TenantCache } from './platform/cache.js';
+import { InstanceRegistry } from './ops/instances.js';
+import { JobsAdmin } from './ops/jobs-admin.js';
+import { PlatformOverview } from './ops/overview.js';
 import { RoomRegistry } from './realtime/rooms.js';
 import { PluginService } from './plugins/service.js';
 import { IdentityPolicies } from './identity/policy.js';
@@ -100,20 +111,29 @@ import { FileService } from './files/service.js';
 import { ProcessPreviewRenderer, type PreviewRenderer } from './files/preview.js';
 import { ModerationService } from './moderation/service.js';
 import { FirehoseService } from './atproto/firehose.js';
+import { FeedGenerators } from './atproto/feeds.js';
+import { PdsService } from './atproto/pds/service.js';
 import { AppService } from './apps/service.js';
 import type { ModerationProviderClient } from './moderation/providers.js';
 import { GroupService } from './groups/service.js';
 import { CalendarService } from './groups/calendar.js';
+import { DavService } from './dav/service.js';
 import { ChannelService } from './channels/service.js';
 import type { ChannelIo, ChannelMailer } from './channels/mail.js';
 import nodemailer from 'nodemailer';
 import { SocialService } from './social/service.js';
+import { PresenceService } from './profiles/presence.js';
+import { ProfileService } from './profiles/service.js';
 import { MessagingService } from './messaging/service.js';
 import { MessagingInsights } from './messaging/insights.js';
 import { FeedService } from './feed/service.js';
+import { SocialAdmin } from './social/admin.js';
+import { BuiltinTools } from './registry/builtin/index.js';
+import { WorkflowStepKit } from './workflows/steps/index.js';
 import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
+import { ImportService } from './imports/service.js';
 
 export interface Services {
   cfg: Config;
@@ -160,6 +180,10 @@ export interface Services {
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
+  /** Sprint 32 (B-4101): the chain context every invocation records itself in. */
+  chains: ChainService;
+  /** Sprint 34 (B-4105): the reference graph across agents, skills, tools and workflows. */
+  chainRefs: ChainRefs;
   /** Media assets, presets and ffmpeg jobs (Sprint 8). */
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
@@ -207,6 +231,12 @@ export interface Services {
   schema: SchemaGuard;
   /** Sprint 22 (B-1405): zone NetworkPolicies applied through the Kubernetes API, with drift checks. */
   zoneCluster: ZoneCluster;
+  /** 1.6.0 (B-4202): this server instance's heartbeat, every instance's readiness, and drain. */
+  instances: InstanceRegistry;
+  /** 1.6.0 (B-4202): the Overview's alerts, counters, recent audit and capacity. */
+  overview: PlatformOverview;
+  /** 1.6.0 (B-4203): Jobs and queues: job types, jobs, schedules, dead letters and the tenant cache. */
+  jobsAdmin: JobsAdmin;
   /** Sprint 24 (B-1701 to B-1703): the tenant secrets vault (KV secrets, transit keys, path policies). */
   vault: VaultService;
   /** Sprint 24 (B-1601 to B-1604): the certificate authority (issuers, profiles, issuance, CRLs, OCSP). */
@@ -241,6 +271,10 @@ export interface Services {
   userImports: UserImportService;
   /** 1.4.0, Sprint 27 (B-1908): AT-Protocol firehose subscriptions and their single-instance consumers. */
   firehose: FirehoseService;
+  /** 1.5.0, Sprint 31 (B-3001 to B-3003): custom feed generators over the firehose, served under the tenant's DID. */
+  feedGenerators: FeedGenerators;
+  /** 1.5.0, Sprint 31 (B-2901 to B-2906, B-3004): the AT-Protocol personal data server. */
+  pds: PdsService;
   /** 1.4.0, Sprint 27 (B-2201 to B-2208): low-code apps: entities, sealed records, forms, triggers, AI fields, bundles. */
   apps: AppService;
   /** 1.4.0, Sprint 27c (B-2501, B-2505): groups in workspaces, members, requests, invitations, posts and their moderation. */
@@ -251,23 +285,43 @@ export interface Services {
   channels: ChannelService;
   /** 1.4.0, Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules, shared by messaging and the feed. */
   social: SocialService;
+  /** 1.5.0, Sprint 34c (B-5801): profiles: pronouns, bio and an avatar from the file store, visible by workspace and clearance. */
+  people: ProfileService;
+  /** 1.5.0, Sprint 34c (B-5802): presence status, chosen or derived from connections and idle time. */
+  presence: PresenceService;
   /** 1.4.0, Sprint 28b (B-2601 to B-2604): direct and group conversations, sealed messages, receipts, presence, mutes. */
   messaging: MessagingService;
   /** 1.4.0, Sprint 28b (B-2605): keyword and semantic search, thread summaries and catch-up digests. */
   messagingInsights: MessagingInsights;
   /** 1.4.0, Sprint 28c (B-2701 to B-2705): the workspace feed: posts, comments, reactions, reposts, bookmarks, feeds, trending tags and digests. */
   feed: FeedService;
+  /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
+  socialAdmin: SocialAdmin;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
   access: AccessService;
   /** 1.5.0, Sprint 29 (B-3305): access review campaigns. */
   accessReviews: AccessReviewService;
+  /** 1.5.0, Sprint 30 (B-31): DAV app passwords, personal calendars and address books, dead properties. */
+  dav: DavService;
+  /** 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, the catalogue and model import. */
+  imports: ImportService;
+  /** 1.5.0, Sprint 32b (B-3903, B-3906, B-3909): workflow triggers, dead letters and bundles. */
+  workflowTriggers: WorkflowTriggers;
+  workflowDeadLetters: WorkflowDeadLetters;
+  workflowBundles: WorkflowBundles;
+  /** 1.6.0, Sprint 35c (B-4205): settings each instance reads, overrides under dual control. */
+  settings: SettingsService;
+  /** 1.6.0, Sprint 35c (B-4204): stores, usage, quarantine, integrity, purges and blob store migration. */
+  storage: StorageService;
   /** Stops background work and closes connections (Redis, SMTP, identity stores). */
   close(): Promise<void>;
 }
 
 export interface ServiceOverrides {
+  /** 1.6.0 (B-4202): this instance's id (default: the job queue's worker id), so tests run two instances in one process. */
+  instanceId?: string;
   kms?: Kms;
   blobs?: BlobStore;
   mediaRunner?: MediaRunner;
@@ -275,7 +329,7 @@ export interface ServiceOverrides {
   imageSafety?: ImageSafety;
   vectors?: VectorStore;
   /** Data connection drivers by engine (tests use in-process fakes). */
-  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql', DriverFactory>>;
+  drivers?: Partial<Record<'postgres' | 'opensearch' | 'mysql' | 'mongodb', DriverFactory>>;
   /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
   dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
@@ -304,7 +358,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 15: with a previous KEK configured, reads fall back to it until `kms:rewrap` has moved everything.
   const kms = overrides.kms ?? withPrevious(createKms(cfg), createPreviousKms(cfg));
   const keys = new DataKeys(db, kms, cfg.OPENBAO_KEY_PREFIX, cfg.DATA_KEY, bus);
-  const blobs = overrides.blobs ?? createBlobStore(cfg);
+  // 1.6.0 (B-4204): the store can move to another one while the server runs (ops/storage.ts).
+  const blobs = new SwitchableBlobStore(overrides.blobs ?? createBlobStore(cfg));
   const mode = cfg.JOB_QUEUE === 'auto' ? (cfg.REDIS_URL ? 'bullmq' : 'db') : cfg.JOB_QUEUE;
   const jobs = new JobQueue(db, log, bus, { mode, redisUrl: cfg.REDIS_URL, pollMs: cfg.JOB_POLL_MS, concurrency: cfg.JOB_CONCURRENCY });
   const scheduler = new Scheduler(jobs, log);
@@ -357,18 +412,32 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
   guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
+  const chainRefs = new ChainRefs(db, registry);
+  registry.useRefs(chainRefs);
   const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  const chains = new ChainService(db, {
+    maxDepth: cfg.CHAIN_MAX_DEPTH,
+    kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
+    defaults: { tokens: cfg.CHAIN_MAX_TOKENS, steps: cfg.CHAIN_MAX_STEPS, wallMs: cfg.CHAIN_MAX_WALL_SECONDS * 1000, gpuMs: cfg.CHAIN_MAX_GPU_SECONDS * 1000 }
+  }, audit);
+  tools.useChains(chains);
   const agents = new AgentService(db, keys, gateway, registry, tools, quotas, audit, bus, jobs, notifications, async (tenantId, userId, workspaceId) => {
     const p = await loadPrincipal(s, tenantId, userId, {});
     if (p) p.workspaceId = workspaceId;
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) } });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
   tools.useWorkflows(workflows);
+  // Sprint 34 (B-4102): agents delegate to agents through the dispatcher.
+  tools.useAgents(agents);
+  // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
+  agents.chains = chains;
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
+  tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
     runner: overrides.mediaRunner ?? new FfmpegRunner({ ffmpeg: cfg.MEDIA_FFMPEG, ffprobe: cfg.MEDIA_FFPROBE, ...(cfg.MEDIA_WHISPER_BIN ? { whisper: cfg.MEDIA_WHISPER_BIN } : {}) }),
@@ -403,6 +472,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
   agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
+  agents.memoryExtract = (e) => memory.onRun(e);
+  memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
   const s: Services = {
     cfg,
@@ -444,6 +515,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tools,
     agents,
     workflows,
+    chains,
+    chainRefs,
     media,
     images,
     imageSafety: overrides.imageSafety ?? (cfg.IMAGE_SAFETY_URL ? new HttpSafety(cfg.IMAGE_SAFETY_URL) : noSafety),
@@ -477,6 +550,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
     zoneCluster: new ZoneCluster(() => s),
+    instances: new InstanceRegistry(() => s, bus, { heartbeatMs: 30_000, id: overrides.instanceId ?? jobs.workerId }),
+    overview: new PlatformOverview(() => s),
+    jobsAdmin: new JobsAdmin(() => s),
     vault: new VaultService(() => s, { maxVersions: cfg.VAULT_KV_MAX_VERSIONS }),
     pki: new PkiService(() => s),
     // 1.4.0, Sprint 24c: platform core.
@@ -505,7 +581,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     signup: new SignupService(() => s),
     userImports: new UserImportService(() => s),
     // 1.4.0, Sprint 27: the firehose.
-    firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT }),
+    firehose: new FirehoseService(() => s, { tickMs: cfg.FIREHOSE_TICK_MS, checkpointMs: cfg.FIREHOSE_CHECKPOINT_MS, queueMax: cfg.FIREHOSE_QUEUE_MAX, backoffMaxMs: cfg.FIREHOSE_BACKOFF_MAX_MS, idleMs: cfg.FIREHOSE_IDLE_MS, maxPerTenant: cfg.FIREHOSE_MAX_PER_TENANT, rejectAudits: cfg.FIREHOSE_REJECT_AUDITS }),
+    feedGenerators: new FeedGenerators(() => s, { maxPerTenant: cfg.FEEDS_MAX_PER_TENANT, itemsMax: cfg.FEED_ITEMS_MAX }),
+    // 1.5.0, Sprint 31: the PDS.
+    pds: new PdsService(() => s),
     apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH }),
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
@@ -517,27 +596,45 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     }),
     // 1.4.0, Sprint 28b: social relations.
     social: new SocialService(() => s),
+    // 1.5.0, Sprint 34c: profiles and presence.
+    people: new ProfileService(() => s),
+    presence: new PresenceService(() => s, { heartbeatMs: 30_000, leaseMs: 90_000 }),
     messaging: new MessagingService(() => s, { maxMembers: cfg.MESSAGING_MAX_MEMBERS, embedModel: cfg.MESSAGING_EMBED_MODEL || null }),
     messagingInsights: new MessagingInsights(() => s, { summaryProfile: cfg.MESSAGING_SUMMARY_PROFILE, maxMessages: cfg.MESSAGING_SUMMARY_MAX_MESSAGES }),
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
+    socialAdmin: new SocialAdmin(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
     accessReviews: new AccessReviewService(() => s),
+    // 1.5.0, Sprint 30: CalDAV and CardDAV.
+    dav: new DavService(() => s, db, cfg.SESSION_SECRET),
+    // 1.5.0, Sprint 30: the import wizard's server side.
+    imports: new ImportService(() => s, cfg),
+    // 1.5.0, Sprint 32b: workflows started by events and schedules, dead letters, bundles.
+    workflowTriggers: new WorkflowTriggers(() => s, metrics.registry),
+    workflowDeadLetters: new WorkflowDeadLetters(() => s),
+    workflowBundles: new WorkflowBundles(() => s),
+    settings: new SettingsService(() => s),
+    storage: new StorageService(() => s),
     close: async () => {
+      s.settings.stop();
+      s.storage.stop();
       s.schema.stop();
       scheduler.stop();
       // B-1908: firehose consumers store their cursors and give their leases back while the database is still open.
       await s.firehose.close().catch(() => undefined);
       s.webhooks.close();
       s.pluginRuntime.close();
+      s.workflowTriggers.close();
       await denials.flushAll().catch(() => undefined);
       chat.close();
       await chat.store.close();
       await gateway.stop();
       await calc.close();
       siem.close();
+      await s.instances.stop();
       await jobs.stop();
       await chain.close();
       await mcp.close();
@@ -557,7 +654,10 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
   jobs.tracer = tracer.enabled ? tracer : null;
-  jobs.gate = () => s.schema.refusal();
+  jobs.gate = () => s.schema.refusal() ?? s.instances.drainReason();
+  // 1.6.0 (B-4203): paused job types and schedules, read again by every poll and every scheduler tick.
+  jobs.pausesLoader = async () => ((await db('job_type_pauses').select('type')) as { type: string }[]).map((r) => r.type);
+  scheduler.isPaused = async (name) => !!(await db('schedule_pauses').where({ name }).first('name'));
   if (tracer.enabled) {
     const check = guard.engine.check.bind(guard.engine);
     guard.engine.check = (input) => withSpan('guardrails check', SpanKind.INTERNAL, { 'exprsn.guardrails.checkpoint': input.checkpoint, 'exprsn.label': input.label }, async (span) => {
@@ -573,6 +673,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.training.registerJobs();
   s.zones.registerJobs();
   s.ops.registerJobs();
+  s.storage.registerJobs(); // 1.6.0, Sprint 35c (B-4204): ops.blobs.verify, ops.blobs.migrate, ops.storage.sample
   s.federation.registerJobs();
   s.webhooks.registerJobs();
   s.webhooks.listen();
@@ -591,8 +692,12 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
     s.connections.vaultResolver = vaultRead;
     s.mcp.vaultResolver = vaultRead;
+    // 1.6.0, Sprint 35a (B-4302): a Chat Completions instance's bearer token, read as the administrator who saved it.
+    s.gateway.tokenResolver = vaultRead;
   }
+  s.pds.registerJobs(); // 1.5.0, Sprint 31 (B-2904, B-2905): requestCrawl, the event and blob trim, repos as moderation objects
   s.atproto.registerJobs(); // Sprint 25 (B-1610, B-1611): label pulls; labels withdrawn when their flag is dismissed
+  s.feedGenerators.registerJobs(); // Sprint 31 (B-3003): feed index retention; feed caches dropped on a change
   // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
   s.files.registerJobs();
   s.knowledge.folders = s.files.folderSource();
@@ -617,6 +722,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // records as moderation objects (a takedown hides the record from every list and read; an upheld appeal shows it).
   s.apps.registerJobs();
   s.workflows.useRecords(s.apps.triggers);
+  s.workflows.useStepKit(new WorkflowStepKit(() => s)); // Sprint 32c (B-3907, B-3908): notify and webhook steps, approval forms
   if (!s.moderation.registry.get('record')) {
     s.moderation.registry.register({
       type: 'record',
@@ -643,9 +749,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 28c (B-2701 to B-2705): the feed room authoriser, posts and comments as moderation objects, trending and digests.
   s.feed.init();
   s.feed.digests.registerJobs();
+  s.socialAdmin.registerJobs(); // 1.6.0 (B-4206): legal-hold conversation exports
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
+  s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
+  // 1.5.0, Sprint 32b (B-3903, B-3906): event and schedule triggers on workflows, dead letters of failed runs.
+  s.workflowTriggers.install();
+  s.workflowTriggers.registerJobs();
+  s.workflowTriggers.listen();
+  s.workflowDeadLetters.install();
   s.moderation.init(); // Sprint 26 (B-1901 to B-1907): object types, provider and sweep jobs, routing, dead letters, sign-in gate
   s.userImports.registerJobs(); // Sprint 26a (B-1805)
   jobs.register('billing.close', async (p, ctx) => s.billing.closePrevious(String(p.tenantId ?? ctx.job.tenant_id)));
@@ -688,11 +801,13 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('knowledge.sync-due', 5 * 60_000, activeTenants);
   s.knowledge.replication.start(); // Sprint 19: logical replication streams for PostgreSQL knowledge sources
   s.scheduler.every('memory.purge', 60 * 60_000, activeTenants);
+  s.scheduler.every('memory.consolidate', 24 * 60 * 60_000, activeTenants); // Sprint 30 (B-3702)
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);
+  s.storage.schedule(s.scheduler); // 1.6.0, Sprint 35c (B-4204): the integrity check and usage samples
   s.federation.schedule(s.scheduler, activeTenants);
   s.zoneCluster.schedule(s.scheduler); // Sprint 22 (B-1405): drift checks when zones are applied in-cluster
   if (s.cfg.BILLING_CLOSE_MINUTES > 0) s.scheduler.every('billing.close', s.cfg.BILLING_CLOSE_MINUTES * 60_000, activeTenants);
@@ -701,11 +816,15 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
+  s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
   s.moderation.schedule(); // Sprint 26 (B-1904, B-1905): SLA escalation and sanction expiry
+  s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests
   s.accessReviews.schedule(s.scheduler); // 1.5.0, Sprint 29 (B-3305): campaigns that open, and overdue escalation
+  s.imports.schedule(s.scheduler, activeTenants); // 1.5.0, Sprint 30 (B-3801, B-3803): due harvests, promoted bundles
 }

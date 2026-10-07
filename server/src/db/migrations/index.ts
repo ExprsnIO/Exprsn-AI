@@ -43,6 +43,21 @@ import * as m030b from './030b_social.js';
 import * as m030c from './030c_feed.js';
 import * as m031 from './031_access.js';
 import * as m031b from './031b_record_queries.js';
+import * as m032 from './032_dav.js';
+import * as m032c from './032c_memory.js';
+import * as m033 from './033_pds.js';
+import * as m033b from './033b_feeds.js';
+import * as m033c from './033c_imports.js';
+import * as m034 from './034_workflows2.js';
+import * as m034b from './034b_workflow_triggers.js';
+import * as m034c from './034c_workflow_steps.js';
+import * as m036 from './036_chains.js';
+import * as m036b from './036b_profiles.js';
+import * as m036c from './036c_dav_files.js';
+import * as m037 from './037_model_servers.js';
+import * as m037b from './037b_platform_ops.js';
+import * as m037c from './037c_platform_storage.js';
+import * as m037d from './037d_platform_social.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -94,7 +109,22 @@ const MIGRATIONS: Record<string, Migration> = {
   '030b_social': m030b,
   '030c_feed': m030c,
   '031_access': m031,
-  '031b_record_queries': m031b
+  '031b_record_queries': m031b,
+  '032_dav': m032,
+  '032c_memory': m032c,
+  '033_pds': m033,
+  '033b_feeds': m033b,
+  '033c_imports': m033c,
+  '034_workflows2': m034,
+  '034b_workflow_triggers': m034b,
+  '034c_workflow_steps': m034c,
+  '036_chains': m036,
+  '036b_profiles': m036b,
+  '036c_dav_files': m036c,
+  '037_model_servers': m037,
+  '037b_platform_ops': m037b,
+  '037c_platform_storage': m037c,
+  '037d_platform_social': m037d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

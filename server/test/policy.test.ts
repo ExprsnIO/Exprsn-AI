@@ -28,8 +28,8 @@ describe('labels', () => {
 });
 
 describe('roles', () => {
-  it('has the thirteen built-in roles', () => {
-    expect(ROLES).toHaveLength(13);
+  it('has the fourteen built-in roles', () => {
+    expect(ROLES).toHaveLength(14);
   });
 
   it('gives system admin every permission', () => {

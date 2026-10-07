@@ -13,6 +13,11 @@
   const secs = (ms) => (ms == null ? '' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s');
   const clip = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; };
   const active = (s) => s === 'queued' || s === 'running' || s === 'waiting';
+  const KIND_TEXT = { 'agent-run': 'agent run', 'tool-call': 'tool call', 'workflow-run': 'workflow run', 'skill-load': 'skill', 'chat-turn': 'chat turn', 'plugin-action': 'plugin action', 'app-trigger': 'app trigger' };
+  const NODE_TONE = { running: 'info', succeeded: 'ok', failed: 'danger', refused: 'danger', waiting: 'info', cancelled: 'warn' };
+  const flatten = (n) => (n ? [n].concat((n.children || []).reduce((a, k) => a.concat(flatten(k)), [])) : []);
+  const nodeTitle = (n) => (n.name || n.callee || n.kind) + (n.kind === 'agent-run' || n.kind === 'workflow-run' ? ' ' + shortId(n.ref) : '');
+  const pathHtml = (path) => '<span class="runs-path">' + (path || []).map((x, i) => (i ? '<span class="sep" aria-hidden="true">›</span>' : '') + '<span><span class="muted">' + esc(KIND_TEXT[x.kind] || x.kind) + '</span> <b>' + esc(x.name || x.ref) + '</b></span>').join('') + '</span>';
   const duration = (r) => r.finishedAt && r.startedAt ? 'finished in ' + secs(r.finishedAt - r.startedAt) : r.state === 'waiting' ? 'waiting' : r.state === 'budget' ? 'stopped at its budget' : r.startedAt ? 'running for ' + secs(Date.now() - r.startedAt) : 'queued';
 
   // ---------- live updates: run.step and run.state for the signed-in user ----------
@@ -49,9 +54,10 @@
   App.register({
     id: 'runs', title: 'Runs', live: true,
     summary: 'Agent run timeline by lane, step inspector, approvals, budget, replay',
-    crumb: (st) => ['Runs'].concat(st.run ? [shortId(st.run)] : []),
-    label: (st) => (st.view && st.view.id === st.run ? st.view.label : null),
+    crumb: (st) => ['Runs'].concat(st.chain ? ['chain ' + shortId(st.chain)] : st.run ? [shortId(st.run)] : []),
+    label: (st) => (st.chain ? (st.chainView && st.chainView.id === st.chain ? st.chainView.label : null) : st.view && st.view.id === st.run ? st.view.label : null),
     commands: [
+      { label: 'Open the chain tree of this run', sub: 'Runs', run(app) { const st = app.stateFor('runs'); if (st.view && st.view.chain) { st.chain = st.view.chain.id; st.node = st.view.chain.node; app.render(); } } },
       { label: 'Start an agent run', sub: 'Runs', run(app) { app.stateFor('runs').openStart = true; app.render(); } },
       { label: 'Replay a run from a step', sub: 'Runs', run(app) { app.stateFor('runs').openReplay = true; app.render(); } }
     ],
@@ -59,20 +65,30 @@
       { title: 'Proposal denied', tone: 'danger', text: 'The tool-call checkpoint or a label ceiling refused a call. The thinking step receives the denial as data.', apply(ctx) { ctx.state.demo = 'denied'; ctx.rerender(); } },
       { title: 'Budget stop', tone: 'warn', text: 'The run stopped at its step, token, time or tool-call limit. The last checkpoint is kept and the owner can raise the limit and resume.', apply(ctx) { ctx.state.demo = 'budget'; ctx.rerender(); } },
       { title: 'Traceable figure', tone: 'ok', text: 'Selecting a number in the final answer highlights the calculating step that produced it.', apply(ctx) { ctx.state.demo = 'figure'; ctx.rerender(); } },
-      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.demo = 'waiting'; ctx.rerender(); } }
+      { title: 'Waiting on approval', tone: 'info', text: 'A doing step shows who must approve and how long it has waited.', apply(ctx) { ctx.state.demo = 'waiting'; ctx.rerender(); } },
+      { title: 'Chain tree', tone: 'neutral', text: 'A run that delegated opens its chain as a tree: every agent run, tool call, skill load and workflow run under the root, with timing, tokens, labels and guardrail decisions. The tree\'s token total equals what the chain metered.', apply(ctx) { ctx.state.demo = 'chain'; ctx.rerender(); } },
+      { title: 'Held three levels down', tone: 'info', text: 'A write call held in a delegate\'s delegate pauses the whole chain. It is approved from the root run, with the path from the root to the call shown.', apply(ctx) { ctx.state.demo = 'held'; ctx.rerender(); } },
+      { title: 'Child failed with a typed error', tone: 'danger', text: 'A child that stops at its budget, is cancelled or fails reaches its caller as a typed error (an agent sees it as a tool error starting child_<type>); the node records the errorType.', apply(ctx) { ctx.state.demo = 'childfail'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
       const toast = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
       st.query = st.query || ''; st.scope = st.scope || 'mine';
+      // The route's params are parsed from the hash on every render: act on them once per hash.
+      if (st.seenHash !== location.hash) {
+        st.seenHash = location.hash;
+        if (ctx.params.run && ctx.params.run !== st.run) { st.run = ctx.params.run; st.view = null; st.sel = null; st.chain = null; }
+        if (ctx.params.chain) { st.chain = ctx.params.chain; st.node = ctx.params.node || null; st.chainView = null; st.chainError = null; }
+      }
       const admin = App.can('agents:manage') || App.can('tools:manage');
       const later = () => { if (App.state.route !== 'runs') return; if (document.querySelector('.overlay')) { setTimeout(later, 250); return; } ctx.rerender(); };
-      const fetchRun = (id) => App.get('/api/runs/' + id).then((v) => { st.view = v; }).catch((err) => { st.view = { id, error: err }; });
+      const fetchRun = (id) => App.get('/api/runs/' + id).then((v) => { st.view = v; }).catch((err) => { st.view = { id, fetchError: err }; });
+      const fetchChain = (id) => App.get('/api/chains/' + encodeURIComponent(id)).then((c) => { if (st.chain === id) { st.chainView = c; st.chainError = null; } }).catch((err) => { if (st.chain === id) { st.chainView = null; st.chainError = err; } });
       const load = () => {
         if (st.loading) { st.again = true; return; }
         st.loading = true;
         App.get('/api/runs' + (st.scope === 'all' || !App.can('agents:run') ? '?all=true' : ''))
-          .then((runs) => { st.runs = runs; st.loaded = true; st.loadError = null; if (ctx.params.run) { st.run = ctx.params.run; delete ctx.params.run; } if (!st.run || (!runs.find((r) => r.id === st.run) && !(st.view && st.view.id === st.run))) st.run = runs[0] ? runs[0].id : null; return st.run ? fetchRun(st.run) : null; })
+          .then((runs) => { st.runs = runs; st.loaded = true; st.loadError = null; if (!st.run || (!runs.find((r) => r.id === st.run) && !(st.view && st.view.id === st.run))) st.run = runs[0] ? runs[0].id : null; return Promise.all([st.run ? fetchRun(st.run) : null, st.chain ? fetchChain(st.chain) : null]); })
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (st.again) { st.again = false; load(); return; } later(); });
       };
@@ -100,10 +116,18 @@
         else if (d === 'budget') find((r) => r.state === 'budget', 'No run has hit its budget. A run that does stops with its checkpoint kept, and the owner can raise the limit here.');
         else if (d === 'waiting') find((r) => r.state === 'waiting', 'No run is waiting on approval. A write or destructive call pauses the run and shows who must approve.');
         else if (d === 'figure') { if (find((r) => r.state === 'succeeded', 'No finished run yet. Figures in a final answer link to the calculating step that produced them.')) st.showAnswer = true; }
+        else if (d === 'chain' || d === 'held' || d === 'childfail') {
+          const kids = (r) => runs.filter((k) => k.caller && k.caller.id === r.id);
+          const pick = d === 'chain' ? runs.find((r) => r.chain && !r.caller && kids(r).length) || runs.find((r) => r.chain)
+            : d === 'held' ? runs.find((r) => r.chain && r.caller && r.state === 'waiting') || runs.find((r) => r.chain && r.state === 'waiting')
+              : runs.find((r) => r.chain && r.caller && (r.state === 'failed' || r.state === 'budget' || r.state === 'cancelled'));
+          if (pick) { st.chain = pick.chain.id; st.node = null; st.chainView = null; st.chainPick = d; }
+          else st.demoNote = d === 'chain' ? 'No run has a chain yet. Start a run; an agent that delegates opens its chain here as a tree.' : d === 'held' ? 'Nothing is held in a chain. A write call held anywhere in a chain pauses it, and is decided here from the root.' : 'No child run has failed. A child that stops reaches its caller as a typed error, shown on its node here.';
+        }
       }
       const v = st.view && st.view.id === st.run ? st.view : null;
       if (st.run && !v && !st.fetching) { st.fetching = true; fetchRun(st.run).finally(() => { st.fetching = false; later(); }); }
-      if (v && st.demoFor && !v.error) {
+      if (v && st.demoFor && !v.fetchError) {
         const d = st.demoFor; st.demoFor = null;
         const pick = d === 'denied' ? v.steps.find((s) => s.state === 'denied' || s.state === 'rejected') : d === 'waiting' ? v.steps.find((s) => s.state === 'waiting') : d === 'figure' ? v.steps.find((s) => s.lane === 'calc') : v.steps[v.steps.length - 1];
         if (pick) st.sel = pick.n;
@@ -130,13 +154,20 @@
         + '.runs-div{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px}.runs-divline{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}.runs-divline .rule{flex-grow:1;height:1px;background:var(--line)}.runs-divline.danger{color:var(--danger-fg)}.runs-divline.info{color:var(--info-fg)}'
         + '.runs-fig{font:inherit;font-family:var(--sans);font-size:13px;font-weight:600;padding:0 5px;border:1px solid var(--line);border-radius:4px;background:var(--panel);cursor:pointer;color:var(--fg)}.runs-fig:hover,.runs-fig.on{border-color:var(--ok-fg);background:var(--ok-bg);color:var(--ok-fg)}'
         + '@media (max-width:900px){.runs-lanes{display:none}.runs-row{grid-template-columns:28px 1fr}.runs-row > div:empty{display:none}}'
+        + '.runs-tree{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;min-width:0}.runs-tree .runs-tree{padding-left:12px;margin-left:10px;border-left:1px solid var(--line)}'
+        + '.runs-node{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;width:100%;min-width:0;text-align:left;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--fg);font:inherit;font-size:13px;cursor:pointer}'
+        + '.runs-node:hover{background:var(--panel2)}.runs-node.selected{background:var(--accent-tint);border-color:var(--accent)}.runs-node.held{border-color:var(--info-fg);border-style:dashed}'
+        + '.runs-node .nk{font-size:11px;color:var(--fg2);border:1px solid var(--line);border-radius:4px;padding:0 5px;white-space:nowrap}.runs-node .nn{font-weight:600;overflow-wrap:anywhere;min-width:0}.runs-node .nm{font-size:12px;color:var(--fg2);margin-left:auto;white-space:nowrap}'
+        + '.runs-path{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-size:12px}.runs-path .sep{color:var(--muted)}.runs-path b{font-weight:600;overflow-wrap:anywhere}'
+        + '@media (max-width:640px){.runs-tree .runs-tree{padding-left:6px;margin-left:4px}}'
         + '</style>';
 
+      if (st.chain) { renderChain(); return; }
       let page;
       let inspector = '';
       if (!st.run) page = '<div class="page runs-page">' + UI.pagehead('Runs', 'Agent runs, step by step', '') + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '') + UI.empty('No runs yet', 'Start a run of a published agent; its thinking, doing and calculating steps appear here as they happen.', App.can('agents:run') ? UI.btn('Start a run', { kind: 'primary', attrs: 'data-start' }) : '') + '</div>';
       else if (!v) page = '<div class="page">' + UI.notice('Loading…', 'info') + '</div>';
-      else if (v.error) page = '<div class="page">' + UI.problem('The run could not be loaded', v.error.message, v.error.problem && v.error.problem.trace_id) + '</div>';
+      else if (v.fetchError) page = '<div class="page">' + UI.problem('The run could not be loaded', v.fetchError.message, v.fetchError.problem && v.fetchError.problem.trace_id) + '</div>';
       else {
         const me = App.me && App.me.user ? App.me.user : {};
         const owner = v.userId === me.id;
@@ -148,7 +179,7 @@
         const bodyOf = (s) => {
           const d = s.detail || {};
           if (s.lane === 'think') return (s.meta.proposal && s.meta.proposal.length ? 'proposal: call ' + s.meta.proposal.join(', ') : 'answer: ' + clip(d.content, 120));
-          if (s.state === 'waiting' && s.meta.awaiting) return 'waiting on workflow run ' + String(s.meta.awaiting.id || '').slice(-6).toLowerCase() + ', started ' + clock(s.createdAt);
+          if (s.state === 'waiting' && s.meta.awaiting) return 'waiting on ' + (s.meta.awaiting.kind === 'agent-run' ? 'agent run ' : 'workflow run ') + shortId(s.meta.awaiting.id) + ', started ' + clock(s.createdAt);
           if (s.state === 'waiting') return 'waiting on approval: ' + (s.meta.approvers || '') + ', requested ' + clock(s.createdAt);
           if (s.lane === 'calc') return (d.arguments && d.arguments.expression ? d.arguments.expression : '') + (d.result && d.result.decimal ? ' = ' + clip(d.result.decimal, 24) : d.error ? ': ' + clip(d.error, 80) : '');
           return d.error ? clip(d.error, 120) : clip(JSON.stringify(d.result), 120);
@@ -161,7 +192,9 @@
           const divider = (tone, text) => '<div class="runs-div"><div></div><div class="runs-divline' + (tone ? ' ' + tone : '') + '"><span class="rule"></span><span>' + text + '</span><span class="rule"></span></div></div>';
           if (s.state === 'denied') h += divider('danger', 'Refused: ' + esc(clip((s.detail || {}).error, 160)) + ' The reason goes back to the thinking step as data.');
           else if (s.state === 'rejected') h += divider('danger', 'Rejected by ' + esc((s.meta.approval && s.meta.approval.by) || 'the approver') + '. Nothing was run; the next thinking step hears why.');
+          else if (s.state === 'waiting' && s.meta.awaiting && s.meta.awaiting.kind === 'agent-run') h += divider('info', 'Waiting on the child run ' + esc(shortId(s.meta.awaiting.id)) + '. This run holds its checkpoint and continues with the child\'s answer or its typed error.');
           else if (s.state === 'waiting' && s.meta.awaiting) h += divider('info', 'The workflow waits on ' + esc(s.meta.approvers || 'its approvers') + '. This run holds its checkpoint and continues with the result when the workflow finishes.');
+          else if (s.state === 'waiting' && v.caller) h += divider('info', 'Held for approval. The chain waits; the call is decided from the root, where the path is shown.');
           else if (s.state === 'waiting') h += divider('info', 'Approval requested from ' + esc(s.meta.approvers || 'an approver') + ', ' + Math.round((Date.now() - s.createdAt) / 60000) + ' min ago. The run holds its checkpoint until a decision.');
           else if (s.lane !== 'think' && s.meta.approval) h += divider('', 'Approved by ' + esc(s.meta.approval.by || '') + '.');
           if (s.meta.warning) h += divider('', esc(s.meta.warning));
@@ -182,13 +215,16 @@
           } else {
             const ap = sel.meta.approval;
             kv = [['Tool', '<span class="mono">' + esc(sel.meta.tool || sel.title) + '</span> ' + esc(sel.meta.version || '') + (sel.meta.impl === 'mcp' ? ' <span class="muted">(MCP server ' + esc(String(sel.meta.tool).split('.')[0]) + ')</span>' : '')], ['Side effect class', sidePill(sel.meta.sideEffect)], ['Tool ceiling', sel.meta.ceiling ? UI.label(sel.meta.ceiling, { sm: true }) : ''], ['Arguments', '<span class="mono">' + esc(clip(JSON.stringify(d.arguments || {}), 300)) + '</span>']];
-            if (sel.state === 'waiting' && sel.meta.awaiting) kv.push(['Waiting on', 'workflow run <span class="mono">' + esc(String(sel.meta.awaiting.id || '').slice(-6).toLowerCase()) + '</span>'], ['Started', esc(clock(sel.createdAt))], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['When it finishes', 'this run continues with its result, or its failure']);
+            if (sel.state === 'waiting' && sel.meta.awaiting) kv.push(['Waiting on', sel.meta.awaiting.kind === 'agent-run' ? 'agent run <a href="#" data-run="' + esc(sel.meta.awaiting.id) + '" class="mono">' + esc(shortId(sel.meta.awaiting.id)) + '</a>' : 'workflow run <a href="#" data-gowfrun="' + esc(sel.meta.awaiting.id) + '" class="mono">' + esc(shortId(sel.meta.awaiting.id)) + '</a>'], ['Started', esc(clock(sel.createdAt))], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['When it finishes', 'this run continues with its result, or its failure']);
             else if (sel.state === 'waiting') kv.push(['Must approve', esc(sel.meta.approvers || '')], ['Requested', esc(clock(sel.createdAt)) + ', from the run'], ['Waited', Math.round((Date.now() - sel.createdAt) / 60000) + ' min'], ['If nobody approves', 'the run keeps its checkpoint; cancel it to stop']);
             else kv.push(['Outcome', sel.state === 'ok' ? UI.pill('ok', 'ok') : '<span style="color:var(--danger-fg)">' + esc(d.error || sel.state) + '</span>'], ['Duration', secs(sel.meta.durationMs)], ['Guardrail', esc(sel.meta.decision || 'not reached')], ['Typed result', sel.meta.valid == null ? '<span class="muted">no output schema</span>' : UI.pill(sel.meta.valid ? 'matches output schema' : 'schema mismatch', sel.meta.valid ? 'ok' : 'danger')]);
             if (ap) kv.push([ap.decision === 'approved' ? 'Approved by' : 'Rejected by', esc(ap.by || '') + (ap.note ? ': ' + esc(ap.note) : '')]);
             kv.push(['Label', UI.label(v.label, { sm: true })]);
             const canDecide = sel.state === 'waiting' && !sel.meta.awaiting && (sel.meta.sideEffect === 'destructive' ? App.can('tools:manage') && !owner : owner || App.can('tools:manage'));
-            actions = sel.state === 'waiting' ? (canDecide ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>' : UI.notice(sel.meta.awaiting ? 'Waiting for the workflow to finish. Its approvers decide on the Workflows screen.' : 'Waiting for ' + esc(sel.meta.approvers || 'an approver') + '.', 'info'))
+            const chainBtn = v.chain ? UI.btn('Open the chain tree', { kind: 'ghost', attrs: 'data-openchain' }) : '';
+            actions = sel.state === 'waiting' && sel.meta.awaiting ? '<div class="hstack gap6 wrap">' + (sel.meta.awaiting.kind === 'agent-run' ? UI.btn('Open the child run', { attrs: 'data-run="' + esc(sel.meta.awaiting.id) + '"' }) : UI.btn('Open the workflow run', { attrs: 'data-gowfrun="' + esc(sel.meta.awaiting.id) + '"' })) + chainBtn + '</div>'
+              : sel.state === 'waiting' && v.caller ? UI.notice('Held for the chain this run belongs to. It is decided from the root, where the path from the root is shown.', 'info', v.chain ? UI.btn('Open the chain tree', { size: 'sm', attrs: 'data-openchain' }) : '')
+              : sel.state === 'waiting' ? (canDecide ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>' : UI.notice(sel.meta.awaiting ? 'Waiting for the workflow to finish. Its approvers decide on the Workflows screen.' : 'Waiting for ' + esc(sel.meta.approvers || 'an approver') + '.', 'info'))
               : bad(sel) ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + sel.n + '"' }) : UI.btn('Show result segment', { attrs: 'data-segment' });
           }
         }
@@ -202,14 +238,16 @@
         const answer = st.showAnswer && v.output ? '<section class="panel" id="runs-answer"><div class="phead"><div class="eyebrow">Final answer, step ' + (steps.length ? steps[steps.length - 1].n : '') + '</div><span class="muted" style="font-size:12px">Select a figure to see the calculating step that produced it</span></div><div class="serif" style="font-size:15px;line-height:1.6;white-space:pre-wrap">' + traceFigures(v.output, steps) + '</div></section>' : '';
         const notice = v.state === 'budget' ? UI.notice('<b>Budget stop.</b> ' + esc(v.error || '') + ' The last checkpoint is kept; raise the limit to resume from it.', 'warn', owner || App.can('agents:manage') ? UI.btn('Raise limit and resume', { size: 'sm', attrs: 'data-raise' }) : '')
           : v.state === 'failed' ? UI.notice('<b>Failed.</b> ' + esc(v.error || ''), 'danger', owner || App.can('agents:manage') ? UI.btn('Replay from step', { size: 'sm', attrs: 'data-replay="' + (steps.find(bad) || steps[steps.length - 1] || { n: 1 }).n + '"' }) : '')
-            : v.state === 'waiting' ? UI.notice('<b>' + (steps.some((x) => x.state === 'waiting' && x.meta.awaiting) ? 'Waiting on a workflow.' : 'Waiting on approval.') + '</b> ' + esc(v.error || ''), 'info')
+            : v.state === 'waiting' ? UI.notice('<b>' + (steps.some((x) => x.state === 'waiting' && x.meta.awaiting && x.meta.awaiting.kind === 'agent-run') ? 'Waiting on a child run.' : steps.some((x) => x.state === 'waiting' && x.meta.awaiting) ? 'Waiting on a workflow.' : 'Waiting on approval.') + '</b> ' + esc(v.error || ''), 'info')
               : v.state === 'cancelled' ? UI.notice(esc(v.error || 'Cancelled.'), 'warn') : '';
         const canControl = owner || App.can('agents:manage');
         page = '<div class="page runs-page">'
-          + UI.pagehead('Run ' + shortId(v.id) + ', ' + esc(v.agent) + ' ' + esc(v.agentVersion), 'Started ' + esc(clock(v.startedAt || v.createdAt)) + ' by ' + esc(v.by || '') + ', ' + esc(duration(v)) + ' · ' + statusPill(v.state) + (v.replayOf ? ' · replay of <a href="#" data-run="' + esc(v.replayOf) + '">' + esc(shortId(v.replayOf)) + '</a> from step ' + v.replayFrom : '') + ' · profile <a href="#" data-goprofile="' + esc(v.profile || '') + '">' + esc(v.profile || '') + '</a>',
-            (canControl && active(v.state) ? UI.btn('Cancel run', { attrs: 'data-cancel' }) : '') + (canControl && steps.length ? UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find(bad) || { n: 1 }).n + '"' }) : ''))
+          + UI.pagehead('Run ' + shortId(v.id) + ', ' + esc(v.agent) + ' ' + esc(v.agentVersion), 'Started ' + esc(clock(v.startedAt || v.createdAt)) + ' by ' + esc(v.by || '') + ', ' + esc(duration(v)) + ' · ' + statusPill(v.state) + (v.caller ? ' · ' + (v.caller.kind === 'agent-run' ? 'delegated by run <a href="#" data-run="' + esc(v.caller.id) + '" class="mono">' + esc(shortId(v.caller.id)) + '</a>' : v.caller.kind === 'workflow-run' ? 'started by workflow run <a href="#" data-gowfrun="' + esc(v.caller.id) + '" class="mono">' + esc(shortId(v.caller.id)) + '</a>' : 'started by ' + esc(v.caller.kind)) : '') + (v.replayOf ? ' · replay of <a href="#" data-run="' + esc(v.replayOf) + '">' + esc(shortId(v.replayOf)) + '</a> from step ' + v.replayFrom : '') + ' · profile <a href="#" data-goprofile="' + esc(v.profile || '') + '">' + esc(v.profile || '') + '</a>',
+            (v.chain ? UI.btn('Chain tree', { icon: 'branch', attrs: 'data-openchain' }) : '') + (canControl && active(v.state) ? UI.btn('Cancel run', { attrs: 'data-cancel' }) : '') + (canControl && steps.length ? UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find(bad) || { n: 1 }).n + '"' }) : ''))
           + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+          + (v.held || []).map((h) => heldNotice(v.chain ? v.chain.id : '', h)).join('')
           + notice
+          + ((v.children || []).length ? UI.panel('Delegated and started', UI.kv(v.children.map((k) => [k.kind === 'agent-run' ? 'agent run' : 'workflow run', (k.kind === 'agent-run' ? '<a href="#" data-run="' + esc(k.id) + '" class="mono">' + esc(shortId(k.id)) + '</a> ' + esc(k.agent || '') : '<a href="#" data-gowfrun="' + esc(k.id) + '" class="mono">' + esc(shortId(k.id)) + '</a>') + ' ' + statusPill(k.state) + ' ' + UI.label(k.label, { sm: true }) + (k.error ? '<div class="fg2" style="font-size:12px;overflow-wrap:anywhere">' + esc(clip(k.error, 200)) + '</div>' : '')]), 1), { actions: v.chain ? UI.btn('Chain tree', { size: 'sm', kind: 'ghost', attrs: 'data-openchain' }) : '' }) : '')
           + UI.panel('Request', '<div class="fg2" style="white-space:pre-wrap">' + esc(clip(v.input, 2000)) + '</div>')
           + '<div class="runs-lanes"><div></div>' + ['think', 'do', 'calc'].map((l) => '<div class="runs-lane"><span class="ln">' + UI.icon(l === 'think' ? 'brain' : l === 'do' ? 'play' : 'calc', 12) + esc(LANES[l]) + '</span><span class="ls">' + esc(laneSum[l]) + '</span></div>').join('') + '</div>'
           + (rows || '<div class="muted">No steps yet.</div>')
@@ -219,10 +257,13 @@
       root.innerHTML = style + left + page + inspector;
 
       // ---- events ----
-      const run = v && !v.error ? v : null;
+      const run = v && !v.fetchError ? v : null;
       const sel = run ? run.steps.find((s) => s.n === st.sel) : null;
       ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.run = t.dataset.run; st.sel = null; st.showAnswer = false; st.view = null; st.demoNote = null; ctx.rerender(); });
       ctx.on('click', '[data-scope] [data-seg]', (e, t) => { st.scope = t.dataset.seg; load(); });
+      ctx.on('click', '[data-openchain]', () => { if (!run || !run.chain) return; st.chain = run.chain.id; st.node = (run.held || []).length ? run.held[0].node : run.chain.node; st.chainView = null; st.chainError = null; ctx.rerender(); });
+      ctx.on('click', '[data-gowfrun]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { run: t.dataset.gowfrun }); });
+      bindHeld(run && run.chain ? run.chain.id : null, (run && run.held) || []);
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const val = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(val.length, val.length); });
       ctx.on('click', '[data-refresh]', () => { load(); toast('Runs refreshed.'); });
       ctx.on('click', '.runs-card', (e, t) => { st.sel = +t.dataset.step; ctx.rerender(); });
@@ -258,6 +299,28 @@
       };
       ctx.on('click', '[data-approve]', () => decide('approve'));
       ctx.on('click', '[data-deny]', () => decide('reject'));
+
+      function atKey(h) { return h.at.kind === 'agent-run' ? 's' + h.at.step : 'a' + h.at.approval; }
+      function heldNotice(chainId, h) {
+        const name = h.path && h.path.length ? h.path[h.path.length - 1].name : '';
+        const buttons = h.canDecide && chainId ? '<span class="hstack gap6">' + UI.btn('Reject', { size: 'sm', attrs: 'data-heldreject="' + esc(h.node) + '|' + esc(atKey(h)) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-heldapprove="' + esc(h.node) + '|' + esc(atKey(h)) + '"' }) + '</span>' : '';
+        return UI.notice('<b>Held down the chain, depth ' + esc(String(h.path && h.path.length ? h.path[h.path.length - 1].depth : '')) + '.</b> <span class="mono">' + esc(h.tool || 'a call') + '</span>' + (h.sideEffect ? ' (' + esc(SIDE[h.sideEffect] || h.sideEffect) + ')' : '') + ' in ' + esc(name) + (h.since ? ', waiting since ' + esc(clock(h.since)) : '') + ' on ' + esc(h.approvers || 'an approver') + '. The whole chain waits' + (h.canDecide ? '; decide it here, at the root.' : '.') + '<div style="margin-top:6px">' + pathHtml(h.path) + '</div>', 'info', buttons);
+      }
+      /** Approve and reject a call held anywhere in the chain, from the root (POST /api/chains/:id/held/:node/decision). */
+      function bindHeld(chainId, held) {
+        if (!chainId) return;
+        const find = (key) => { const i = key.indexOf('|'); return held.find((h) => h.node === key.slice(0, i) && atKey(h) === key.slice(i + 1)); };
+        const send = (h, decision, note) => act(() => App.post('/api/chains/' + encodeURIComponent(chainId) + '/held/' + encodeURIComponent(h.node) + '/decision', Object.assign({ decision, note: note || null }, h.at.kind === 'agent-run' ? { step: h.at.step } : { approval: h.at.approval })), decision === 'approve' ? 'Approved from the root. The chain resumes where it waited.' : 'Rejected from the root. The agent hears why and goes on.', decision === 'approve' ? 'ok' : 'warn').then(() => { if (st.chain) fetchChain(st.chain).then(later); });
+        ctx.on('click', '[data-heldapprove]', async (e, t) => {
+          const h = find(t.dataset.heldapprove); if (!h) return;
+          const ok = await ctx.confirm({ title: 'Approve ' + esc(h.tool || 'the call') + ' from the root', tag: SIDE[h.sideEffect] || h.sideEffect || '', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The call runs where it waits, as the chain\'s principal; every run above it continues when it returns. Written to the audit chain as chain.held.decided.</div>' + pathHtml(h.path), kv: [['Chain', '<span class="mono">' + esc(shortId(chainId)) + '</span>'], ['Waits in', esc(h.at.kind === 'agent-run' ? 'agent run ' + shortId(h.at.run) + ', step ' + h.at.step : 'workflow run ' + shortId(h.at.run) + ', step ' + h.at.step)]] });
+          if (ok) send(h, 'approve');
+        });
+        ctx.on('click', '[data-heldreject]', (e, t) => {
+          const h = find(t.dataset.heldreject); if (!h) return;
+          ctx.modal({ title: 'Reject ' + esc(h.tool || 'the call'), body: '<div class="fg2">Nothing is run. The agent or workflow where it waits is told who rejected it and why.</div>' + pathHtml(h.path) + UI.field('Reason (given to the agent and the owner)', UI.textarea('', { rows: 2, attrs: 'data-note' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const note = m.querySelector('[data-note]').value.trim(); App.closeOverlay(); send(h, 'reject', note); }); } });
+        });
+      }
 
       function openReplay(from) {
         if (!run || !run.steps.length) return;
@@ -327,6 +390,85 @@
       }
       if (st.openStart) { const a = typeof st.openStart === 'string' ? st.openStart : ''; st.openStart = false; setTimeout(() => startModal(a), 30); }
       if (st.openReplay) { st.openReplay = false; if (run) setTimeout(() => openReplay((run.steps.find((s) => s.state === 'failed' || s.state === 'denied') || { n: 1 }).n), 30); }
+
+      /** The chain tree (GET /api/chains/:id, B-4107): the tree on the page, the selected node in the inspector. */
+      function renderChain() {
+        const c = st.chainView && st.chainView.id === st.chain ? st.chainView : null;
+        if (!c && !st.chainError && !st.chainFetching) { st.chainFetching = true; fetchChain(st.chain).finally(() => { st.chainFetching = false; later(); }); }
+        const head = (sub, actions) => UI.pagehead('Chain ' + esc(shortId(st.chain)), sub, actions);
+        const back = UI.btn(st.run ? 'Back to run ' + esc(shortId(st.run)) : 'Back to runs', { attrs: 'data-backrun' });
+        let page; let insp = '';
+        if (st.chainError) page = '<div class="page runs-page">' + head('', back) + UI.problem('The chain could not be loaded', st.chainError.message, st.chainError.problem && st.chainError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-chainreload' }) + '</div></div>';
+        else if (!c) page = '<div class="page runs-page">' + head('', back) + UI.notice('Loading…', 'info') + '</div>';
+        else {
+          const all = flatten(c.root);
+          if (st.chainPick) {
+            const d = st.chainPick; st.chainPick = null;
+            const hit = d === 'held' ? all.find((n) => (n.held || []).length) : d === 'childfail' ? all.find((n) => n.errorType && n.kind === 'agent-run') || all.find((n) => n.errorType) : null;
+            if (hit) st.node = hit.id;
+            else if (d === 'held') st.demoNote = 'Nothing is held in this chain now. A write call held anywhere in it pauses the chain and is decided here.';
+            else if (d === 'childfail') st.demoNote = 'No node of this chain failed with a typed error.';
+          }
+          if (!st.node || !all.find((n) => n.id === st.node)) { const h = all.find((n) => (n.held || []).length); st.node = h ? h.id : c.root ? c.root.id : null; }
+          const sel = all.find((n) => n.id === st.node);
+          const b = c.budgets || {}; const u = c.used || {}; const t = c.totals || {};
+          const row = (n) => '<li><button type="button" class="runs-node' + (sel && n.id === sel.id ? ' selected' : '') + ((n.held || []).length ? ' held' : '') + '" data-node="' + esc(n.id) + '" aria-current="' + (sel && n.id === sel.id ? 'true' : 'false') + '"><span class="nk">' + esc(KIND_TEXT[n.kind] || n.kind) + '</span><span class="nn">' + esc(nodeTitle(n)) + '</span>' + UI.pill((n.held || []).length ? 'held' : n.state, (n.held || []).length ? 'info' : NODE_TONE[n.state] || '') + (n.errorType ? UI.pill(n.errorType, 'danger') : '') + '<span class="nm">' + (n.subtree && n.subtree.tokens ? fmt(n.subtree.tokens) + ' tok · ' : '') + esc(n.durationMs != null ? secs(n.durationMs) : n.state === 'waiting' ? 'waiting' : n.state === 'running' ? 'running' : '') + '</span></button>'
+            + ((n.children || []).length ? '<ul class="runs-tree">' + n.children.map(row).join('') + '</ul>' : '') + '</li>';
+          const rootLink = c.root && c.root.kind === 'agent-run' ? 'run <a href="#" data-run="' + esc(c.root.ref) + '" class="mono">' + esc(shortId(c.root.ref)) + '</a>' : c.root && c.root.kind === 'workflow-run' ? 'workflow run <a href="#" data-gowfrun="' + esc(c.root.ref) + '" class="mono">' + esc(shortId(c.root.ref)) + '</a>' : esc(c.root ? KIND_TEXT[c.root.kind] || c.root.kind : '');
+          const chainTone = c.state === 'done' ? 'ok' : c.state === 'stopped' ? 'warn' : 'info';
+          page = '<div class="page runs-page">'
+            + head('Started by ' + esc((c.principal && c.principal.name) || '') + ' from ' + rootLink + ' · ' + UI.pill(c.state, chainTone) + ' · ' + UI.label(c.label, { sm: true }) + ' high-water mark', back + UI.btn('Refresh chain', { kind: 'ghost', icon: 'refresh', attrs: 'data-chainreload' }))
+            + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
+            + (c.held || []).map((h) => heldNotice(c.id, h)).join('')
+            + (c.state === 'stopped' ? UI.notice('<b>The chain stopped.</b> ' + esc(c.stopReason || ''), 'warn') : '')
+            + '<div class="stats">' + UI.stat(String(c.nodes), 'Nodes', 'depth ' + c.maxDepth + ' of ' + ((c.limits && c.limits.maxDepth) || '')) + UI.stat(fmt(u.tokens), 'Tokens', 'of ' + fmt(b.tokens) + ' for the chain') + UI.stat(fmt(u.steps), 'Steps', 'of ' + fmt(b.steps)) + UI.stat(esc(secs(u.wallMs || 0)), 'Wall time', 'of ' + esc(secs(b.wallMs || 0))) + UI.stat(esc(secs(u.gpuMs || 0)), 'GPU time', 'the cost meter') + '</div>'
+            + UI.panel('Invocations', c.root ? '<ul class="runs-tree" aria-label="Chain tree">' + row(c.root) + '</ul>' : UI.empty('No nodes', 'The chain has no root node.'), { actions: '<span class="muted" style="font-size:12px">Siblings in the order they began</span>' })
+            + '<div class="muted" style="font-size:12px">The tree\'s token total, ' + fmt(t.tokens) + ', ' + (t.tokens === u.tokens ? 'equals' : 'differs from') + ' what the chain metered (' + fmt(u.tokens) + '). The principal never changes and the label only rises along the chain.</div>'
+            + '</div>';
+          if (sel) {
+            const g = sel.guardrails || [];
+            const runLink = sel.kind === 'agent-run' ? '<a href="#" data-run="' + esc(sel.ref) + '" class="mono">' + esc(shortId(sel.ref)) + '</a>' : sel.kind === 'workflow-run' ? '<a href="#" data-gowfrun="' + esc(sel.ref) + '" class="mono">' + esc(shortId(sel.ref)) + '</a>' : '<span class="muted">none, part of its parent run</span>';
+            const rp = sel.replay;
+            const opts = rp ? (rp.fromStep ? rp.fromStep.map((n) => ({ value: String(n), label: 'Step ' + n })) : (rp.fromNode || []).map((n) => ({ value: n, label: n }))) : [];
+            const canReplay = rp && opts.length && (App.can('agents:run') || App.can('agents:manage'));
+            const audit = sel.audit || [];
+            insp = '<aside class="inspector w360"><div class="hstack"><div class="eyebrow grow">' + esc(KIND_TEXT[sel.kind] || sel.kind) + ', depth ' + sel.depth + '</div>' + UI.pill((sel.held || []).length ? 'held' : sel.state, (sel.held || []).length ? 'info' : NODE_TONE[sel.state] || '') + '</div>'
+              + '<div class="mono" style="font-size:14px;overflow-wrap:anywhere">' + esc(nodeTitle(sel)) + '</div>'
+              + (sel.error ? (sel.errorType || sel.state === 'failed' || sel.state === 'refused' || sel.state === 'cancelled' ? UI.notice('<b>' + esc(sel.errorType || sel.state) + '.</b> ' + esc(clip(sel.error, 400)), 'danger') : UI.notice(esc(clip(sel.error, 400)), 'info')) : '')
+              + UI.kv([['Run', runLink], ['Calls', sel.callee ? '<span class="mono">' + esc(sel.callee) + '</span>' : '<span class="muted">none</span>'], ['Label', UI.label(sel.label, { sm: true })], ['Guardrail decision', esc(sel.decision || (g.length ? g.map((x) => x.checkpoint + ' ' + x.action).join(', ') : 'none here'))], ['Tokens', fmt(sel.usage.tokens) + ' here, ' + fmt(sel.subtree.tokens) + ' with what it called'], ['Steps', fmt(sel.usage.steps) + ' here, ' + fmt(sel.subtree.steps) + ' in the subtree'], ['Wall time', esc(secs(sel.usage.wallMs))], ['GPU time', esc(secs(sel.usage.gpuMs))], ['Began', esc(clock(sel.createdAt))], ['Duration', sel.durationMs != null ? esc(secs(sel.durationMs)) : esc(sel.state)], ['Typed error', sel.errorType ? '<span class="mono">' + esc(sel.errorType) + '</span>' : 'none']], 1)
+              + (g.length ? '<div class="eyebrow">Guardrail decisions</div>' + UI.kv(g.slice(0, 12).map((x) => [esc(x.checkpoint), UI.pill(x.action, x.action === 'allow' ? 'ok' : x.action === 'block' ? 'danger' : 'warn') + ' ' + UI.label(x.label, { sm: true }) + ' <span class="muted">' + esc(clock(x.at)) + '</span>']), 1) : '')
+              + ((sel.held || []).length ? '<div class="eyebrow">Held here</div>' + sel.held.map((h0) => { const h = (c.held || []).find((x) => x.node === sel.id && atKey(x) === atKey(h0)) || Object.assign({ node: sel.id, path: [] }, h0); return UI.kv([['Call', '<span class="mono">' + esc(h0.tool || '') + '</span> ' + (h0.sideEffect ? UI.pill(SIDE[h0.sideEffect] || h0.sideEffect, h0.sideEffect === 'destructive' ? 'danger' : 'warn') : '')], ['Waiting since', esc(h0.since ? clock(h0.since) : '')], ['Who decides', esc(h0.approvers || '')]], 1) + (h0.canDecide ? '<div class="hstack gap6">' + UI.btn('Reject', { attrs: 'data-heldreject="' + esc(h.node) + '|' + esc(atKey(h)) + '"' }) + UI.btn('Approve', { kind: 'primary', attrs: 'data-heldapprove="' + esc(h.node) + '|' + esc(atKey(h)) + '"' }) + '</div>' : UI.notice('Waiting for ' + esc(h0.approvers || 'an approver') + '.', 'info')); }).join('') : '')
+              + (canReplay ? '<div class="eyebrow">Replay</div>' + UI.field(rp.fromStep ? 'From step' : 'From workflow step', UI.select(opts, opts[0].value, 'data-replayfrom')) + '<div>' + UI.btn('Replay from this node', { icon: 'refresh', attrs: 'data-replaynode' }) + '</div><div class="muted" style="font-size:12px">Runs again as a new chain with the same principal and label; earlier steps are reused from the checkpoints and approvals are asked for again.</div>' : '<div class="muted" style="font-size:12px">' + (rp ? 'Replaying needs agents:run.' : esc(KIND_TEXT[sel.kind] || sel.kind) + ' nodes do not replay on their own; replay the run above them.') + '</div>')
+              + (audit.length ? '<div class="eyebrow">Audit entries</div><div class="vstack gap4">' + audit.slice(0, 8).map((a) => '<a href="#" data-auditev="' + esc(a.id) + '" class="listlink"><span class="mono">' + esc(a.action) + '</span> <span class="muted">' + esc(clock(a.ts)) + '</span></a>').join('') + '</div>' : '')
+              + '</aside>';
+          }
+        }
+        root.innerHTML = style + left + page + insp;
+        const c2 = c;
+        ctx.on('click', '[data-node]', (e, t) => { st.node = t.dataset.node; ctx.rerender(); const b2 = ctx.$('[data-node="' + st.node + '"]'); if (b2) b2.focus(); });
+        ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.chain = null; st.chainView = null; st.run = t.dataset.run; st.sel = null; st.view = null; st.demoNote = null; ctx.rerender(); });
+        ctx.on('click', '[data-backrun]', () => { st.chain = null; st.chainView = null; st.demoNote = null; ctx.rerender(); });
+        ctx.on('click', '[data-chainreload]', () => { st.chainError = null; fetchChain(st.chain).then(later); });
+        ctx.on('click', '[data-gowfrun]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { run: t.dataset.gowfrun }); });
+        ctx.on('click', '[data-auditev]', (e, t) => { e.preventDefault(); ctx.navigate('usage-audit', { event: t.dataset.auditev, tab: 'audit' }); });
+        ctx.on('click', '[data-scope] [data-seg]', (e, t) => { st.scope = t.dataset.seg; load(); });
+        ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const val = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(val.length, val.length); });
+        ctx.on('click', '[data-refresh]', () => { load(); toast('Runs refreshed.'); });
+        ctx.on('click', '[data-start]', () => startModal(''));
+        ctx.on('click', '[data-schedules]', () => schedulesModal());
+        if (!c2) return;
+        bindHeld(c2.id, c2.held || []);
+        ctx.on('click', '[data-replaynode]', async () => {
+          const sel = flatten(c2.root).find((n) => n.id === st.node); if (!sel || !sel.replay) return;
+          const raw = ctx.$('[data-replayfrom]').value;
+          const body = sel.replay.fromStep ? { fromStep: Number(raw) } : { fromNode: raw };
+          const ok = await ctx.confirm({ title: 'Replay ' + esc(nodeTitle(sel)), tone: 'primary', ok: 'Replay', body: '<div class="fg2">The ' + esc(KIND_TEXT[sel.kind]) + ' runs again from ' + (sel.replay.fromStep ? 'step ' : '') + esc(raw) + ' as the root of a new chain, at ' + esc(sel.label) + '. Approvals are asked for again. Audited chain.node.replayed.</div>', kv: [['Chain', '<span class="mono">' + esc(shortId(c2.id)) + '</span>'], ['Node', esc(nodeTitle(sel)) + ', depth ' + sel.depth]] });
+          if (!ok) return;
+          const r = await act(() => App.post(sel.replay.href, body), 'Replay queued as a new chain from ' + (sel.replay.fromStep ? 'step ' : '') + esc(raw) + '.');
+          if (r && r.kind === 'agent-run') { st.chain = null; st.chainView = null; st.run = r.run; st.sel = null; st.view = null; ctx.rerender(); }
+          else if (r && r.kind === 'workflow-run') ctx.navigate('workflows', { run: r.run });
+        });
+      }
     }
   });
 })();

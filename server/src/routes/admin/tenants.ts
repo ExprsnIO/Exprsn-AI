@@ -10,6 +10,7 @@ import { badRequest, conflict, forbidden, notFound } from '../../http/problem.js
 import type { Tenant, Workspace } from '../../repos/tenants.js';
 import type { Services } from '../../services.js';
 import { TOPICS, type MembershipEvent } from '../../platform/bus.js';
+import { provisionTenant, TEMPLATE_IDS, templateById, templateCeiling, TEMPLATES, templateView } from '../../tenancy/templates.js';
 
 const limit = z.number().int().min(0).max(1e15).nullable();
 const quotaSchema = z.object({ tokensPerDay: limit.optional(), gpuSecondsPerMonth: limit.optional(), trainingGpuHoursPerMonth: limit.optional() }).strict();
@@ -36,7 +37,7 @@ export const workspaceView = (w: Workspace, members?: number) => ({
  */
 export function tenantAdminRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/tenants', '/authz'], noStore, requireAuth());
+  r.use(['/tenants', '/tenant-templates', '/authz'], noStore, requireAuth());
 
   // The policy's tenant step compares the path's tenant with the caller's; only system admins cross it.
   const manage = requirePermission(s, 'tenant:manage', (req) => ({ tenantId: String(req.params.tid ?? principalOf(req).tenantId) }));
@@ -123,6 +124,37 @@ export function tenantAdminRoutes(s: Services): Router {
     await s.keys.seal(t.id, 'key check', 'tenant-created'); // creates the tenant's data key now, so a KMS fault shows at once
     await audit(req, t.id, 'tenant.created', { slug: t.slug }, { name: t.name, directoryDn: t.directory_dn });
     res.status(201).json(await tenantView(t));
+  });
+
+  // ---------- 1.6.0 (B-4501): tenant provisioning templates ----------
+
+  r.get('/tenant-templates', requirePermission(s, 'tenant:manage'), (_req, res) => {
+    res.json(TEMPLATES.map(templateView));
+  });
+
+  r.post('/tenants/from-template', requirePermission(s, 'tenant:manage'), async (req, res) => {
+    systemOnly(req);
+    const p = principalOf(req);
+    const body = parseBody(
+      z.object({
+        template: z.enum(TEMPLATE_IDS),
+        slug: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+        name: z.string().trim().min(1).max(200),
+        directoryDn: z.string().trim().max(512).nullable().default(null),
+        admin: z.object({
+          username: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'letters, digits, dot, dash or underscore'),
+          displayName: z.string().trim().min(1).max(200),
+          email: z.string().trim().email().max(320).nullable().default(null),
+          password: z.string().min(1).max(1024).nullable().default(null)
+        }).strict()
+      }).strict(),
+      req.body
+    );
+    const tpl = templateById(body.template)!;
+    // The template's workspaces and its first admin are cleared up to its highest ceiling: never above the caller.
+    if (!clears(p.clearance, templateCeiling(tpl))) throw forbidden(`The ${tpl.name} template makes workspaces up to ${templateCeiling(tpl)}, above your clearance.`, { step: 'clearance' });
+    const out = await provisionTenant(s, { tenantId: p.tenantId, userId: p.userId, actor: actorFrom(p, ip(req)), traceId: req.traceId ?? null }, body);
+    res.status(201).json({ tenant: await tenantView(out.tenant), applied: out.applied, admin: out.admin });
   });
 
   r.patch('/tenants/:tid', manage, async (req, res) => {

@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const STATE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.state');
+// E2E_STATE_DIR lets two runs (two worktrees' agents, or a spec being written beside a full run) keep apart.
+export const STATE_DIR = process.env.E2E_STATE_DIR ? path.resolve(process.env.E2E_STATE_DIR) : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.state');
 export const SERVER_STATE = path.join(STATE_DIR, 'server.json');
 
 export type User = 'root' | 'root2' | 'ops' | 'mladmin' | 'member' | 'enrol';
@@ -13,8 +14,10 @@ export interface ServerState {
   tenant: string;
   workspace: { id: string; name: string };
   totp: Record<string, string>;
-  fakes: { ollama: string; mcp: string; acme: string };
+  fakes: { ollama: string; mcp: string; acme: string; fmSocket: string };
   users: User[];
+  /** The server's BLOB_DIR (filesystem blob store). */
+  blobDir: string;
 }
 
 let cached: ServerState | null = null;

@@ -15,7 +15,8 @@ test.describe('Runs', () => {
   test('starts a run of a published agent and follows it to its answer', async ({ page }) => {
     await open(page, 'runs');
     await expectLive(page);
-    await page.getByRole('button', { name: 'Start a run' }).click();
+    // The left pane's Start (the empty state's "Start a run" is gone once the chain spec has started runs).
+    await page.locator('#main [data-start]').first().click();
     const modal = page.locator('#overlay .modal');
     await expect(modal).toContainText('Start an agent run');
     await modal.locator('[data-agent]').selectOption({ label: 'Travel desk 1.0.0' });

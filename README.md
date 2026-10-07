@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** version `1.4.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.5.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -31,9 +31,15 @@ Stripe refunds, and axe-core in the accessibility checks. Sprints 24 to 28 make 
 re-implemented here: a certificate authority with OCSP and an ACME server, a secrets vault with dynamic database
 leases, the event catalogue and plugins; AT-Protocol keys, DIDs, a labeler, sign-in and firehose ingest; moderation
 actions and appeals, a file store, low-code data apps, groups and events with iCalendar feeds, customer-service chat and
-email channels, person-to-person messaging, a workspace feed, and a load test of the event and data paths. Their
-console screens come in 1.5.0 ([Backlog-1.5.0.md](Backlog-1.5.0.md)). See [Sprints.md](Sprints.md) and
-[CHANGELOG.md](CHANGELOG.md).
+email channels, person-to-person messaging, a workspace feed, and a load test of the event and data paths. Sprints 29
+to 34 make up 1.5.0: console screens for those features (Certificates, Vault, Plugins and events, Apps, Files,
+Moderation, Groups and events, Channels, Messages and feed, Roles and access, AT-Protocol); permission matrices, custom
+roles, effective access and access reviews; CalDAV, CardDAV and WebDAV for the file store with DAV-only app passwords;
+model-based memory management and MongoDB connections; an AT-Protocol personal data server with feed generators;
+import repositories and model import; Workflows 2 (sub-workflow, agent, map and loop steps, event and schedule
+triggers, failure edges and dead letters, signed bundles, domain built-in tools) on one chain context, with agents
+delegating to agents, skills composing, checks at publish and a chain view; and profiles and presence
+([Backlog-1.5.0.md](Backlog-1.5.0.md)). See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 
@@ -85,6 +91,8 @@ npm run lint && npm run typecheck && npm test      # unit and API tests on in-me
 for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
 TEST_PG_URL=postgres://… TEST_MYSQL_URL=mysql://… TEST_LDAP_URL=ldap://… TEST_LDAP_INSECURE=true TEST_LDAP_BIND_PW=… \
   npm run test:integration -w server              # user stores against real servers
+# B-3605: the email channel's IMAP adapter against GreenMail (prints NODE_EXTRA_CA_CERTS, TEST_IMAP_URL, TEST_IMAP_SMTP_URL)
+server/test/integration/greenmail.sh /tmp/greenmail
 ```
 
 CI runs all of these, builds the container image and checks that it answers `/readyz`.

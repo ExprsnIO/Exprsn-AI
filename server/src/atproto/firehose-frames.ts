@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { cborDecode, cborDecodeFirst } from './cbor.js';
-import { Cid, readVarint } from './encoding.js';
+import type { CommitOp, CommitProof } from './commit.js';
+import { Cid } from './encoding.js';
+import { readCarBlocks } from './pds/car.js';
 
 /*
  * The two firehose wire formats (B-1908), read into one shape: a message with a cursor and the record operations it
@@ -36,6 +38,8 @@ export interface FirehoseMessage {
   /** When the event happened upstream (ms), for the lag metric. */
   time: number | null;
   ops: RecordOp[];
+  /** subscribeRepos `#commit` frames: what the commit verification (B-3604, `commit.ts`) needs. */
+  proof?: CommitProof;
 }
 
 /** `fatal`: the stream ends (an error frame); otherwise only the one message is unusable and is skipped. */
@@ -86,34 +90,6 @@ export function parseJetstream(text: string): Parsed {
   return { message: { cursor, time, ops: [{ did, collection, rkey, action, cid: typeof c.cid === 'string' ? c.cid.slice(0, 200) : null, record: isObj(c.record) ? c.record : null }] } };
 }
 
-/** Reads a CAR v1 file into its blocks by CID (string form). Blocks that are not DAG-CBOR are skipped. */
-export function readCar(bytes: Buffer, maxBlocks = 10_000): Map<string, Buffer> {
-  const out = new Map<string, Buffer>();
-  const h = readVarint(bytes, 0);
-  const headerEnd = h.next + h.value;
-  if (headerEnd > bytes.length) throw new Error('CAR header truncated');
-  const header = cborDecode(bytes.subarray(h.next, headerEnd));
-  if (!isObj(header) || header.version !== 1) throw new Error('Not a CAR v1 file');
-  let at = headerEnd;
-  while (at < bytes.length) {
-    if (out.size >= maxBlocks) throw new Error('Too many blocks in the CAR file');
-    const len = readVarint(bytes, at);
-    const end = len.next + len.value;
-    if (end > bytes.length || len.value === 0) throw new Error('CAR block truncated');
-    // The CID: version, codec, then a multihash (code, length, digest).
-    const ver = readVarint(bytes, len.next);
-    const codec = readVarint(bytes, ver.next);
-    const mh = readVarint(bytes, codec.next);
-    const dl = readVarint(bytes, mh.next);
-    const cidEnd = dl.next + dl.value;
-    if (ver.value !== 1 || cidEnd > end) throw new Error('A CAR block has an unreadable CID');
-    const cid = Cid.decode(bytes.subarray(len.next, cidEnd));
-    out.set(cid.toString(), bytes.subarray(cidEnd, end));
-    at = end;
-  }
-  return out;
-}
-
 /** Reads one subscribeRepos frame. */
 export function parseRepoFrame(data: Buffer): Parsed {
   let header: unknown;
@@ -138,14 +114,17 @@ export function parseRepoFrame(data: Buffer): Parsed {
   const did = typeof body.repo === 'string' && DID_RE.test(body.repo) ? body.repo : null;
   if (!did || !Array.isArray(body.ops)) return { message: { cursor: seq, time, ops: [] } };
   let blocks = new Map<string, Buffer>();
+  let unreadable = false;
   if (Buffer.isBuffer(body.blocks) && body.blocks.length) {
     try {
-      blocks = readCar(body.blocks);
+      blocks = readCarBlocks(body.blocks);
     } catch {
-      blocks = new Map(); // records unreadable: the ops are still seen, without text
+      blocks = new Map(); // records unreadable: the ops are still seen, without text (and the commit fails to verify)
+      unreadable = true;
     }
   }
   const ops: RecordOp[] = [];
+  const proofOps: CommitOp[] = [];
   for (const op of body.ops.slice(0, 1000)) {
     if (!isObj(op) || typeof op.path !== 'string' || typeof op.action !== 'string' || !ACTIONS.has(op.action)) continue;
     const slash = op.path.indexOf('/');
@@ -164,8 +143,10 @@ export function parseRepoFrame(data: Buffer): Parsed {
       }
     }
     ops.push({ did, collection, rkey, action: op.action as RecordOp['action'], cid, record });
+    proofOps.push({ action: op.action as CommitOp['action'], path: op.path, cid });
   }
-  return { message: { cursor: seq, time, ops } };
+  const proof: CommitProof = { repo: did, rev: typeof body.rev === 'string' ? body.rev : null, commit: body.commit instanceof Cid ? body.commit : null, blocks, ops: proofOps, tooBig: body.tooBig === true, unreadable };
+  return { message: { cursor: seq, time, ops, proof } };
 }
 
 const MAX_TEXT = 20_000;

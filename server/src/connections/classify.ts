@@ -3,6 +3,8 @@
  * and a read-only transaction. It decides what is never sent (writes, DDL, several statements, objects outside the
  * allow-list, dangerous functions) and what needs the user's confirmation (syntax it does not know).
  */
+import type { MongoRequest } from './mongo.js';
+
 export type QueryKind = 'read' | 'write' | 'ddl' | 'multiple' | 'unparsed' | 'denied';
 
 export interface Classification {
@@ -17,6 +19,8 @@ export interface Classification {
   reason?: string;
   /** OpenSearch: the request to send. */
   request?: { method: string; path: string; body: Record<string, unknown> | null; target: string | null; endpoint: string };
+  /** MongoDB: the checked find or aggregate to send. */
+  mongo?: MongoRequest;
 }
 
 const WRITE = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE', 'COPY', 'CALL', 'DO', 'LOCK']);

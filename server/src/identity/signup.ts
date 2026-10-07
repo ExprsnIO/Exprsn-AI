@@ -142,7 +142,7 @@ export class SignupService {
    * domain outside the list; with `approval` the account is created disabled until an admin approves it; with email
    * verification required, a verification link is sent and the account cannot sign in until it is used.
    */
-  async register(tenant: Tenant, input: { username: string; displayName: string; email: string; password: string }, ctx: { ip: string | null; traceId?: string }): Promise<{ userId: string; state: 'active' | 'pending'; verification: 'sent' | 'not_required' }> {
+  async register(tenant: Tenant, input: { username: string; displayName: string; email: string; password: string }, ctx: { ip: string | null; traceId?: string }, o: { invited?: string } = {}): Promise<{ userId: string; state: 'active' | 'pending'; verification: 'sent' | 'not_required' }> {
     const s = this.s();
     const policy = await s.identityPolicy.get(tenant.id);
     const p = policy.signup;
@@ -150,8 +150,11 @@ export class SignupService {
       await s.audit.append({ tenantId: tenant.id, action: 'user.signup.refused', kind: 'auth', actor: { username: input.username, ip: ctx.ip }, target: { domain: input.email.split('@').pop()!.toLowerCase() }, detail: { reason }, ...(ctx.traceId ? { traceId: ctx.traceId } : {}) });
       throw forbidden(detail, { reason });
     };
-    if (p.mode === 'closed') await refuse('closed', 'Sign-up is closed for this organisation. Ask an admin for an invitation.');
-    if (!domainAllowed(p.domains, input.email)) await refuse('domain', 'Sign-up is not open to this email domain. Use your organisation address, or ask an admin for an invitation.');
+    // 1.5.0 (B-2901): an AT-Protocol invite code an admin issued (`o.invited`, its id) stands in for an invitation: it
+    // opens a closed policy, passes the domain list and counts as the approval. Roles, clearance and email
+    // verification still follow the policy.
+    if (p.mode === 'closed' && !o.invited) await refuse('closed', 'Sign-up is closed for this organisation. Ask an admin for an invitation.');
+    if (!o.invited && !domainAllowed(p.domains, input.email)) await refuse('domain', 'Sign-up is not open to this email domain. Use your organisation address, or ask an admin for an invitation.');
     if (p.requireEmailVerification && !s.notifications.emailEnabled) throw new HttpProblem(503, 'Email not configured', 'Sign-up needs email to confirm addresses, and email is not configured here. Ask an admin.');
     const local = (await s.providers.list(tenant.id)).find((x) => x.kind === 'local' && x.enabled);
     if (!local) throw conflict('This organisation has no local user store, so accounts cannot be created here.');
@@ -159,7 +162,7 @@ export class SignupService {
     if ((await s.users.byUsername(tenant.id, input.username)) || (await this.byEmail(tenant.id, input.email))) throw taken();
     await s.account.checkNewPassword({ tenantId: tenant.id, username: input.username, password: input.password, ip: ctx.ip, ...(ctx.traceId ? { traceId: ctx.traceId } : {}) });
     const workspace = p.workspaceId ? await s.tenants.workspace(tenant.id, p.workspaceId) : undefined;
-    const pending = p.mode === 'approval';
+    const pending = p.mode === 'approval' && !o.invited;
     const passwordHash = await hashPassword(input.password);
     let user: UserRow;
     try {
@@ -178,7 +181,7 @@ export class SignupService {
       if (isUniqueViolation(err)) throw taken();
       throw err;
     }
-    await s.audit.append({ tenantId: tenant.id, action: 'user.signup.created', kind: 'auth', actor: { user: user.id, username: user.username, ip: ctx.ip }, target: { user: user.id, username: user.username }, detail: { mode: p.mode, roles: p.roles, clearance: p.clearance, workspace: workspace?.id ?? null, verification: p.requireEmailVerification }, ...(ctx.traceId ? { traceId: ctx.traceId } : {}) });
+    await s.audit.append({ tenantId: tenant.id, action: 'user.signup.created', kind: 'auth', actor: { user: user.id, username: user.username, ip: ctx.ip }, target: { user: user.id, username: user.username }, detail: { mode: p.mode, roles: p.roles, clearance: p.clearance, workspace: workspace?.id ?? null, verification: p.requireEmailVerification, ...(o.invited ? { pdsInvite: o.invited } : {}) }, ...(ctx.traceId ? { traceId: ctx.traceId } : {}) });
     let verification: 'sent' | 'not_required' = 'not_required';
     if (p.requireEmailVerification) {
       await this.sendVerification(tenant, { ...user, email: input.email });

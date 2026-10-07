@@ -75,6 +75,164 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   level and value are in the text).
 - **Target size**: the smallest button (`.btn.xs`) is 24 px high (WCAG 2.5.8).
 
+## Screens made live in 1.5.0 (Sprints 30 to 34)
+
+Each joins the Playwright suite like the others: axe-core and the in-page checker on the screen and every design state
+(Standard and Enhanced, light and dark), the screen reflow at 320 and 640 px, and its dialogs and drawers through
+`e2e/tests/y-reflow-overlays.spec.ts` (B-3414). What each adds to the shell's behaviour:
+
+- **Moderation** (B-3405): one tab list (Queues, Reports, Appeals, Actions, Sanctions, Providers, Dead letters) with a
+  single tabpanel. Selectable queues, flags, appeals and actions are keyboard-operable table rows that update a labelled
+  inspector (`aside` "Selected flag" or "Selected appeal"). Filters are named segmented groups; the label chips in the
+  queue dialog and the object-type chips in the provider dialog are toggle buttons with `aria-pressed`. Refusals such as
+  appeal independence and "already redriven" are problem panels, not colour-only cues. Hide, uphold, deny, lift and
+  redrive go through confirm dialogs with labelled note and reason fields, and the step-up dialog for sanctions reports
+  errors in a `role="alert"` region. `e2e/tests/moderation.spec.ts` also checks every tab in both modes.
+- **Groups and events** (B-3409): the month calendar is a list of day items, each named with its date, "today" and its
+  number of events; each event is a button of at least 24 × 24 px named with its title, date, start time and
+  "cancelled" where it applies, and the selected one carries `aria-current`. The weekday header row is hidden from
+  assistive technology because each day names itself, and the month heading is a polite live region, so Previous and
+  Next month announce the new month. The RSVP choice is a labelled group of pressed-state buttons, and the check-in
+  toggles in the Attendees drawer are switches named for the person.
+- **Channels** (B-3410): a channel's sessions, held replies, settings, email and exports share one tabpanel. Each held
+  reply is a panel whose actions are named buttons (Approve, Edit and send, Reject); edit and reject open labelled
+  dialogs that return focus to the button that opened them. Transcript messages wrap long text rather than scrolling
+  sideways, and each message's report control is an icon button named "Report message N". Live updates over
+  `channels.changed` wait while a dialog is open, so an edited reply being typed is never interrupted.
+- **Messages and feed** (B-3411): the conversation timeline is a `role="log"` polite live region, so messages that
+  arrive over the socket are announced; the typing and read line under it is a separate polite region updated in place,
+  without a re-render that would move focus. Message actions stay visible rather than appearing on hover, so keyboard,
+  touch and zoom users reach them. The Messages, Feed and People switchers, the conversation filter, the feed sections
+  and the search modes are labelled button groups with `aria-pressed`. `e2e/tests/messages.spec.ts` also runs both
+  checkers on views with real conversations and posts, which the sweep (as a system admin with none) does not see.
+- **Roles and access** (B-3412): both matrices are real tables with a caption for screen readers, `th scope="col"` for
+  roles or permissions and `th scope="row"` for permissions or members, each in a `.tablewrap` that scrolls sideways
+  only (one named tab stop). Every effective-access cell is a `<button>` named for its subject, permission and outcome
+  (for example "Explain Sam Rivera, chat:read: deny at clearance"); the outcome is in the name and an icon as well as
+  colour. Enter or a click opens the `explain` drawer with the policy steps in order, and focus returns to the cell when
+  it closes. In the role matrix, granted and not-granted cells carry text for screen readers.
+
+- **AT-Protocol** (B-3406, Sprint 31): one tab list (Identity and keys, Labels, Trusted labelers, Firehose, Accounts,
+  PDS and feeds) with a single tabpanel; a tab shows only when the user holds its permission (`pki:manage`,
+  `labels:manage`, `firehose:manage`, `identity:manage`, `pds:manage`), and the sidebar entry needs any one of them.
+  Labelers and subscriptions are keyboard-operable table rows that update a labelled inspector (`aside` "Selected
+  labeler" or "Selected subscription"). Long DIDs, keys and at:// URIs wrap instead of scrolling sideways; the DID
+  document is a named code region. Errors from the server (refused DIDs, endpoints, handles, feed rules) are problem
+  panels in a `role="alert"` region of the dialog, and the hosting switch's step-up dialog reports errors the same way.
+  The account check writes its steps into a polite live region. `e2e/tests/atproto.spec.ts` also runs both checkers
+  on every tab and on the invite-code drawer, in light and dark, with the data it made (a rotated key, a hosted
+  account, a published feed), which the sweep's design states do not all reach. With it the sweeps cover 36 sidebar
+  screens and Settings.
+- **Workflows** (B-3910, Sprint 32): the live screen gained the Workflows 2 step kinds, so its step palette is longer
+  than the reflow sweep's 25 controls; the palette's buttons only add a step to the draft, so the sweep skips them and
+  reaches the controls that open dialogs and drawers.
+- **Settings: app passwords for DAV clients** (B-3415, Sprint 32): the devices are a table whose Revoke buttons are
+  named for the device ("Revoke the app password for iPad") and go through a confirm dialog. The create dialog
+  focuses the device name, groups the CalDAV, CardDAV and WebDAV choices in a `fieldset` with a legend (a scope the
+  caller's roles do not allow is disabled and says so in its label), and reports a missing name or scope in a
+  `role="alert"` region. The step-up dialog, in its factor-only mode, asks for an authenticator code or a passkey
+  before the password is made; the new password is shown once in a notice with a Copy button, never in a toast.
+  `e2e/tests/settings.spec.ts` drives it end to end.
+- **Settings: public profile and status** (B-5801, B-5802, Sprint 34): pronouns, label, bio and "Shown in" are labelled
+  fields with their limits in the hint; the picture's file input is named "Profile picture" and opened from a button,
+  the initials that stand in for a missing picture are hidden from assistive technology, and a guardrail refusal shows
+  as a problem panel. The status choice is a labelled segmented group ("Status") and what others see is written out
+  beside it, not only coloured.
+- **Person** (B-5801, B-5802, Sprint 34, the profile page opened from people's names on Messages, the feed and
+  Groups): the directory is a labelled search ("Search people") over a keyboard-operable list, the person's name is the
+  page's `h1`, and the picture has an `alt` naming the person (the initials fallback is `aria-hidden`). Status is a
+  pill with its word, never colour alone, and a name-only view says why in a notice. Block goes through a confirm
+  dialog. The page joins the screen sweeps (`e2e/tests/support/sweep.ts`, opened as a system admin), and
+  `e2e/tests/person.spec.ts` runs both checkers in Standard and Enhanced on a filled-in profile.
+- **Runs chain tree and registry chaining fields** (B-4108, B-4109, Sprint 34): the chain tree in Runs is a
+  labelled nested list ("Chain tree") of buttons, one per invocation, reached with Tab and opened with Enter, whose
+  text names the node; a held call shows its path and is approved or rejected from the root run. The registry editor's delegates,
+  workflows and skill-dependency fields are labelled lists, and the "used by" view is a dialog that says in text why
+  Retire or Delete is unavailable. `e2e/tests/runs-chain.spec.ts` runs axe-core and the in-page checker on the tree in
+  light and dark and the reflow check at 320 and 640 px.
+
+## Screens changed in 1.6.0
+
+- **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
+  Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
+  unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
+  answer. Register model server is a labelled form: the kind, the transport, the socket path or URL and the bearer
+  token (a password field with `autocomplete="off"`) are each labelled with a hint; choosing Ollama or a URL hides the
+  fields that no longer apply with `hidden`, so they leave the tab order and the accessibility tree. Request import has
+  a named segmented group ("Where the model comes from", pressed-state buttons) that swaps the form inside the same
+  dialog, so focus stays in it. The server-held models are a `fieldset` with a legend ("Models the servers hold") of
+  radio buttons; a model the server reports unavailable (Apple's Private Cloud Compute), already catalogued or on a
+  server that is not answering is a disabled radio whose label says why in text. A held model's inspector and card
+  say "held by the server, no digest" and list what the server reported in words. `e2e/tests/models.spec.ts` runs
+  axe-core and the in-page checker on the register form, the drawer and the picker and checks each at 320 px; the
+  new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
+  `y-reflow-overlays.spec.ts`.
+
+## Screens made live in 1.6.0 (Sprint 35, B-4207)
+
+The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every
+design state (Standard and Enhanced, light and dark), the reflow check at 320 and 640 px, and their dialogs and
+drawers. Each one's own spec also runs those checks on each tab and dialog, so the screen is checked without the full
+suite.
+
+- **Social and messaging** (B-4206, `e2e/tests/social.spec.ts`): five tabs (Feed, Groups and events, Messaging,
+  Realtime for platform admins, Relations) in one tabpanel. Every policy control in a table is named for its
+  workspace (`Approver for Finance Ops`, `Default join mode for Legal`, `Contact rule for Field Sales`); the switches
+  for "Posts pass user-input" and "Media" are `role="switch"` buttons read with their column header, and those the
+  caller may not change are disabled, with the reason in the notice under the table. Exclude, Include, Revoke and
+  Apply buttons in repeated rows carry an accessible name naming the tag, feed or workspace. Groups are
+  keyboard-operable rows that fill a labelled inspector ("Selected group"). The realtime sparklines are decorative
+  (`aria-hidden`), with the current count beside each in text. Transfer ownership, Close a user's rooms and the
+  confirms are dialogs that return focus; the export drawer reports a missing reason or a refusal in a
+  `role="alert"` region, and the step-up check for exports asks in a dialog like the one for sanctions. Long ids,
+  hashtags and reasons wrap rather than scroll sideways; the wide policy tables scroll inside their named table
+  region. The spec checks each tab, the Transfer ownership and Close rooms dialogs, the export drawer and every
+  design state.
+- **Tenants, Create from template** (B-4501, `e2e/tests/tenants-templates.spec.ts`): the template picker is a group of
+  radio cards, each a label for its radio with what the template creates; the enrolment link is shown once in a
+  dialog with a Copy button. Both dialogs pass the checks above.
+
+- **Overview** (B-4202, B-4207, Sprint 35b): the page's sections are `h2` headings (Alerts, the counters' window,
+  Instances); each alert is a notice whose tone is also its words (the title says what is wrong), with an Open and an
+  Acknowledge button whose name includes the alert's title. The window is a labelled segmented group ("Counters
+  window") with `aria-pressed`; the Open flags and Held replies counters are buttons. Instance state, schema and the
+  `/readyz` checks are pills with their word, never colour alone; the instances table is a named sideways scroller at
+  narrow widths and the inspector stacks under it. Drain and Acknowledge go through confirm dialogs; a drain that needs a
+  recent sign-in opens the labelled step-up dialog, whose error is announced (`role="alert"`). The page refreshes at
+  the heartbeat's pace and does not re-render while a dialog is open.
+- **Jobs and queues** (B-4203, B-4207, Sprint 35b): the five tabs are the ARIA tabs pattern with one tab panel; the
+  filters are labelled selects (Domain, Tenant, State, Type) and labelled searches; the window is a labelled
+  segmented group. Row actions name their row (for example "Invalidate plugins", "Redrive job …"). Pause, cancel and
+  discard ask for a reason in a dialog whose field is labelled ("Reason", or "Reason (optional)") and whose refusal is
+  announced; job states are pills with their word and progress meters carry their percentage as text.
+
+Both screens join the screen sweeps (`e2e/tests/support/sweep.ts`). `e2e/tests/overview.spec.ts` and
+`e2e/tests/jobs.spec.ts` run the in-page checker and axe-core in Standard and Enhanced, light and dark, on the screen,
+every tab and every design state, and the reflow check at 320 and 640 px on every tab and on the drain and pause
+dialogs.
+
+- **Storage** (B-4204, Sprint 35c): one tab list (Stores, Usage, Quarantine, Integrity, Purges) with a single
+  tabpanel. Stores, workspaces and quarantined objects are keyboard-operable table rows that update a labelled
+  inspector (`aside` "Details"); each store's settings are buttons that open Configuration on that setting. Health,
+  quarantine states and findings are pills with their word, and the quota and capacity meters carry their numbers in
+  text beside the bar. The quarantine state filter is a menu of `menuitemradio` buttons with `aria-checked`. Every
+  destructive action (deleting from quarantine, deleting orphans, retiring the old store) goes through a dialog whose
+  reason field is labelled and reports a missing reason in a `role="alert"` region; the dry run's result is a notice
+  on the page as well as a toast, so it does not vanish before it is read. The migration dialog's step-up check and its
+  server refusals (an unreachable target, a refused endpoint) are problem panels in the same kind of region. Wide
+  tables (stores, usage, findings, purges) scroll sideways inside their named `.tablewrap`; long keys and paths wrap.
+  `e2e/tests/storage-configuration.spec.ts` deletes an orphan found by the integrity check after a dry run, and runs
+  both checkers on all five tabs and five design states.
+- **Configuration** (B-4205, Sprint 35c): the section list is a labelled navigation region whose current section
+  carries `aria-current`; the filter chips are toggle buttons with `aria-pressed`, and so is Compare instances.
+  Settings are keyboard-operable rows (365 of them) that update a labelled inspector (`aside` "Setting details").
+  Whether instances differ, a value is deprecated or an override is pending is said in a pill with its word, not only
+  in colour; compared values are highlighted and also marked "differs". Secrets are text ("set, 44 characters, from
+  file …"), never a masked field. The override drawer labels its value and reason fields, and a value the server
+  refuses (`422`) shows as a problem panel with the schema's message in a `role="alert"` region. The spec proposes an
+  override as one platform admin and approves it as another in a second browser.
+
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values
@@ -108,7 +266,7 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   track; both are now above 3:1.
 
 - **axe-core 4** (tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`, plus `wcag2aaa` in Enhanced) on
-  sign-in and all 26 signed-in screens, in Standard and Enhanced, light and dark, against the e2e server's seeded data.
+  sign-in and every signed-in screen (36 since Sprint 30), in Standard and Enhanced, light and dark, against the e2e server's seeded data.
   No violations remain; the last findings fixed were low-contrast helper text on Classifiers, an unfocusable scrolling
   YAML block on Profiles, and toggles that picked up the browser's grey button background in dark mode.
 - **In CI** since 1.2.0 (B-1101, B-1102): the Playwright suite checks every screen, each of its design states (applied
@@ -133,6 +291,18 @@ change. The earlier `exprsn.prefs` contrast preference is migrated on first load
   when the page, the overlay or the dialog scrolls sideways or anything in it sticks out past its edge, other than
   tables and code in a named scroller. Fixed on the way: at 640 px and below a long breadcrumb with its label (a
   connection's) overlapped the header tools and pushed the page 2 px sideways; the breadcrumb now shrinks and clips.
+- **Sprint 30 and 31 screens** (B-3414): Certificates, Vault, Plugins and events, AT-Protocol (Sprint 31), Apps and Files, and the identity additions
+  on Identity, User stores, Settings and Sign in, joined the sweeps above (every design state, Standard and Enhanced,
+  light and dark, reflow at 320 and 640 px for the screens and their dialogs and drawers). Each opens a dialog from its
+  own controls (New profile, Add grant, Upload, New folder, the Grants dialog…), Vault and Plugins also a drawer.
+  Fixed on the way: stacked checkboxes (plugin grants, sign-up, MFA and invitation roles) and inline tag links in Files
+  were below the 24 px target size (WCAG 2.5.8) and now have 24 px rows or 12 px gaps; the remove control of a state or
+  filter chip in Apps is its own labelled icon button rather than a clickable span; Apps' records grid and form rows
+  are focusable and select with Enter or Space; Apps' state diagram scales to the width instead of scrolling sideways
+  and carries a text alternative; the Plugins catalogue and the Vault engine inspector no longer stick out at 320 px;
+  Apps re-renders after a `change` only once focus has moved on, and keeps it where it went; Certificates' issue dialog
+  redraws its form when the mode or profile changes while keeping the values entered and the focus. Vault's secret and
+  password copy buttons copy without echoing the value in a toast.
 - **Keyboard walk** in Chromium: skip link, landmarks, `aria-current`, focus on screen change, palette combobox and
   arrows, dialog labelling, focus trap in both directions, Esc and focus return, header re-render keeping focus,
   popover focus and Esc, focusable table rows, focus kept on re-render, persistence across reload, system contrast and

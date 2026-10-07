@@ -16,6 +16,7 @@ import { identityAdminRoutes } from '../routes/admin/identity.js';
 import { userAdminRoutes } from '../routes/admin/users.js';
 import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
+import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
@@ -23,8 +24,10 @@ import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
+import { chainRoutes } from '../routes/chains.js';
 import { scriptRoutes } from '../routes/scripts.js';
 import { workflowRoutes } from '../routes/workflows.js';
+import { workflowOperationRoutes } from '../routes/workflow-operations.js';
 import { mediaRoutes } from '../routes/media.js';
 import { imageRoutes } from '../routes/images.js';
 import { knowledgeRoutes } from '../routes/knowledge.js';
@@ -33,6 +36,9 @@ import { connectionAdminRoutes } from '../routes/admin/connections.js';
 import { trainingRoutes } from '../routes/training.js';
 import { zoneAdminRoutes } from '../routes/admin/zones.js';
 import { acmeChallengeRoutes, platformAdminRoutes } from '../routes/admin/platform.js';
+import { operationsAdminRoutes } from '../routes/admin/operations.js';
+import { platformSettingsRoutes } from '../routes/admin/platform-settings.js';
+import { storageAdminRoutes } from '../routes/admin/storage.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
@@ -48,12 +54,17 @@ import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
 import { atprotoRoutes } from '../routes/atproto.js';
 import { firehoseRoutes } from '../routes/firehose.js';
+import { atprotoFeedRoutes } from '../routes/atproto-feeds.js';
+import { atprotoFeedPublicRoutes } from '../routes/atproto-feeds-public.js';
 import { identityPolicyRoutes, signupPublicRoutes } from '../routes/signup.js';
 import { atprotoPublicRoutes } from '../routes/atproto-public.js';
+import { pdsXrpcRoutes } from '../routes/pds-xrpc.js';
+import { pdsRoutes } from '../routes/pds.js';
 import { atprotoAccountRoutes } from '../routes/atproto-accounts.js';
 import { moderationRoutes } from '../routes/moderation.js';
 import { calendarPublicRoutes, groupRoutes } from '../routes/groups.js';
 import { socialRoutes } from '../routes/social.js';
+import { peopleRoutes } from '../routes/people.js';
 import { messagingRoutes } from '../routes/messaging.js';
 import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
@@ -71,6 +82,9 @@ import { publicAppRoutes } from '../routes/apps-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
+import { davRoutes } from '../dav/handler.js';
+import { appPasswordRoutes } from '../dav/routes.js';
+import { importRoutes } from '../routes/imports.js';
 import { badRequest, HttpProblem, notFound, tooManyRequests } from './problem.js';
 
 export interface AppState {
@@ -163,10 +177,18 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(pkiPublicRoutes(s));
   // Sprint 25 (B-2004): the plugin broker, for handler runs' scoped tokens only.
   app.use(pluginBrokerRoutes(s));
+  // 1.5.0, Sprint 31 (B-3001, B-3003): the feed generator's XRPC (public, rate-limited; service JWTs verified). Before
+  // the routes below, so /atproto/<key>/xrpc/app.bsky.feed.* is counted once against the per-address limit.
+  app.use(atprotoFeedPublicRoutes(s));
   // Sprint 25 (B-1609, B-1610): DID documents, handle resolution and queryLabels (public, rate-limited).
   app.use(atprotoPublicRoutes(s));
+  // 1.5.0, Sprint 31 (B-2901 to B-2905): the PDS's XRPC endpoints (public reads; writes with the PDS's own tokens).
+  app.use(pdsXrpcRoutes(s));
   // Sprint 27c (B-2504): signed iCalendar feeds (public; the URL's signature is the credential, rate-limited).
   app.use(calendarPublicRoutes(s));
+  // 1.5.0, Sprint 30 (B-3101 to B-3103): CalDAV and CardDAV at /dav, with /.well-known discovery. App passwords over
+  // HTTP Basic only (never sessions), XML bodies read raw and parsed strictly, its own rate limit.
+  app.use(davRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
 
@@ -176,7 +198,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path)) ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path) || req.path === '/people/me/avatar') ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 
@@ -197,6 +219,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/auth', signupPublicRoutes(s));
   api.use(generalLimit);
   api.use('/me', meRoutes(s));
+  // 1.5.0, Sprint 30 (B-3101): app passwords for DAV clients.
+  api.use('/me', appPasswordRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
   api.use('/admin', userAdminRoutes(s));
   api.use('/admin', auditAdminRoutes(s));
@@ -208,7 +232,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', registryAdminRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
   api.use(agentRoutes(s));
+  api.use(chainRoutes(s));
   api.use(scriptRoutes(s));
+  api.use(workflowOperationRoutes(s)); // 1.5.0, Sprint 32b: triggers, dead letters, bundles (before :id routes)
   api.use(workflowRoutes(s));
   api.use(mediaRoutes(s));
   api.use(imageRoutes(s));
@@ -218,6 +244,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(trainingRoutes(s));
   api.use('/admin', zoneAdminRoutes(s));
   api.use('/admin', platformAdminRoutes(s));
+  api.use('/admin', operationsAdminRoutes(s)); // 1.6.0 (B-4202, B-4203): Overview, Jobs and queues
+  api.use('/admin', platformSettingsRoutes(s)); // 1.6.0, Sprint 35c (B-4205): Configuration
+  api.use('/admin', storageAdminRoutes(s)); // 1.6.0, Sprint 35c (B-4204): Storage
   api.use('/admin', federationAdminRoutes(s));
   // Sprint 13: integrations.
   api.use(sharingRoutes(s));
@@ -233,6 +262,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
   api.use(eventRoutes(s));
   api.use('/admin', pluginAdminRoutes(s));
+  // 1.6.0 (B-4206): Social and messaging: workspace policies, digests, legal-hold exports, realtime counts.
+  api.use('/admin', socialAdminRoutes(s));
   // 1.4.0, Sprint 25c (B-1704): database leases from the built-in engines.
   api.use(vaultLeaseRoutes(s));
   // Sprint 25 (B-1608 to B-1611): AT-Protocol identities, keys, labels and trusted labelers.
@@ -249,18 +280,26 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(identityPolicyRoutes(s));
   // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
   api.use(firehoseRoutes(s));
+  // 1.5.0, Sprint 31 (B-3001 to B-3003): custom feed generators over the firehose.
+  api.use(atprotoFeedRoutes(s));
   // Sprint 27c (B-2501 to B-2505): groups, posts, events, RSVPs, reminders and calendar feeds.
   api.use(groupRoutes(s));
   // Sprint 28a (B-2301 to B-2304): customer-service channels, sessions, held replies, exports.
   api.use(channelRoutes(s));
   // Sprint 28b (B-2606 with B-2702): blocks, mutes, follows, lists and contact rules.
   api.use(socialRoutes(s));
+  // 1.5.0, Sprint 34c (B-5801, B-5802): profiles and presence.
+  api.use(peopleRoutes(s));
   // Sprint 28b (B-2601 to B-2605): person-to-person messaging.
   api.use(messagingRoutes(s));
   // Sprint 28c (B-2701 to B-2705): the workspace feed.
   api.use(feedRoutes(s));
   // 1.5.0, Sprint 29 (B-3301 to B-3305): role and effective-access matrices, custom roles and access reviews.
   api.use(authzRoutes(s));
+  // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004): PDS hosting, accounts, invites, app passwords and feed records.
+  api.use(pdsRoutes(s));
+  // 1.5.0, Sprint 30 (B-3801 to B-3803): import repositories, catalogue browse and model import
+  api.use(importRoutes(s));
   api.use(() => {
     throw notFound('API route');
   });

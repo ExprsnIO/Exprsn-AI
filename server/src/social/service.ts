@@ -1,6 +1,6 @@
 import { ulid } from 'ulid';
 import { actorFrom, isUniqueViolation } from '../audit/chain.js';
-import type { Principal } from '../authz/policy.js';
+import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { workspacesFor } from '../http/middleware.js';
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { TOPICS } from '../platform/bus.js';
@@ -194,12 +194,33 @@ export class SocialService {
   async mayContact(p: Principal, targetId: string): Promise<ContactDecision> {
     if (targetId === p.userId) return { ok: false, status: 403, why: 'That is you.', step: 'self' };
     if (!(await this.activeUser(p.tenantId, targetId))) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
-    if (!(await this.sharedWorkspaces(p, targetId)).length) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
+    const shared = await this.sharedWorkspaces(p, targetId);
+    if (!shared.length) return { ok: false, status: 404, why: 'User not found.', step: 'workspace' };
     if (await this.isBlocked(p.tenantId, p.userId, targetId)) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
+    // 1.6.0 (B-4206): the workspaces' contact rules (Social and messaging): one shared workspace that admits the caller
+    // is enough. `contacts` needs mutual follows; `admins` needs social:manage or tenant:manage.
+    if (!(await this.workspaceAdmits(p, targetId, shared))) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     const rule = await this.contactRule(p.tenantId, targetId);
     if (rule === 'nobody') return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     if (rule === 'following' && !(await this.isFollowing(p.tenantId, targetId, p.userId))) return { ok: false, status: 403, why: NOT_ACCEPTING, step: 'contact' };
     return { ok: true };
+  }
+
+  /** Does a workspace the two share let the caller start a conversation with the target? */
+  private async workspaceAdmits(p: Principal, targetId: string, shared: string[]): Promise<boolean> {
+    const rules = await this.s().socialAdmin.policies(p.tenantId, shared);
+    const perms = effectivePermissions(p);
+    let mutual: boolean | null = null;
+    for (const w of shared) {
+      const r = rules.get(w)?.contactRule ?? 'workspace';
+      if (r === 'workspace') return true;
+      if (r === 'admins' && (perms.has('social:manage') || perms.has('tenant:manage'))) return true;
+      if (r === 'contacts') {
+        mutual ??= (await this.isFollowing(p.tenantId, p.userId, targetId)) && (await this.isFollowing(p.tenantId, targetId, p.userId));
+        if (mutual) return true;
+      }
+    }
+    return false;
   }
 
   /** `mayContact` as a refusal (problem+json) when it says no. */
@@ -500,6 +521,27 @@ export class SocialService {
     const [following, followedBy, contact] = await Promise.all([this.isFollowing(p.tenantId, p.userId, targetId), this.isFollowing(p.tenantId, targetId, p.userId), this.mayContact(p, targetId)]);
     // Being blocked by them is never shown as such: it reads as "cannot message".
     return { userId: targetId, blocking, muting, following: blocked ? false : following, followedBy: blocked ? false : followedBy, canMessage: contact.ok };
+  }
+
+  /**
+   * The people the caller shares a workspace with now (B-3411: the console's person picker for conversations, blocks,
+   * follows and lists), active, without the caller, optionally matching `q` in the username or display name. Names
+   * and shared workspaces only; whether someone accepts the caller is decided when they act (`mayContact`).
+   */
+  async directory(p: Principal, q: string | undefined, limit: number) {
+    const s = this.s();
+    const needle = (q ?? '').trim().toLowerCase();
+    const by = new Map<string, { userId: string; username: string; displayName: string; workspaces: { id: string; name: string }[] }>();
+    for (const w of await workspacesFor(s, p)) {
+      for (const m of await s.tenants.members(w.id)) {
+        if (m.user_id === p.userId || m.state !== 'active') continue;
+        if (needle && !m.username.toLowerCase().includes(needle) && !(m.display_name ?? '').toLowerCase().includes(needle)) continue;
+        const e = by.get(m.user_id) ?? { userId: m.user_id, username: m.username, displayName: m.display_name, workspaces: [] };
+        e.workspaces.push({ id: w.id, name: w.name });
+        by.set(m.user_id, e);
+      }
+    }
+    return [...by.values()].sort((a, b) => (a.displayName || a.username).localeCompare(b.displayName || b.username)).slice(0, limit);
   }
 
   // ---------- administration (`social:manage`) ----------

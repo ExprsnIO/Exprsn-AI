@@ -5,6 +5,7 @@ import { LABELS, type Label } from '../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { entryView, SIDE_EFFECTS } from '../registry/service.js';
 import { graphSchema } from '../workflows/graph.js';
+import { rootHeld } from '../chain/view.js';
 import type { Services } from '../services.js';
 
 const name = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens');
@@ -19,7 +20,7 @@ const semver = z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/, 'A semanti
  */
 export function workflowRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/workflows', '/workflow-runs', '/workflow-approvals', '/workflow-tools'], noStore, requireAuth());
+  r.use(['/workflows', '/workflow-runs', '/workflow-approvals', '/workflow-tools', '/workflow-callees'], noStore, requireAuth());
   const run = requirePermission(s, 'agents:run');
   const manage = requirePermission(s, 'workflows:manage');
   const wf = s.workflows;
@@ -32,6 +33,11 @@ export function workflowRoutes(s: Services): Router {
   /** Registry tools a tool step may call from the current workspace, for the editor's palette. */
   r.get('/workflow-tools', run, async (req, res) => {
     res.json(await wf.callableTools(principalOf(req)));
+  });
+
+  /** Sprint 32 (B-3901, B-3902): published workflows, agents and skills the sub, agent and model steps may use here. */
+  r.get('/workflow-callees', run, async (req, res) => {
+    res.json(await wf.callees(principalOf(req)));
   });
 
   r.get('/workflows', run, async (req, res) => {
@@ -94,6 +100,13 @@ export function workflowRoutes(s: Services): Router {
     res.status(201).json(entryView(entry));
   });
 
+  /** B-4105: what references the workflow (agents that list it, workflow tools, other workflows), before deleting it. */
+  r.get('/workflows/:id/used-by', run, async (req, res) => {
+    const w = await wf.workflow(principalOf(req), String(req.params.id));
+    const usedBy = await wf.usedBy(w);
+    res.json({ id: w.id, name: w.name, usedBy, deleteBlocked: usedBy.some((u) => u.live && u.kind !== 'tool') });
+  });
+
   r.delete('/workflows/:id', manage, async (req, res) => {
     const w = await wf.remove(principalOf(req), String(req.params.id));
     await audit(req, 'workflow.deleted', { workflow: w.id, name: w.name }, w.label);
@@ -124,7 +137,10 @@ export function workflowRoutes(s: Services): Router {
 
   // Run owners, workflow admins and approvers of the run may read it; the service decides which.
   r.get('/workflow-runs/:id', async (req, res) => {
-    res.json(await wf.runView(principalOf(req), String(req.params.id)));
+    const p = principalOf(req);
+    const v = await wf.runView(p, String(req.params.id));
+    // B-4106: a chain's root shows every call held below it, with its path, to decide from here.
+    res.json({ ...v, held: await rootHeld(s, p, v.chain) });
   });
 
   r.post('/workflow-runs/:id/replay', run, async (req, res) => {
@@ -147,9 +163,10 @@ export function workflowRoutes(s: Services): Router {
   });
 
   r.post('/workflow-approvals/:id', async (req, res) => {
-    const body = parseBody(z.object({ decision: z.enum(['approve', 'reject']), reason: z.string().trim().max(1000).nullable().default(null) }).strict(), req.body);
-    const out = await wf.decide(principalOf(req), String(req.params.id), body);
-    await audit(req, out.state === 'approved' ? 'workflow.approval.approved' : 'workflow.approval.rejected', { workflow: out.workflowId, run: out.run, approval: out.approval }, out.label, { reason: body.reason ? 'given' : null });
+    // B-3907: an approval with a form takes the approver's answers (validated like a submission of that form).
+    const body = parseBody(z.object({ decision: z.enum(['approve', 'reject']), reason: z.string().trim().max(1000).nullable().default(null), answers: z.record(z.string().max(63), z.unknown()).optional() }).strict(), req.body);
+    const out = await wf.decide(principalOf(req), String(req.params.id), body, ip(req));
+    await audit(req, out.state === 'approved' ? 'workflow.approval.approved' : 'workflow.approval.rejected', { workflow: out.workflowId, run: out.run, approval: out.approval }, out.label, { reason: body.reason ? 'given' : null, ...(out.answers ? { answers: out.answers } : {}) });
     res.json(out);
   });
 

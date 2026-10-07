@@ -13,6 +13,8 @@
   const ago = (ms) => { if (!ms) return ''; const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? m + ' min' : m < 2880 ? Math.round(m / 60) + ' h' : Math.round(m / 1440) + ' days'; };
   const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const pretty = (v) => JSON.stringify(v, null, 2);
+  const VIA_TEXT = { delegate: 'delegates to it', workflow: 'lists it as a workflow', tool: 'calls it as a tool', skill: 'loads it as a skill', 'sub-skill': 'builds on it', 'skill-tool': 'needs it as a skill tool', 'sub-workflow': 'runs it as a sub-workflow', 'agent-step': 'runs it in an agent step', 'model-skill': 'loads it in a model step', 'tool-step': 'calls it in a tool step', 'workflow-tool': 'is its workflow tool' };
+  const listOfNames = (v) => (Array.isArray(v) ? v : []).map(String);
 
   /** Sample arguments from an input schema: each property's example, default or an empty value of its type. */
   function sampleArgs(schema) {
@@ -36,6 +38,8 @@
       { title: 'Failing check', tone: 'danger', text: 'Approve stays disabled until every automated check passes: schema, required fields, description, side effect and the secrets scan.', apply(ctx) { ctx.state.demo = 'failing'; ctx.rerender(); } },
       { title: 'Publish scope', tone: 'neutral', text: 'Publishing asks whether the whole tenant or named workspaces receive the entry. Workspaces below the entry\'s max label cannot be chosen.', apply(ctx) { ctx.state.demo = 'scope'; ctx.rerender(); } },
       { title: 'Deprecated', tone: 'warn', text: 'Deprecated tools stay callable with a warning in run details and a replacement link.', apply(ctx) { ctx.state.demo = 'deprecated'; ctx.rerender(); } },
+      { title: 'Retire refused: still in use', tone: 'danger', text: 'Retiring the last callable version of an entry a published agent, skill or workflow uses is refused, naming them. The used-by view lists every referrer and how it reaches the entry.', apply(ctx) { ctx.state.demo = 'usedby'; ctx.rerender(); } },
+      { title: 'Chain reference not published', tone: 'danger', text: 'An agent that delegates to an agent, or a skill that builds on a skill, which is not published fails the Chain references check; Approve stays disabled until it is published or removed.', apply(ctx) { ctx.state.demo = 'chainref'; ctx.rerender(); } },
       { title: 'Test harness', tone: 'info', text: 'Runs the tool once with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.demo = 'harness'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -80,6 +84,15 @@
         } else if (d === 'deprecated') {
           const e = list.find((x) => x.status === 'deprecated');
           if (e) { st.sel = e.id; st.tab = e.kind === 'tool' ? 'tools' : e.kind + 's'; } else st.demoNote = 'No entry is deprecated. Deprecate a published entry from its inspector to see the warning.';
+        } else if (d === 'usedby') {
+          const live = (x) => x.status === 'published' || x.status === 'deprecated';
+          const named = {};
+          list.filter(live).forEach((x) => { const def = x.definition || {}; listOfNames(def.agents).concat(listOfNames(def.skills), listOfNames(def.tools)).forEach((n) => { named[n] = true; }); });
+          const e = list.find((x) => live(x) && !x.platform && named[x.name]);
+          if (e) { st.sel = e.id; st.tab = e.kind === 'tool' ? 'tools' : e.kind + 's'; st.openUsedBy = { id: e.id, mode: e.status === 'deprecated' ? 'retire' : 'view' }; } else st.demoNote = 'No published entry is used by another yet. When an agent or skill names one, its used-by view lists them, and retiring the last version they reach is refused.';
+        } else if (d === 'chainref') {
+          const e = list.find((x) => (x.checks || []).some((c) => c.name === 'Chain references' && !c.ok));
+          if (e) { st.sel = e.id; st.tab = e.status === 'in_review' ? 'review' : e.kind + 's'; } else st.demoNote = 'Every agent and skill passes its Chain references check: each delegate, sub-skill and listed workflow is published and within the ceiling.';
         } else if (d === 'harness') {
           const e = list.find((x) => x.name === 'calculate' && x.platform) || list.find((x) => x.kind === 'tool');
           if (e) { st.sel = e.id; st.tab = 'tools'; st.harnessOpen = true; st.harnessRun = true; }
@@ -110,7 +123,7 @@
       else table = UI.table(['Entry', 'Kind', 'Submitted', 'Automated checks', 'Waiting', 'Status'], shown.map((e) => { const bad = e.checks.filter((c) => !c.ok).length; return { cells: ['<span style="font-weight:600">' + esc(e.name) + '</span> <span class="mono muted">' + esc(e.version) + '</span>', esc(e.kind), esc(when(e.submittedAt) + ', ' + (e.owner || '')), bad ? UI.pill(bad + ' failing', 'danger') : UI.pill('all passed', 'ok'), esc(ago(e.submittedAt)), statusPill(e.status)], attrs: rowAttrs(e), selected: sel && e.id === sel.id }; }), { emptyTitle: 'The review queue is empty', emptyText: 'Submitted entries appear here with their automated checks.' });
 
       const agentShown = sel && sel.kind === 'agent' && st.tab !== 'review' ? sel : null;
-      const agentCard = (a) => { const d = a.definition || {}; const b = d.budgets || {}; return UI.panel('Agent: ' + esc(a.name), UI.kv([['Profile', '<a href="#" data-goprofile="' + esc(d.profile || '') + '">' + esc(d.profile || '') + '</a>'], ['Tools', esc(tools(a).join(', ') || 'none')], ['Skills', esc((d.skills || []).join(', ') || 'none')], ['System prompt', esc(d.systemPrompt ? d.systemPrompt.slice(0, 160) + (d.systemPrompt.length > 160 ? '…' : '') : 'none')], ['Limits', esc(b.steps + ' steps, ' + fmt(b.tokens || 0) + ' tokens, ' + b.wallSeconds + ' s, ' + b.toolCalls + ' tool calls')], ['Memory', d.memory && d.memory.write === 'propose' ? esc('proposes ' + (d.memory.types || []).join(' and ') + ' memories, at most ' + d.memory.maxPerRun + ' per run, for a curator to accept') : 'reads accepted memories, proposes none']], 3), { actions: (App.can('agents:run') && (a.status === 'published' || a.status === 'deprecated') ? UI.btn('Run in Runs', { size: 'sm', attrs: 'data-goruns="' + esc(a.name) + '"' }) : '') + UI.btn('Profile', { size: 'sm', kind: 'ghost', attrs: 'data-goprofile="' + esc(d.profile || '') + '"' }) }); };
+      const agentCard = (a) => { const d = a.definition || {}; const b = d.budgets || {}; return UI.panel('Agent: ' + esc(a.name), UI.kv([['Profile', '<a href="#" data-goprofile="' + esc(d.profile || '') + '">' + esc(d.profile || '') + '</a>'], ['Tools', esc(tools(a).join(', ') || 'none')], ['Delegates', esc(listOfNames(d.agents).map((x) => 'agent:' + x).join(', ') || 'none')], ['Workflows', esc(listOfNames(d.workflows).map((x) => 'workflow:' + x).join(', ') || 'none')], ['Typed answer', a.outputSchema ? 'output schema set; delegating agents get the parsed object' : 'text'], ['Skills', esc((d.skills || []).join(', ') || 'none')], ['System prompt', esc(d.systemPrompt ? d.systemPrompt.slice(0, 160) + (d.systemPrompt.length > 160 ? '…' : '') : 'none')], ['Limits', esc(b.steps + ' steps, ' + fmt(b.tokens || 0) + ' tokens, ' + b.wallSeconds + ' s, ' + b.toolCalls + ' tool calls')], ['Memory', d.memory && d.memory.write === 'propose' ? esc('proposes ' + (d.memory.types || []).join(' and ') + ' memories, at most ' + d.memory.maxPerRun + ' per run, for a curator to accept') : 'reads accepted memories, proposes none']], 3), { actions: (App.can('agents:run') && (a.status === 'published' || a.status === 'deprecated') ? UI.btn('Run in Runs', { size: 'sm', attrs: 'data-goruns="' + esc(a.name) + '"' }) : '') + UI.btn('Profile', { size: 'sm', kind: 'ghost', attrs: 'data-goprofile="' + esc(d.profile || '') + '"' }) }); };
 
       // ---- inspector ----
       let inspector = '<aside class="inspector w360 registry-insp">';
@@ -135,8 +148,7 @@
             ['Rate limit', sel.ratePerHour ? esc(sel.ratePerHour + ' per user per hour') : 'none'],
             ['Publish scope', sel.publishScope === 'workspace' ? esc((d.workspaces || []).map((w) => w.name).join(', ') || sel.publishWorkspaces.length + ' workspaces') : esc(sel.publishScope || 'not published')],
             ['Reviewed by', sel.reviewedBy ? esc(sel.reviewedBy + ', ' + when(sel.reviewedAt)) : 'not yet'],
-            ['Used by', esc(((d.profiles || []).map((p) => 'profile ' + p).concat((d.referencedBy || []).map((r) => r.kind + ' ' + r.name + ' ' + r.version))).join(', ') || 'nothing yet')]
-          ], 1)
+          ].concat(chainRows(sel)).concat([['Used by', esc(((d.profiles || []).map((p) => 'profile ' + p).concat((d.referencedBy || []).map((r) => r.kind + ' ' + r.name + ' ' + r.version))).join(', ') || 'nothing yet') + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
           + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + (canManage(sel) ? UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) : '') + '</div>'
           + '<div class="vstack gap4">' + sel.checks.map((c) => '<div class="hstack" style="align-items:flex-start;color:var(--' + (c.ok ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c.ok ? 'check' : 'x', 14) + '<span style="color:var(--fg)"><b style="font-weight:600">' + esc(c.name) + '</b><span class="fg2" style="display:block;font-size:12px">' + esc(c.detail) + '</span></span></div>').join('') + (sel.checkedAt ? '<div class="muted" style="font-size:12px">Checked ' + esc(when(sel.checkedAt)) + '</div>' : '') + '</div>'
           + '<div class="hstack wrap">'
@@ -197,15 +209,11 @@
         const bad = sel.checks.filter((c) => !c.ok).map((c) => c.name + ': ' + c.detail).join('\n');
         ctx.modal({ title: 'Reject ' + esc(sel.name), body: UI.field('Reason for the owner', UI.textarea(bad, { rows: 3, attrs: 'data-reason' })) + UI.notice('The entry returns to draft. The owner is notified and can resubmit after fixing it.', 'warn'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const note = m.querySelector('[data-reason]').value.trim() || null; App.closeOverlay(); act(() => App.post('/api/admin/registry/' + sel.id + '/review', { decision: 'reject', note }), esc(sel.name) + ' rejected and returned to draft. Owner notified.', 'warn'); }); } });
       });
-      ctx.on('click', '[data-deprecate]', () => {
-        const d = detail || {};
-        ctx.modal({ title: 'Deprecate ' + esc(sel.name), body: '<p class="fg2" style="margin:0">Deprecated entries stay callable. Every run that uses one shows a warning in run details with the replacement.</p>' + UI.field('Replacement', UI.input(sel.name + ' ' + (parseInt(sel.version, 10) + 1) + '.0.0', { attrs: 'data-repl' })) + UI.kv([['Used by', esc(((d.profiles || []).length + (d.referencedBy || []).length) + ' profiles, agents or skills')], ['Callable until retired', 'yes']], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Deprecate', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const replacement = m.querySelector('[data-repl]').value.trim() || null; App.closeOverlay(); act(() => App.post('/api/admin/registry/' + sel.id + '/lifecycle', { to: 'deprecated', replacement }), esc(sel.name) + ' deprecated. Runs now show a warning.', 'warn'); }); } });
-      });
-      ctx.on('click', '[data-retire]', async () => {
-        const refs = (detail && detail.referencedBy) || [];
-        const ok = await ctx.confirm({ title: 'Retire ' + esc(sel.name), tag: 'destructive', tone: 'danger', body: '<p class="fg2" style="margin:0">Retiring removes the entry from routing. Agents that still reference it get a typed error. The entry stays resolvable for audit.</p>', kv: [['Still referenced by', esc(refs.map((r) => r.kind + ' ' + r.name + ' ' + r.version).join(', ') || 'nothing')], ['Audit', 'kept']], ok: 'Retire' });
-        if (ok) act(() => App.post('/api/admin/registry/' + sel.id + '/lifecycle', { to: 'retired' }), esc(sel.name) + ' retired.' + (refs.length ? ' ' + refs.length + ' referencing entr' + (refs.length === 1 ? 'y' : 'ies') + ' will fail on their next call.' : ''), 'danger');
-      });
+      ctx.on('click', '[data-deprecate]', () => usedByModal(sel, 'deprecate'));
+      ctx.on('click', '[data-retire]', () => usedByModal(sel, 'retire'));
+      ctx.on('click', '[data-usedby]', () => usedByModal(sel, 'view'));
+      ctx.on('click', '[data-entrylink]', (e, t) => { e.preventDefault(); const hit = list.find((x) => x.name === t.dataset.entrylink && x.kind === t.dataset.kind && (x.status === 'published' || x.status === 'deprecated')) || list.find((x) => x.name === t.dataset.entrylink && x.kind === t.dataset.kind); if (hit) { st.sel = hit.id; st.tab = hit.kind === 'tool' ? 'tools' : hit.kind + 's'; ctx.rerender(); } else toast('No ' + esc(t.dataset.kind) + ' named ' + esc(t.dataset.entrylink) + ' in this registry.'); });
+      ctx.on('click', '[data-gowfname]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { id: t.dataset.gowfname }); });
       ctx.on('click', '[data-restore]', () => act(() => App.post('/api/admin/registry/' + sel.id + '/lifecycle', { to: 'published' }), esc(sel.name) + ' restored to published.'));
       ctx.on('click', '[data-publishmore]', () => publishScope(sel, 'publish'));
       ctx.on('click', '[data-newversion]', () => {
@@ -219,6 +227,42 @@
       if (st.openSubmit) { st.openSubmit = false; setTimeout(() => entryForm(null), 30); }
       if (st.openScope) { const e = list.find((x) => x.id === st.openScope); st.openScope = null; if (e) setTimeout(() => publishScope(e, e.status === 'in_review' ? 'review' : 'publish'), 30); }
       if (st.harnessRun) { st.harnessRun = false; setTimeout(runHarness, 30); }
+      if (st.openUsedBy) { const o = st.openUsedBy; st.openUsedBy = null; const e = list.find((x) => x.id === o.id); if (e) setTimeout(() => usedByModal(e, o.mode), 30); }
+
+      /** Inspector rows for the chain fields (B-4102 to B-4104): an agent's delegates, workflows and schemas, a skill's dependencies. */
+      function chainRows(e) {
+        const d = e.definition || {};
+        const links = (names, kind, prefix) => names.length ? names.map((n) => '<a href="#" data-entrylink="' + esc(n) + '" data-kind="' + kind + '" class="mono">' + esc(prefix + n) + '</a>').join(', ') : 'none';
+        const schema = (v, none) => (v ? '<span class="mono" style="overflow-wrap:anywhere">' + esc(JSON.stringify(v).slice(0, 240)) + '</span>' : '<span class="muted">' + none + '</span>');
+        if (e.kind === 'agent') return [['Delegates', links(listOfNames(d.agents), 'agent', 'agent:')], ['Workflows', listOfNames(d.workflows).length ? listOfNames(d.workflows).map((n) => '<span class="mono">workflow:' + esc(n) + '</span>').join(', ') : 'none'], ['Input schema', schema(e.inputSchema, 'none: delegates send {task: string}')], ['Output schema', schema(e.outputSchema, 'none: the answer is text')]];
+        if (e.kind === 'skill') return [['Builds on', links(listOfNames(d.skills), 'skill', '')]];
+        return [];
+      }
+
+      /** The used-by view (GET /api/admin/registry/:id/used-by) before deprecating or retiring, or on its own. */
+      async function usedByModal(e, mode) {
+        let u;
+        try { u = await App.get('/api/admin/registry/' + e.id + '/used-by'); } catch (err) { App.fail(err, 'Used by could not be loaded'); return; }
+        const usedBy = u.usedBy || []; const live = usedBy.filter((x) => x.live);
+        const names = live.map((x) => x.kind + ' ' + x.name + ' ' + x.version).join('; ');
+        const table = UI.table(['Kind', 'Name', 'Version', 'Status', 'How it references ' + e.name, 'Live'], usedBy.map((x) => [esc(x.kind), '<b>' + esc(x.name) + '</b>', '<span class="mono">' + esc(x.version == null ? '' : x.version) + '</span>', statusPill(x.status), esc(VIA_TEXT[x.via] || x.via) + ' <span class="muted mono">' + esc(x.via) + '</span>', x.live ? UI.pill('live', 'warn') : UI.pill('not live', 'outline')]), { clickable: false, minWidth: '640px', emptyTitle: 'Nothing references ' + e.name, emptyText: 'No agent, skill, tool or workflow in this tenant names it.' });
+        const others = u.otherVersions || [];
+        const versions = '<div class="muted" style="font-size:12px">' + (others.length ? 'Other versions: ' + others.map((v2) => esc(v2.version + ' ' + statusText(v2.status))).join(', ') : 'No other version of ' + esc(e.name) + '.') + '</div>';
+        const blocked = mode === 'retire' && u.retireBlocked;
+        const note = mode === 'retire' ? (blocked ? UI.notice('<b>Retire refused (Still in use).</b> ' + esc(e.name) + ' is used by ' + esc(names) + '. Publish another version, or remove it from them first.', 'danger') : UI.notice('Retiring removes ' + esc(e.name) + ' ' + esc(e.version) + ' from routing. ' + (live.length ? 'Live referrers reach another version.' : 'Nothing live reaches it.') + ' The entry stays resolvable for audit.', 'warn'))
+          : mode === 'deprecate' ? UI.notice('Deprecated entries stay callable. ' + (live.length ? live.length + ' live referrer' + (live.length === 1 ? '' : 's') + ' keep working and show a warning in run details with the replacement.' : 'Nothing live references it.'), 'warn') + UI.field('Replacement', UI.input(e.name + ' ' + (parseInt(e.version, 10) + 1) + '.0.0', { attrs: 'data-repl' }))
+            : (u.retireBlocked ? UI.notice('Retiring this version would be refused: ' + esc(names) + ' still use' + (live.length === 1 ? 's' : '') + ' it and no other version is published or deprecated.', 'warn') : UI.notice('Built from the reference graph across agents, skills, tools and published workflow versions. Drafts are listed but not live.', 'info'));
+        ctx.modal({ cls: 'wide', title: (mode === 'retire' ? 'Retire ' : mode === 'deprecate' ? 'Deprecate ' : 'Used by: ') + esc(e.name) + ' ' + UI.pill(e.version, 'outline'), body: note + table + versions,
+          actions: UI.btn(mode === 'view' ? 'Close' : 'Cancel', { attrs: 'data-close' }) + (mode === 'retire' ? UI.btn('Retire', { kind: 'danger', attrs: 'data-ok', disabled: blocked, title: blocked ? 'Refused while a live entry uses the last callable version' : '' }) : mode === 'deprecate' ? UI.btn('Deprecate', { kind: 'primary', attrs: 'data-ok' }) : ''),
+          onMount(m) {
+            const ok = m.querySelector('[data-ok]'); if (!ok) return;
+            ok.addEventListener('click', () => {
+              if (mode === 'retire') { App.closeOverlay(); act(() => App.post('/api/admin/registry/' + e.id + '/lifecycle', { to: 'retired' }), esc(e.name) + ' retired.', 'danger'); return; }
+              const replacement = m.querySelector('[data-repl]').value.trim() || null; App.closeOverlay();
+              act(() => App.post('/api/admin/registry/' + e.id + '/lifecycle', { to: 'deprecated', replacement }), esc(e.name) + ' deprecated. Runs now show a warning.', 'warn');
+            });
+          } });
+      }
 
       async function runHarness() {
         if (!sel) return;
@@ -271,6 +315,7 @@
         const d = e ? e.definition || {} : {};
         const b = d.budgets || { steps: 20, tokens: 10000, wallSeconds: 120, toolCalls: 8 };
         const published = list.filter((x) => x.kind === 'tool' && (x.status === 'published' || x.status === 'deprecated')).map((x) => x.name);
+        const uniq = (a) => a.filter((x, i) => a.indexOf(x) === i);
         const kinds = [];
         if (App.can('tools:manage')) kinds.push({ value: 'skill', label: 'Skill' }, { value: 'tool', label: 'Tool (script-backed)' });
         if (App.can('agents:manage')) kinds.push({ value: 'agent', label: 'Agent' });
@@ -278,8 +323,10 @@
           const common = UI.field('Name', UI.input(e ? e.name : '', { placeholder: k === 'agent' ? 'Data analyst' : 'namespace.operation', attrs: 'data-name' + (e ? ' readonly' : '') })) + UI.field('Version', UI.input(e ? e.version : '0.1.0', { attrs: 'data-version' + (e ? ' readonly' : '') }))
             + '<div class="span2">' + UI.field('Description', UI.textarea(e ? e.description || '' : '', { rows: 2, attrs: 'data-desc', placeholder: 'What it does, when to use it and what it returns' }), 'At least 40 characters: a model reads this to decide when to use it.') + '</div>'
             + UI.field('Max label', UI.select(LABELS.filter((l) => !me.clearance || rank(l) <= rank(me.clearance)), e ? e.label : 'internal', 'data-label'));
-          if (k === 'skill') return common + '<div class="span2">' + UI.field('Instructions', UI.textarea(d.instructions || '', { rows: 5, attrs: 'data-instructions' })) + '</div>' + UI.field('Tools it uses', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, ledger.query' }), 'Published tools only');
-          if (k === 'agent') return common + UI.field('Model profile', UI.input(d.profile || '', { attrs: 'data-profile', placeholder: 'general' }), 'A profile of this tenant; its model must support tools if the agent has any') + '<div class="span2">' + UI.field('Tools', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, jira.create_issue' }), 'Published tools only; write and destructive calls pause the run for approval') + UI.field('Skills', UI.input((d.skills || []).join(', '), { attrs: 'data-skills' })) + UI.field('System prompt', UI.textarea(d.systemPrompt || '', { rows: 3, attrs: 'data-prompt' })) + '</div>'
+          if (k === 'skill') return common + '<div class="span2">' + UI.field('Instructions', UI.textarea(d.instructions || '', { rows: 5, attrs: 'data-instructions' })) + '</div>' + UI.field('Tools it uses', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, ledger.query' }), 'Published tools only') + UI.field('Skills it builds on', UI.input(listOfNames(d.skills).join(', '), { attrs: 'data-subskills list="registry-skills"', placeholder: 'variance-analysis' }), 'Loading this skill loads them first, each once, and offers the tools of the whole closure');
+          if (k === 'agent') return common + UI.field('Model profile', UI.input(d.profile || '', { attrs: 'data-profile', placeholder: 'general' }), 'A profile of this tenant; its model must support tools if the agent has any') + '<div class="span2">' + UI.field('Tools', UI.input((d.tools || []).join(', '), { attrs: 'data-tools list="registry-tools"', placeholder: 'calculate, jira.create_issue' }), 'Published tools only; write and destructive calls pause the run for approval') + UI.field('Skills', UI.input((d.skills || []).join(', '), { attrs: 'data-skills list="registry-skills"' })) + UI.field('System prompt', UI.textarea(d.systemPrompt || '', { rows: 3, attrs: 'data-prompt' })) + '</div>'
+            + UI.field('Delegates (agents it may call)', UI.input(listOfNames(d.agents).join(', '), { attrs: 'data-delegates list="registry-agents"', placeholder: 'Close broker, Clerk' }), 'Each is offered as the tool agent:<name> and runs as a child run in the chain, within this run\'s remaining budget') + UI.field('Workflows (it may start and await)', UI.input(listOfNames(d.workflows).join(', '), { attrs: 'data-workflows', placeholder: 'quarterly-variance' }), 'By name or id, in the run\'s workspace; offered as workflow:<name> without publishing them as tools')
+            + '<div class="span2">' + UI.field('Input schema (JSON Schema, optional)', UI.textarea(e && e.inputSchema ? pretty(e.inputSchema) : '', { rows: 3, attrs: 'data-in', placeholder: '{ "type": "object", "properties": { "task": { "type": "string" } } }' }), 'What a delegating agent sends; without one it sends {task: string}') + UI.field('Output schema (JSON Schema, optional)', UI.textarea(e && e.outputSchema ? pretty(e.outputSchema) : '', { rows: 3, attrs: 'data-out' }), 'The answer is parsed as JSON and checked against it; a delegating agent gets the object') + '</div>'
             + UI.field('Steps', UI.input(String(b.steps), { type: 'number', attrs: 'data-b="steps"' })) + UI.field('Tokens', UI.input(String(b.tokens), { type: 'number', attrs: 'data-b="tokens"' })) + UI.field('Wall time, seconds', UI.input(String(b.wallSeconds), { type: 'number', attrs: 'data-b="wallSeconds"' })) + UI.field('Tool calls', UI.input(String(b.toolCalls), { type: 'number', attrs: 'data-b="toolCalls"' }))
             + UI.field('Memory write-back', UI.select([{ value: 'off', label: 'Off: read accepted memories only' }, { value: 'propose', label: 'Propose memories for a curator to accept' }], (d.memory && d.memory.write) || 'off', 'data-memwrite'), 'Runs propose through the memory checkpoint; nothing is kept until a knowledge curator accepts it')
             + UI.field('Proposals per run', UI.input(String((d.memory && d.memory.maxPerRun) || 3), { type: 'number', attrs: 'data-memmax min="1" max="20"' }), 'Progress and tool quirks only');
@@ -290,6 +337,8 @@
           title: e ? 'Edit draft ' + esc(e.name) + ' ' + esc(e.version) : 'Submit entry',
           cls: 'wide',
           body: '<datalist id="registry-tools">' + published.map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
+            + '<datalist id="registry-agents">' + uniq(list.filter((x) => x.kind === 'agent' && (!e || x.name !== e.name) && x.status !== 'retired').map((x) => x.name)).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
+            + '<datalist id="registry-skills">' + uniq(list.filter((x) => x.kind === 'skill' && (!e || x.name !== e.name) && x.status !== 'retired').map((x) => x.name)).map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>'
             + (e ? '' : UI.field('Kind', UI.select(kinds, kind, 'data-kind'), 'Tools come from promoted scripts and approved MCP servers; this form creates script-backed tools.'))
             + '<div class="formgrid" data-fields>' + fields(kind) + '</div>'
             + UI.notice(e ? 'Saving re-runs the automated checks.' : 'Submitting creates a <b>draft</b> and runs the automated checks. A tool admin other than you reviews it after you submit it. Nothing reaches a tenant before review.', 'info'),
@@ -310,8 +359,14 @@
               let body;
               try {
                 const common = { description: val('[data-desc]').trim() || null, label: val('[data-label]') };
-                if (k === 'skill') body = Object.assign(common, { definition: { instructions: val('[data-instructions]'), tools: listOf('[data-tools]') } });
-                else if (k === 'agent') { const bud = {}; m.querySelectorAll('[data-b]').forEach((x) => { bud[x.dataset.b] = Number(x.value); }); body = Object.assign(common, { definition: { profile: val('[data-profile]').trim(), systemPrompt: val('[data-prompt]') || null, tools: listOf('[data-tools]'), skills: listOf('[data-skills]'), budgets: bud, memory: { write: val('[data-memwrite]') || 'off', types: ['progress', 'quirk'], maxPerRun: Number(val('[data-memmax]')) || 3 } } }); }
+                if (k === 'skill') body = Object.assign(common, { definition: Object.assign({}, e ? e.definition || {} : {}, { instructions: val('[data-instructions]'), tools: listOf('[data-tools]'), skills: listOf('[data-subskills]') }) });
+                else if (k === 'agent') {
+                  const bud = {}; m.querySelectorAll('[data-b]').forEach((x) => { bud[x.dataset.b] = Number(x.value); });
+                  const inS = val('[data-in]').trim(); const outS = val('[data-out]').trim();
+                  body = Object.assign(common, { definition: Object.assign({}, e ? e.definition || {} : {}, { profile: val('[data-profile]').trim(), systemPrompt: val('[data-prompt]') || null, tools: listOf('[data-tools]'), skills: listOf('[data-skills]'), agents: listOf('[data-delegates]'), workflows: listOf('[data-workflows]'), budgets: bud, memory: { write: val('[data-memwrite]') || 'off', types: ['progress', 'quirk'], maxPerRun: Number(val('[data-memmax]')) || 3 } }) });
+                  if (inS) body.inputSchema = JSON.parse(inS); else if (!e) body.inputSchema = null;
+                  body.outputSchema = outS ? JSON.parse(outS) : null;
+                }
                 else body = Object.assign(common, { sideEffect: val('[data-side]'), inputSchema: JSON.parse(val('[data-in]') || '{}'), outputSchema: val('[data-out]').trim() ? JSON.parse(val('[data-out]')) : null, definition: { scriptId: val('[data-script]') } });
               } catch (err) { toast('A schema is not valid JSON: ' + esc(err.message), 'danger'); return; }
               App.closeOverlay();

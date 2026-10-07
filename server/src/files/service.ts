@@ -559,8 +559,31 @@ export class FileService {
       await s.blobs.delete(blobKey).catch(() => undefined);
       throw quotaExceeded(after.scope, after.used - bytes, after.max, bytes);
     }
-    await s.jobs.enqueue({ tenantId: file.tenant_id, type: 'file.scan', payload: { versionId: v.id }, createdBy: userId, maxAttempts: 3 });
+    await s.jobs.enqueue({ tenantId: file.tenant_id, type: 'file.scan', payload: { versionId: v.id }, createdBy: userId, maxAttempts: 3, dedupeKey: `file.scan:${v.id}` });
     return v;
+  }
+
+  /**
+   * 1.5.0 (B-3201): finishes a version's quarantine scan before answering (a WebDAV PUT, whose client reads the file
+   * back at once). The scan is still the `file.scan` job: it is claimed and run here when this instance can (database
+   * queue), otherwise the worker's result is awaited. Returns the version as it then is; still quarantined or scanning
+   * when the scan did not finish within `waitMs` (it carries on as a job, and the file stays unreadable until then).
+   */
+  async scanNow(versionId: string, waitMs = 30_000): Promise<VersionRow | null> {
+    const job = (await this.db('jobs').where({ dedupe_key: `file.scan:${versionId}` }).first('id', 'state')) as { id: string; state: string } | undefined;
+    if (job?.state === 'queued') await this.s().jobs.runNow(job.id);
+    const until = Date.now() + waitMs;
+    for (;;) {
+      const r = await this.db('file_versions').where({ id: versionId }).first();
+      if (!r) return null;
+      const v = versionFrom(r);
+      if (v.state === 'ready' || v.state === 'rejected' || Date.now() >= until) return v;
+      // Only a running scan is worth waiting for: one that failed waits for its retry, in the background.
+      const now = job ? ((await this.db('jobs').where({ id: job.id }).first('state')) as { state: string } | undefined) : undefined;
+      if (now && now.state !== 'running' && now.state !== 'queued') return v;
+      if (now?.state === 'queued' && job?.state === 'queued' && !(await this.db('jobs').where({ id: job.id }).andWhere('run_at', '<=', Date.now()).first('id'))) return v;
+      await new Promise((res) => setTimeout(res, 100));
+    }
   }
 
   private async versionByNumber(file: FileRow, number: number): Promise<VersionRow> {
@@ -596,6 +619,31 @@ export class FileService {
     if (version.state !== 'ready') throw conflict(`Version ${n} is ${version.state}.`);
     if (!clears(p.clearance, version.label)) throw forbidden(`Version ${n} is ${version.label}; your clearance is ${p.clearance}.`, { step: 'clearance' });
     return { file, version, stream: await this.plain(version), via };
+  }
+
+  /**
+   * 1.5.0 (B-5801): the state of one version of a file, for a caller that pins a version (a profile's avatar) and
+   * decides who may see it itself. `gone` when the file or version no longer exists or the file is in the trash
+   * (deleted by its owner or taken down by moderation).
+   */
+  async pinnedVersion(tenantId: string, fileId: string, number: number): Promise<{ state: VersionState | 'gone'; type: string | null; label: Label | null; size: number }> {
+    const file = await this.fileRow(tenantId, fileId);
+    if (!file || file.trashed_at != null) return { state: 'gone', type: null, label: null, size: 0 };
+    const r = await this.db('file_versions').where({ file_id: file.id, number }).first();
+    if (!r) return { state: 'gone', type: null, label: null, size: 0 };
+    const v = versionFrom(r);
+    return { state: v.state, type: v.type, label: v.label, size: v.size };
+  }
+
+  /** The content of a pinned version that passed its scan (B-5801), or null for anything else. */
+  async pinnedContent(tenantId: string, fileId: string, number: number): Promise<{ type: string | null; label: Label; size: number; stream: AsyncIterable<Buffer> } | null> {
+    const file = await this.fileRow(tenantId, fileId);
+    if (!file || file.trashed_at != null) return null;
+    const r = await this.db('file_versions').where({ file_id: file.id, number }).first();
+    if (!r) return null;
+    const v = versionFrom(r);
+    if (v.state !== 'ready') return null;
+    return { type: v.type, label: v.label, size: v.size, stream: await this.plain(v) };
   }
 
   // ---------- the quarantine scan ----------

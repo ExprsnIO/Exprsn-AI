@@ -41,13 +41,14 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `CLAMD_HOST`, `CLAMD_PORT` | —, `3310` | ClamAV daemon for attachment scanning; without it attachments get the type check and classifier only |
 | `MCP_ALLOWED_HOSTS` | — | MCP servers must resolve to internal addresses; this comma-separated list of hostnames (`*.example.com`) and CIDR networks allows others |
 | `IDENTITY_ALLOWED_HOSTS` | — | The same for LDAP directories and SQL user-store databases, checked before every connection |
-| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch); PostgreSQL and MySQL dial the checked address, OpenSearch never follows redirects |
+| `CONNECTIONS_ALLOWED_HOSTS` | — | The same for data connections (PostgreSQL, MySQL, OpenSearch, MongoDB); PostgreSQL, MySQL and MongoDB dial the checked address, OpenSearch never follows redirects |
 | `SECRET_REF_ENV` | — | Environment variables user stores and upstream IdPs may reference as `env:NAME`: names or `PREFIX*` patterns, comma-separated. Empty means none. The server's own settings (and their `_FILE` forms) are refused whatever this says |
 | `SECRET_REF_DIRS` | `/run/secrets,/run/credentials,/etc/exprsn-ai/credentials` | Directories `file:` references must resolve inside (symlinks followed); the server's own secret files are refused |
 | `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |
 | `SCRIPT_RUNNER` | `auto` | Script sandbox: `docker` or `podman` CLI (`auto` uses whichever answers), or `none` to refuse script runs. The server's user must be allowed to run containers (rootless Podman is recommended) |
 | `SCRIPT_IMAGE_PYTHON`, `SCRIPT_IMAGE_NODE` | `python:3.13-slim`, `node:22-slim` | Images for Python and JavaScript scripts; pin digests and mirror them internally, as nothing is pulled from outside at run time in an air-gapped install |
 | `WORKFLOW_HTTP_HOSTS`, `WORKFLOW_HTTP_ALLOW_LOOPBACK` | —, `false` | Workflow HTTP steps call private addresses only; this comma-separated host list narrows them further |
+| `CHAIN_MAX_DEPTH`, `WORKFLOW_MAX_DEPTH`, `AGENT_MAX_DEPTH`, `CHAIN_MAX_TOKENS`, `CHAIN_MAX_STEPS`, `CHAIN_MAX_WALL_SECONDS`, `CHAIN_MAX_GPU_SECONDS` | `8`, `3`, `3`, `200000`, `400`, `7200`, `3600` | 1.5.0 (B-4101): the chain context. A chain of invocations (agent runs, workflow runs, tool calls, skill loads…) is at most `CHAIN_MAX_DEPTH` deep across kinds, with at most `WORKFLOW_MAX_DEPTH` nested workflow runs and `AGENT_MAX_DEPTH` nested agent runs; a root without budgets of its own (a chat turn, a plugin action, an app trigger) gets the `CHAIN_MAX_*` budgets (GPU seconds are the cost meter). Every instance must use the same values |
 | `MEDIA_FFMPEG`, `MEDIA_FFPROBE`, `MEDIA_ENCODER` | `ffmpeg`, `ffprobe`, `auto` | Media worker binaries; `auto` uses NVENC when the GPU offers it, else the CPU (`nvenc`, `cpu` force one) |
 | `MEDIA_MAX_BYTES`, `MEDIA_MAX_DURATION_S`, `MEDIA_MAX_WIDTH`, `MEDIA_MAX_HEIGHT`, `MEDIA_MAX_STREAMS` | 512 MiB, `7200`, `1920`, `1080`, `4` | Caps checked by ffprobe before any processing |
 | `MEDIA_WHISPER_BIN`, `MEDIA_WHISPER_MODEL`, `MEDIA_WORK_DIR` | — | whisper.cpp for transcripts (without it the transcribe preset is unavailable); scratch directory for media jobs |
@@ -91,6 +92,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `ATPROTO_PUBLIC_URL`, `ATPROTO_PLC_URL`, `ATPROTO_PUBLIC_RATE_PER_MINUTE`, `ATPROTO_SUBSCRIBERS_MAX`, `ATPROTO_LABEL_PULL_MINUTES` | `PUBLIC_URL`, `https://plc.directory`, `600`, `200`, `5` | 1.4.0, Sprint 25: AT-Protocol trust. Service DIDs' label and rotation keys are made and used only in the signer (secp256k1 and P-256) or OpenBao transit (P-256 only; transit has no secp256k1). The platform's `did:web` is the host of `ATPROTO_PUBLIC_URL`, and tenants without a host of their own get `did:web:<that host>:atproto:<slug>`: serve `/.well-known/did.json`, `/.well-known/atproto-did`, `/atproto/` and `/xrpc/` from that host over HTTPS, and pass WebSocket upgrades on `/xrpc/com.atproto.label.subscribeLabels` and `/atproto/*/xrpc/…` through the proxy. A tenant with its own host needs its DNS and TLS pointing at the same service (the `Host` header picks the identity). `did:plc` operations are submitted to `ATPROTO_PLC_URL` and external labelers' DIDs resolved through the service URL checks (`SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY`: with internal-only on, name `plc.directory` and the labelers' hosts there). The public routes allow `ATPROTO_PUBLIC_RATE_PER_MINUTE` requests per address, each instance at most `ATPROTO_SUBSCRIBERS_MAX` label streams; trusted labelers are read every `ATPROTO_LABEL_PULL_MINUTES` |
 | `MODERATION_SWEEP_SECONDS`, `MODERATION_EXTERNAL_PROVIDERS`, `MODERATION_PROVIDER_TIMEOUT_MS` | `60`, `false`, `5000` | 1.4.0, Sprint 26: moderation. The sweep escalates flags in routed review queues past their SLA and ends suspensions and bans whose time is up (`0` turns the sweep off; enforcement still compares the end time). External moderation providers (`POST /api/moderation/providers`) send content off the site, so they are refused unless `MODERATION_EXTERNAL_PROVIDERS` is on, and then only in a zone whose egress allow-list reaches a public range or the external zone (`ZONES_AIR_GAPPED=false`); their calls go through the service URL checks (`SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY`: with internal-only on, name the provider's host there) and wait at most `MODERATION_PROVIDER_TIMEOUT_MS` |
 | `FIREHOSE_TICK_MS`, `FIREHOSE_CHECKPOINT_MS`, `FIREHOSE_QUEUE_MAX`, `FIREHOSE_BACKOFF_MAX_MS`, `FIREHOSE_IDLE_MS`, `FIREHOSE_MAX_PER_TENANT` | `10000`, `5000`, `1000`, `60000`, `90000`, `10` | 1.4.0, Sprint 27: AT-Protocol firehose ingest (`/api/atproto/firehose`). Consumers run on worker instances (`WORKERS_ENABLED`), each subscription on one instance at a time through a lease renewed every `FIREHOSE_TICK_MS` (it lasts three ticks, so after a crash another instance takes over within about that). The cursor is stored every `FIREHOSE_CHECKPOINT_MS` and at shutdown; a consumer pauses its socket when `FIREHOSE_QUEUE_MAX` messages wait, reconnects with backoff up to `FIREHOSE_BACKOFF_MAX_MS`, and after `FIREHOSE_IDLE_MS` without a message. Endpoints go through the service URL checks (`SERVICE_ALLOWED_HOSTS`, `SERVICE_INTERNAL_ONLY`: with internal-only on, name the Jetstream or relay host there, for example `jetstream2.us-east.bsky.network`). Each checked post is one guardrail check and, on a verdict, a flag and signed labels: use a sample rate and allow-lists rather than the whole network |
+| `FIREHOSE_REJECT_AUDITS`, `FEEDS_MAX_PER_TENANT`, `FEED_ITEMS_MAX`, `FEED_PRUNE_MINUTES` | `20`, `20`, `50000`, `15` | 1.5.0, Sprint 31: relay commits that fail verification are audited at most `FIREHOSE_REJECT_AUDITS` times a minute per subscription (the rest are counted). Feed generators (`/api/atproto/feeds`) per tenant, posts kept per feed, and how often feed indexes are pruned to their retention (0: never). Repo and AppView DIDs are resolved through the service URL checks: with `SERVICE_INTERNAL_ONLY` on, allow the PLC directory (`ATPROTO_PLC_URL`) and the did:web hosts you expect |
+| `PDS_PUBLIC_URL`, `PDS_HANDLE_DOMAIN`, `PDS_ZONE`, `PDS_RELAYS`, `PDS_CRAWL_MINUTES`, `PDS_BACKFILL_HOURS`, `PDS_SUBSCRIBERS_MAX`, `PDS_BLOB_MAX_BYTES`, `PDS_BLOB_TYPES`, `PDS_ACCESS_MINUTES`, `PDS_REFRESH_DAYS`, `PDS_RATE_PER_MINUTE`, `PDS_WRITES_PER_HOUR`, `PDS_IMPORT_MAX_BYTES` | `ATPROTO_PUBLIC_URL` then `PUBLIC_URL`, its host name, `edge`, none, `20`, `72`, `200`, `52428800`, `image/png,image/jpeg,image/webp,image/gif,video/mp4`, `60`, `60`, `3000`, `5000`, `67108864` | 1.5.0, Sprint 31: the AT-Protocol PDS (`docs/pds.md`). Off until a platform admin enables it per tenant, which needs the signer or OpenBao for account keys and a `PDS_ZONE` with egress (not with `ZONES_AIR_GAPPED`). Serve `/xrpc/` and `/.well-known/atproto-did` of `PDS_PUBLIC_URL` over HTTPS and pass WebSocket upgrades on `/xrpc/com.atproto.sync.subscribeRepos` through the proxy; point a wildcard DNS record `*.<tenant>.<PDS_HANDLE_DOMAIN>` at the same service for each hosting tenant (handles resolve over HTTPS). `did:plc` operations go to `ATPROTO_PLC_URL`, and `requestCrawl` to each of `PDS_RELAYS`, through the service URL checks (with `SERVICE_INTERNAL_ONLY`, name `plc.directory` and the relays in `SERVICE_ALLOWED_HOSTS`). Blobs go through ClamAV when `CLAMD_HOST` is set (its `StreamMaxLength` must allow `PDS_BLOB_MAX_BYTES`). The interop run against the reference AppView is `interop/run.ts` |
 | `GROUP_INVITE_DAYS`, `GROUP_REQUEST_DAYS`, `CALENDAR_FEED_PER_MINUTE`, `CALENDAR_FEED_MAX_LABEL` | `7`, `14`, `60`, `internal` | 1.4.0, Sprint 27c: groups and events. Group invitations expire after `GROUP_INVITE_DAYS` and join requests after `GROUP_REQUEST_DAYS`. Signed calendar feeds (`/calendar/feeds/…`, public, outside `/api`) are rate-limited per client address (`CALENDAR_FEED_PER_MINUTE`) and show events labelled above `CALENDAR_FEED_MAX_LABEL` only as busy time, because calendar programs copy feeds to other servers. Feed signatures use a key derived from `SESSION_SECRET`: rotating it invalidates every feed URL (owners create new ones) |
 | `CHANNELS_SESSIONS_PER_HOUR`, `CHANNELS_SESSION_HOURS`, `CHANNELS_REPLY_TIMEOUT_MS`, `CHANNELS_IMAP_POLL_SECONDS`, `CHANNELS_IMAP_BATCH`, `CHANNELS_WEBHOOK_PER_MINUTE`, `CHANNELS_WEBHOOK_TOLERANCE_SECONDS`, `CHANNELS_RETENTION_SWEEP_MINUTES` | `30`, `24`, `60000`, `60`, `50`, `120`, `300`, `60` | 1.4.0, Sprint 28a: customer-service channels. New customer sessions are limited per client address across all channels (`CHANNELS_SESSIONS_PER_HOUR`; each channel also has its own limit) and their tokens last `CHANNELS_SESSION_HOURS` (signed with a key derived from `SESSION_SECRET`: rotating it ends every customer session and breaks the threading of email customers seen before). An answer waits at most `CHANNELS_REPLY_TIMEOUT_MS` for the model. Email channels' IMAP mailboxes are polled every `CHANNELS_IMAP_POLL_SECONDS` (`0` turns polling off; webhooks still work), `CHANNELS_IMAP_BATCH` messages a poll; IMAP and SMTP hosts must pass `SERVICE_ALLOWED_HOSTS`/`SERVICE_INTERNAL_ONLY` and the tenant's allowed hosts. Mail webhooks are limited per channel and refuse signatures older than the tolerance. Retention purges run every `CHANNELS_RETENTION_SWEEP_MINUTES`. Channels without SMTP settings send through `SMTP_URL` |
 | `MFA_EMAIL_CODE_MINUTES`, `MFA_EMAIL_SENDS_PER_HOUR` | `10`, `5` | 1.4.0, Sprint 28a (B-1806): email one-time codes as a second factor (needs `SMTP_URL`). A code is valid for the minutes given and works once; a user is sent at most this many codes an hour. Wrong codes count in the same lockout as TOTP codes (`LOCKOUT_MAX_ATTEMPTS`) |
@@ -135,6 +138,9 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `FILES_MAX_BYTES`, `FILES_TRASH_DAYS`, `FILES_PURGE_MINUTES`, `FILES_PREVIEW_MAX_BYTES`, `FILES_PREVIEW_PX`, `FILES_PDFTOPPM`, `FILES_WORK_DIR` | 1 GiB, `30`, `60`, 50 MiB, `512`, `pdftoppm`, system temp | 1.4.0, Sprint 26d: the file store. One upload may be `FILES_MAX_BYTES` (streamed into the blob store, never held in memory); with `CLAMD_HOST` set, raise clamd's `StreamMaxLength` to at least this, or larger files fail their scan. Trashed files are purged `FILES_TRASH_DAYS` after they went to the trash by the `files.purge` job every `FILES_PURGE_MINUTES` (0 turns it off). Previews of images and PDFs up to `FILES_PREVIEW_MAX_BYTES` are drawn at most `FILES_PREVIEW_PX` wide with `MEDIA_FFMPEG` (images) and poppler's `pdftoppm` (`FILES_PDFTOPPM`, PDFs), in `FILES_WORK_DIR`; without the tool a preview is `unavailable`. Storage quotas are set per tenant (system admins) and per workspace (tenant admins) through the API |
 | `EMAIL_VERIFY_HOURS`, `INVITATION_DAYS`, `SIGNUP_PER_HOUR`, `USER_IMPORT_MAX_BYTES`, `USER_IMPORT_MAX_ROWS` | `48`, `7`, `10`, `2097152`, `5000` | 1.4.0 (B-1801 to B-1805): lifetime of email verification links and of invitations by workspace admins; self-registrations per client address an hour (sign-up itself is closed until a tenant admin opens it with `PUT /api/admin/identity-policy/signup`); the largest CSV and most rows a user import (`POST /api/admin/user-imports`, `exprsn-ai users import`) accepts. Verification and invitations need `SMTP_URL`. GitHub user stores reach GitHub (or GitHub Enterprise Server) through the service URL checks: with `SERVICE_INTERNAL_ONLY` on, name `github.com` and `api.github.com` in `SERVICE_ALLOWED_HOSTS` |
 | `APPS_PUBLIC_FORM_PER_MINUTE`, `APPS_IMPORT_MAX_BYTES`, `APPS_IMPORT_MAX_ROWS`, `APPS_EXPORT_MAX_ROWS`, `APPS_BULK_MAX`, `APPS_TRIGGER_MAX_DEPTH`, `APPS_SCHEDULE_TICK_SECONDS` | `10`, `200000`, `10000`, `100000`, `500`, `3`, `60` | 1.4.0, Sprint 27 (B-2201 to B-2208): low-code apps. Public form submissions per client address a minute (each form also has its own limit, `ratePerMinute`); the largest CSV import (it travels in the JSON body, so at most 250 kB) and its rows; the most records one CSV export writes; operations in one bulk write; how deep a chain of record triggers may go; how often schedule triggers are checked (0 turns them off). AI fields and drafts use the tenant's published profiles through the gateway; app bundles are signed with the KMS key `<OPENBAO_KEY_PREFIX>app-bundles` |
+| `WORKFLOW_EVENT_RATE_PER_MINUTE`, `WORKFLOW_EVENT_MAX_DEPTH`, `WORKFLOW_SCHEDULE_TICK_SECONDS` | `60`, `3`, `60` | 1.5.0, Sprint 32b (B-3903): workflows started by their own triggers. Firings a minute per event trigger (in the shared counter store, so one limit across instances with `REDIS_URL`; events past it are dropped and audited once a minute as `workflow.trigger.throttled`); the longest chain of workflows an event may come from before it is dropped; how often schedule triggers are checked (0 turns them off). Workflow bundles are signed with the KMS key `<OPENBAO_KEY_PREFIX>workflow-bundles` |
+| `PLATFORM_SETTINGS_OVERRIDES`, `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS` | `true`, the host name, `30` | 1.6.0 (B-4205): whether the Configuration screen may override settings from the database (each override needs a second platform admin; hot settings apply at once, restart ones at the next start); the name each instance reports what it reads under, and how often it reports. Give every instance its own `INSTANCE_NAME` when several share a host name (containers) |
+| `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`, `BLOBS_DRY_RUN_MINUTES` | `1440`, `24`, `60` | 1.6.0 (B-4204): how often the blob integrity check `ops.blobs.verify` runs (0: only from Storage); how old an unreferenced object must be before it counts as an orphan; how long a dry run of orphan deletion stays valid |
 
 Generate secrets with `openssl rand -hex 32` (session) and `openssl rand -base64 32` (data key).
 
@@ -182,6 +188,72 @@ credentials, and installs a hardened unit (`ProtectSystem=strict`, no capabiliti
 
 Put nginx or HAProxy in front for TLS and set `TRUST_PROXY` to its address. Forward WebSocket upgrades for
 `/socket.io/`. Preparing Ollama GPU nodes: [deploy/baremetal/ollama-node.md](../deploy/baremetal/ollama-node.md).
+
+### Apple silicon nodes: `fm serve`, MLX and llama.cpp beside Ollama (1.6.0)
+
+Since 1.6.0 (B-43) an instance can be a Chat Completions server instead of Ollama (`kind: openai`). On a Mac with
+macOS 27 that is Apple's on-device Foundation Model through `fm serve`; `mlx_lm.server` and llama.cpp's
+`llama-server` work the same way. They run beside Ollama on the node and join a pool whose accelerator is `metal`.
+They hold their own models: the gateway does not pull, load or unload on them (those requests are skipped and
+recorded), and models are registered from what the server lists, with no digest.
+
+1. Check the model: `fm available` should print "System model available" (Apple Intelligence enabled for the user
+   that runs it). `fm respond 'Say ready'` answers on the device. The Private Cloud Compute model (`pcc`) is listed by
+   `fm serve` but refused outside Apple's own clients, and is never offered for registration.
+2. Run `fm serve` on a Unix socket under launchd, as the user that runs Exprsn AI. A LaunchAgent in that user's
+   session (`~/Library/LaunchAgents/io.exprsn.fm-serve.plist`) is what has been tried; a LaunchDaemon without a login
+   session may not reach the model:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0"><dict>
+     <key>Label</key><string>io.exprsn.fm-serve</string>
+     <key>ProgramArguments</key><array>
+       <string>/usr/bin/fm</string><string>serve</string><string>--socket</string><string>/Users/exprsn/run/fm.sock</string>
+     </array>
+     <key>RunAtLoad</key><true/>
+     <key>KeepAlive</key><true/>
+     <key>StandardErrorPath</key><string>/Users/exprsn/Library/Logs/fm-serve.log</string>
+   </dict></plist>
+   ```
+
+   ```sh
+   mkdir -p ~/run && chmod 700 ~/run
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.exprsn.fm-serve.plist
+   curl --unix-socket ~/run/fm.sock http://localhost/health    # {"status":"fm serve is running","models":[…]}
+   ```
+
+   Keep the socket path under 104 characters (the macOS limit) and in a directory only the service user can open:
+   `fm serve` has no authentication of its own, so the socket's permissions are the access control. A socket works
+   only when the Exprsn AI server runs on the same Mac. For a server elsewhere, run `fm serve --host 127.0.0.1 --port
+   1976` and publish it through a reverse proxy that terminates TLS (with a client certificate, which the instance's
+   mutual TLS settings present) or checks a bearer token; never bind `fm serve` to `0.0.0.0`.
+3. In the console, Admin → Pools: add a pool with accelerator `metal` (for example `apple-silicon`, in the
+   `inference` zone, with the label ceiling the data needs). Then Admin → Models → Model servers → Register model
+   server: the pool, a name (`mac-studio-1-fm`), kind Chat Completions server, transport Unix socket, the socket path.
+   The instance shows healthy with version `fm serve`, and a probe records whether tool calls and JSON schema output
+   work. By API: `POST /api/admin/pools/<pool id>/instances {"name": "mac-studio-1-fm", "kind": "openai",
+   "socketPath": "/Users/exprsn/run/fm.sock", "deploy": "baremetal"}`.
+4. Admin → Models → Request import → Held by a model server: pick `system`, record the licence (Apple's terms for the
+   Foundation Models framework), choose the label. It is registered as a draft, placed warm on the pool, with nothing
+   pulled. Run the evaluation (it runs on that instance), and have a second administrator approve it. A profile on
+   that model and pool then answers in chat, streams, calls read-only tools and is metered like an Ollama model.
+5. Embeddings: `fm serve` has no `/v1/embeddings`. Keep the embedding and guard models (`qwen3-embedding:0.6b`, the
+   guard profile's model) on an Ollama pool in the same zone; knowledge, memory and the guard use those whatever
+   model the chat profile runs on.
+
+Alternatives on the same node, each registered the same way with a URL instead of a socket:
+
+- MLX: `mlx_lm.server --model mlx-community/Qwen3-4B-4bit --host 127.0.0.1 --port 8080`. It has no `/health`; the
+  gateway uses `/v1/models` for health. Its model ids (`mlx-community/Qwen3-4B-4bit`) are the catalogue names.
+- llama.cpp: `llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf --alias qwen2.5-7b-instruct --jinja --host 127.0.0.1
+  --port 8081 --api-key "$TOKEN"` (`--jinja` for tool calls, `--embeddings` on a separate instance to serve an
+  embedding model). Give the token in the form; it is stored in your tenant's vault (you need `secrets:write` and
+  `secrets:read`) and never shown again. The context length comes from its `/props`.
+
+Ollama-only settings (`num_ctx`, `keep_alive`, thinking) are not sent to these servers; the instance's events record
+which were left out. Upgrades of these servers are the operator's: the pool's rolling Ollama upgrade skips them.
 
 ## Kubernetes (Helm)
 
