@@ -4,14 +4,23 @@ The work after 1.5.0, groomed by the owner on 2026-10-05 with `design/grooming/g
 `design/grooming/grooming.json`). 1.5.0 gives the merged exprsn-platform features their screens; 1.6.0 finishes the
 platform's administration surface (the five admin screens designed in `design/platform-admin/README.md`), fills the
 remaining exprsn-platform gaps that Exprsn-AI wants (groups depth, tenant templates, blob deduplication, vault
-extras, capability tokens, quote posts) and closes two 1.4.0 known gaps. Rules as before: everything follows
+extras, quote posts; capability tokens were dropped on 2026-10-07), closes two 1.4.0 known gaps, adds model servers
+beyond Ollama and image classification in Knowledge, and closes the industry gaps found by the 2026-10-05 research
+(prompt-injection defence, red-teaming, MCP server and authorization, SCIM, an AI inventory and seven P2 epics), the
+low-code gaps from the same day (row and field permissions, app environments and promotion, data model generation, AI
+field upgrades, outside database sync, entity APIs and app embedding) and the first exprsn-platform port item, an HTTP
+tool kind (the rest of the port decided on 2026-10-06 is in `Backlog-1.7.0.md`). Rules as before: everything follows
 `docs/PLAN.md` and `CLAUDE.md`; screens follow `design/prototype/CONTRACT.md` (prototype board first, then live when
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 32 items, 158 points (1 point ≈ half a day for one engineer, tests included): P1 116, P2 42. At about 78
-points a sprint that is under two sprints of work spread over three, leaving room for what 1.5.0 carries over (Sprint
-31 was accepted at 93 points) and for new requests.
+**Size.** 74 items, 363 points (1 point ≈ half a day for one engineer, tests included): P1 245, P2 118. Reconciled on
+2026-10-07 from main (32 items, 158 points in Sprints 35 to 37) and `docs/backlog-1.6-gaps`: the industry gaps (B-69
+to B-80, 23 items, 121 points), the low-code gaps (B-81 to B-85, 11 items, 59 points) and their second pass (B-86,
+B-87 and two points on B-7101, 5 items, 23 points), groomed on 2026-10-05, now fill Sprints 37 to 39; B-50 capability
+tokens (8 points) was dropped and B-89, the HTTP tool kind from the platform port (10 points), added. Sprint 36 keeps
+its contents. Sprints 35 to 39 are at 76, 61, 73, 76 and 77 points, at or under the 78-point pace, and the release
+(B-5101) moves to Sprint 39.
 
 **Builds on.** The B-4201 boards (Overview, Jobs and queues, Storage, Configuration, Social and messaging) and the
 sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `JobQueue`, `Scheduler` and tenant cache
@@ -23,7 +32,9 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | Next |
-| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release | B-4901, B-5001, B-4801, B-4802, B-5101 | 21 | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | Planned |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Planned |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Planned |
 
 ### Progress
 
@@ -46,7 +57,14 @@ edits Ollama settings only, and no server exposes a model file hash.
 The order follows the dependencies: the Storage screen (B-4204) before blob deduplication shows its savings (B-4601);
 the Social and messaging screen (B-4206) before group categories are managed from it (B-4405); vault anomaly detection
 (B-4803) before secret sharing widens who reads a secret (B-4801); the gateway interface (B-4301) before any `openai`
-instance (B-4302), and both before the Models screen changes (B-4307).
+instance (B-4302), and both before the Models screen changes (B-4307); injection trust marking and its corpus (B-6901,
+B-6903) before the red-team suites reuse the corpus (B-7001), and in the same sprint as the HTTP tool kind (B-89),
+whose results it marks; MCP server authorization (B-7102) in the same sprint as the server (B-7101); chaining (B-41,
+1.5.0) before agent handoffs (B-7801); record queries (B-3601, 1.5.0) before policies add row conditions to them
+(B-8101); policies (B-81) before packages carry them (B-8201) and before entity APIs enforce them (B-8601). The gaps
+branch also put capability tokens (B-5001) before agent identities (B-7701), scoped entity API tokens (B-8601) and
+embed sessions (B-8702); with B-5001 dropped on 2026-10-07 those three use scoped API keys and their own signed
+sessions instead, and no longer wait on it.
 
 ---
 
@@ -161,17 +179,280 @@ guardrail and evaluation rules as everything else.
 | --- | --- | --- | --- |
 | B-4901 | Quote a post with a comment, and public, workspace or unlisted visibility per post alongside its label | An unlisted post is reachable by link and absent from every feed | 5 |
 
-### B-50 Capability tokens (8 points)
+### B-50 Capability tokens (dropped; was 8 points)
 
 | ID | Item | Done when | Pts |
 | --- | --- | --- | --- |
-| B-5001 | One mechanism for exprsn-platform's CA tokens: a token bound to a URL, DID or content id with a permission set and a time or use expiry, issued and revoked from Settings and Identity; share links and scoped API keys become cases of it | A token with max uses 3 is refused on its fourth use and the refusal is audited | 8 |
+| B-5001 | **Dropped by the owner on 2026-10-07 (port decision D3: exprsn-platform's CA-signed bearer tokens stay out)**: one mechanism for exprsn-platform's CA tokens: a token bound to a URL, DID or content id with a permission set and a time or use expiry, issued and revoked from Settings and Identity; share links and scoped API keys become cases of it | A token with max uses 3 is refused on its fourth use and the refusal is audited | — |
+
+## Industry gaps (research 2026-10-05)
+
+From a deep-research gap analysis on 2026-10-05 of the merged product against self-hosted AI platforms (Open WebUI,
+LibreChat, Dify), enterprise AI platforms (ChatGPT Enterprise, Microsoft Foundry, Google Vertex AI Agent Builder and
+Security Command Center) and standards (NIST AI 600-1, the 2026-07-28 MCP specification). Each claim about a peer
+was verified against its sources by three votes. Where Exprsn-AI already meets or beats the peer, the epic says so,
+and the work is the missing part only. Peers and the standard named in each epic set the bar.
+
+### P1
+
+### B-69 Prompt-injection defence for untrusted content (16 points)
+
+The 11 guardrail checkpoints screen prompts and answers, but there is no named, measurable control for instructions
+hidden in retrieved chunks, crawled pages, tool results and MCP responses (indirect injection; NIST AI 600-1).
+Peers: Microsoft Prompt Shields (user-prompt and document attacks, at input and at tool response, block or annotate),
+Spotlighting, Google Model Armor (screens MCP `tools/call`).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-6901 | Trust marking: every RAG chunk, crawled page, tool result and MCP response is wrapped as untrusted content (delimiters and a datamarking transform) before it reaches the model, per profile, on by default | A retrieved chunk saying "ignore previous instructions" reaches the model marked as data, and the profile's answer does not follow it on the corpus in B-6903 | 5 |
+| B-6902 | An `untrusted-content` guardrail checkpoint with an injection classifier (a guard model or trained classifier) in block or annotate mode; detections are counted per source, audited `guardrail.injection.detected` and shown on the Guardrails screen | A poisoned web-crawl document is blocked in block mode and annotated in annotate mode, and both appear in the counts | 8 |
+| B-6903 | An injection test corpus (direct and indirect, in documents, tool and MCP results) run in CI against the default profiles, with a detection-rate floor | CI fails when the detection rate on the corpus drops below the floor | 3 |
+
+### B-70 Red-team harness (11 points)
+
+Profile evaluations and their publish gate exist, and flags turn into eval cases. There is no adversarial suite
+(NIST AI 600-1 MS-2.7-007: prompt injection, adversarial prompts, data poisoning, membership inference, model
+extraction).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7001 | Red-team suites as an eval kind: attack sets (B-6903's corpus, jailbreaks, data exfiltration through tools, system-prompt extraction) run against profiles, agents and workflows, and the publish gate can require a passing red-team run | A profile that leaks its system prompt in the suite cannot be published while the gate is on | 8 |
+| B-7002 | Red-team results on the Evaluations screen with each failed attack linked to a flag, and tenant-added attack cases | A failed attack opens as a flag that can be turned into an eval case | 3 |
+
+### B-71 MCP server and MCP authorization (23 points)
+
+Exprsn-AI is an MCP client only, and that client has no OAuth, so it cannot reach most authenticated remote MCP
+servers for each user. Peers: Dify publishes apps and workflows as MCP servers (authenticated only by a secret in
+the URL); LibreChat's MCP client does OAuth 2.0 with PKCE, refresh, dynamic client registration and per-user
+connections. The 2026-07-28 MCP specification makes a protected server an OAuth 2.1 resource server (RFC 9728
+metadata, RFC 8707 audience). Building on the existing OIDC provider, DPoP and PAR beats Dify's design.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7101 | MCP server: publish workflows, agents, knowledge bases, registry tools and app records (list, query, count, aggregate, create, update, delete, as NocoDB's free edition does) as an MCP server over Streamable HTTP, one endpoint per workspace, tools in groups a client selects (as Supabase does), tools filtered by the caller's permissions and labels, every call through the guardrails and audited | Claude Desktop lists a published workflow as a tool and running it writes an audit event | 10 |
+| B-7102 | MCP server authorization: the endpoint is an OAuth 2.1 resource server of the tenant's own issuer, with RFC 9728 protected resource metadata, `WWW-Authenticate` `resource_metadata`, RFC 8707 audience checks and DPoP where the client offers it | A token issued for another resource is refused with 401 and the metadata URL in the header | 5 |
+| B-7103 | MCP client OAuth: Authorization Code with PKCE per user, dynamic client registration, metadata discovery with a manual fallback, refresh, tokens sealed with the tenant key, a per-user connect and disconnect in Settings | Two users of one MCP server act under their own accounts, and disconnecting revokes the stored token | 8 |
+
+### B-72 SCIM 2.0 provisioning (11 points)
+
+Identity otherwise beats the self-hosted peers (OIDC provider, SAML IdP, Kerberos, DPoP, passkeys). Without SCIM,
+deprovisioning depends on LDAP or manual work, a SOC 2 CC6 weakness. Peers: Open WebUI ships SCIM 2.0 Users and
+Groups; ChatGPT Enterprise provisions from Okta, Entra ID, Google Workspace, Ping and OneLogin.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7201 | SCIM 2.0 `Users` and `Groups` per tenant (RFC 7643/7644: create, replace, patch, delete, filter, pagination) as a user store in the tenant's chain, bearer tokens under `identity:manage`; deactivation ends sessions, refresh tokens and API keys | Deactivating a user through SCIM ends their open console session within one request | 8 |
+| B-7202 | Conformance against the Entra ID and Okta SCIM validators recorded in `docs/identity.md`; group membership maps to roles | The Entra ID validator passes with no failure | 3 |
+
+### B-73 AI system inventory (8 points)
+
+The model catalogue with dual-control approval is the core of an AI inventory. NIST AI 600-1 GV-1.6 asks for every
+generative AI system with provenance, known issues, human-oversight roles and model lineage; Google Security
+Command Center AI Protection inventories agents and MCP servers. It also feeds ISO/IEC 42001 and EU AI Act deployer
+records.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7301 | One inventory of models, profiles, agents, workflows, tools, MCP servers and datasets, each with an owner, an oversight role, data provenance, model lineage and known issues (linked flags and failed evaluations), on a new Inventory tab of the catalogue | An agent with no owner is listed as incomplete and cannot be published | 5 |
+| B-7302 | Export the inventory as a register (CSV and JSON) with a tenant impact-assessment field per system, for ISO/IEC 42001 and EU AI Act deployer records | The export lists every published agent with its model lineage | 3 |
+
+### P2
+
+### B-74 Usage and cost analytics (10 points)
+
+Open WebUI's Analytics page shows messages, tokens, users and chats by time range, group and model, but no costs.
+Exprsn-AI already meters every chat, so a cost view goes beyond it.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7401 | An Analytics screen: messages, tokens, users and runs by tenant, workspace, group, model, profile and user over a time range | Totals for a day match the metering records for that day | 5 |
+| B-7402 | A price per model and instance (energy or a set rate for local models) and a chargeback export per workspace | A workspace's monthly export sums to the screen's total | 3 |
+| B-7403 | OpenTelemetry GenAI semantic-convention attributes (`gen_ai.*`) on model spans so usage is portable to Grafana and other backends | A model span carries `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` | 2 |
+
+### B-75 Compliance log export (5 points)
+
+The per-tenant hash-chained audit with signed checkpoints is stronger on integrity than OpenAI's Compliance Logs
+Platform, but there is no documented export or SIEM feed. The console log view stays deferred to 1.7.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7501 | Per-tenant audit export as time-windowed JSONL files with their chain proofs, and streaming to a SIEM (syslog over TLS or an HTTPS endpoint), set up in Settings under dual control | An exported window verifies against its signed checkpoint offline | 5 |
+
+### B-76 DLP, legal hold and eDiscovery for AI content (13 points)
+
+PII scrubbing on datasets, output screening and clearance labels cover part of this. ChatGPT Enterprise's
+Compliance API feeds Purview, Netskope, Zscaler, Relativity and others with conversations, files and memories for
+legal hold, retention and PII monitoring. B-4206 adds legal-hold export for messaging only.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7601 | Classify answers, agent outputs and uploads by detector (PII, secrets, tenant patterns) and raise their label, with a DLP rule to hold or redact by label | An answer containing a card number is labelled and redacted under the rule | 5 |
+| B-7602 | Legal hold on users and workspaces that suspends retention purges for conversations, files, memories and runs, under dual control | Conversations of a held user survive their retention period | 3 |
+| B-7603 | A compliance export API (conversations, files, memories, agent runs, users) with a scoped token, for eDiscovery tools | An export by user and date range returns every conversation in it, and the export is audited | 5 |
+
+### B-77 Agent identities (8 points)
+
+Agents and scheduled agents act under user or service credentials. Vertex AI Agent Builder makes each agent its own
+IAM principal (preview). Workflows 2 agent steps and chaining (B-39, B-41) make this pressing.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7701 | Each agent is a principal with its own roles, label ceiling and scoped API keys (capability tokens, B-50, were dropped on 2026-10-07), acting on behalf of a user only within both grants; audit events name the agent and the user | An agent granted read-only on a knowledge base cannot write to it even for an admin user | 8 |
+
+### B-78 Agent handoffs (5 points)
+
+LibreChat 0.8.1 has agent handoffs (beta). Chaining (B-41) is planned for 1.5.0; handoff builds on it. No peer's
+A2A support was verified, so cross-system A2A stays unscheduled.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7801 | An agent hands the conversation to a specialist agent listed in its configuration, with the context it chooses, and the reader sees which agent answers | A triage agent hands a billing question to the billing agent and the answer is attributed to it | 5 |
+
+### B-79 Provenance for generated images (5 points)
+
+NIST AI 600-1 makes content provenance a primary consideration (GV-4.3, GV-1.6). The tenant CA can sign it.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-7901 | Generated images carry a C2PA manifest (model, profile, time, tenant) signed by a tenant CA certificate, kept through the file store | A C2PA verifier reads a generated image's manifest and validates its signature | 5 |
+
+### B-80 Versioned artifacts in chat (8 points)
+
+LibreChat's artifacts have version control and show in shared conversations. Exprsn-AI has branches and compare.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8001 | Code, documents and HTML that an answer produces open in a side panel with versions across turns, rendered sandboxed, visible to share readers | Editing an artifact in a later turn adds a version and the earlier one stays viewable | 8 |
+
+## Low-code gaps (research 2026-10-05)
+
+From a second deep-research pass on 2026-10-05 of the low-code apps against Power Platform and Dataverse, Retool,
+Baserow and Directus. The baseline already leads Baserow on workflow automation (approval, guardrail and
+sub-workflow steps) and Retool on self-hosted AI (local models instead of customer-managed keys), and meets the SSO
+bar. None of the workbench mockups (provisional B-63 to B-68) closes the two P1 gaps below.
+
+### P1
+
+### B-81 Row and field permissions (16 points)
+
+Clearance labels and org or group scope already filter some rows on the server. Peers set the bar higher: Dataverse
+gives privileges per table with a scope, and column security with masking. Directus 11 has reusable policies with
+per-field and conditional rules. Baserow has field permissions and restricted views (2.2, April 2026).
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8101 | Policies: reusable rule sets per app entity with row conditions (record fields compared with the user's attributes, groups and roles), combined with labels and enforced in records queries, `/api` and `/v1` tools, forms, exports and workflows | A user whose policy allows rows where `region = user.region` sees only those rows through the screen, the API and an export | 8 |
+| B-8102 | Field permissions per policy (read, read unmasked, create, update) with masking formats (last four, hash, hidden) | A masked field shows `***-**-1234` to a policy without read unmasked and the full value to one with it | 5 |
+| B-8103 | A permissions editor on the Apps screen with an explain view (which policy grants a row or field to a user) | Explain names the policy that lets a user see a row | 3 |
+
+### B-82 App packages, environments and promotion (21 points)
+
+There is no version control, environments or governed promotion. Power Platform Pipelines move one fixed package
+through stages with approvals before production, backups and rollback. Retool links instances to git and has
+multi-instance releases (GA January 2026, Enterprise). The in-product pipeline model is chosen here, because tenants
+may share one instance (open decision below); git export is an extra.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8201 | App packages: export and import an app (entities, fields, formulas, forms, state machines, triggers, workflows, policies) as a versioned, signed package, data optional | A package imported into an empty workspace runs the app the same way, and a tampered package is refused | 5 |
+| B-8202 | Environments and promotion: each app has development, test and production stages (workspaces or app slots); promotion moves the same package from stage to stage, cannot skip one, and needs approval through the Workflows approval step before production; audited `app.package.promoted` | A promotion to production waits for an approver and lands the exact package that passed test | 8 |
+| B-8203 | Automatic backup before each deployment, a deployment history on the Apps screen (source, target, version, who, status, 365 days) and rollback from it | Rolling back restores the previous version's schema and behaviour, and the rollback is audited | 5 |
+| B-8204 | Git export and import of a package to a repository (one file per object, readable diffs) | Committing the package and importing it on another instance gives the same app | 3 |
+
+### P2
+
+### B-83 Data model generation from a description (8 points)
+
+Baserow 2.2's assistant builds tables, formulas, automations and whole apps; Power Apps Plans (GA May 2025)
+generates Dataverse models. Generating whole apps waits for an app builder (workbench mockup B-63); generating the
+data model works on today's entity model, with the local models.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8301 | Describe an app and get a draft: entities, fields, relations, formulas, state machines and triggers, shown as a diff to accept or edit, through the profile's guardrails | A description of a leave-request app gives a draft with a request entity and an approval state machine that can be accepted in one step | 8 |
+
+### B-84 AI field upgrades (6 points)
+
+Baserow 2.0's AI fields regenerate when the fields they read change, take references and functions as input, and
+fill every row in one action. Check the 1.4.0 AI fields against these first; drop what already works.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8401 | AI field prompts built from field references and formula functions, regenerated when a referenced field changes (debounced, metered) | Editing a referenced field regenerates the AI value once | 3 |
+| B-8402 | Fill or refresh an AI field for every row as a job, with progress, a cost estimate first and a cancel | A fill over 1,000 rows runs as one job and can be cancelled midway | 3 |
+
+### B-85 External database sync (8 points)
+
+Baserow (1.35) syncs two ways with an outside PostgreSQL database. Exprsn-AI apps store records only in their own
+database. The database management mockup (B-68) would cover this only if it includes outside connections.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8501 | Attach a table in an outside PostgreSQL or MySQL database as an app entity, with credentials from the vault (dynamic leases where available), writes through to the source and a scheduled pull | A row changed in the outside table appears in the app after the next pull, and an app edit reaches the outside table at once | 8 |
+
+### Second pass (APIs, embedding, components)
+
+A second low-code research pass on 2026-10-05 covered NocoDB, Supabase, ToolJet, Budibase and Airtable. Exprsn-AI
+meets or beats NocoDB's free edition (no SSO, audit, 2FA or SCIM, one workspace), and ToolJet and Budibase charge
+for authenticated embedding, so shipping these in the base product is a differentiator. No peer publishes record
+query latency to compare with the 732 ms p95. Custom code components (ToolJet's React component, Budibase plugins)
+belong with the app builder (workbench mockup B-63) and are noted on its open decision; for many tenants on one
+instance they need an iframe or CSP sandbox and per-tenant plugin approval, which the peers leave undocumented.
+
+### P1
+
+### B-86 Entity APIs (13 points)
+
+Supabase generates a REST API from the schema (PostgREST, under row security); NocoDB has record (Data) and schema
+(Meta) APIs with API tokens. Exprsn-AI apps have no API per entity.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8601 | A REST API per app entity (`/api/apps/:app/:entity`): list with filter, sort and pagination, read with related records, create, update, delete; every call under the B-81 policies and field permissions and the labels, with scoped tokens (scoped API keys limited to the app and entity; capability tokens, B-50, were dropped on 2026-10-07) | A token scoped to one entity read-only lists its rows, with masked fields masked, and is refused on any write | 8 |
+| B-8602 | A schema API for entities, fields, forms and state machines under `apps:manage`, each change audited and versioned into the app package (B-8201) | Adding a field through the schema API shows in the app and in the next package export | 3 |
+| B-8603 | An OpenAPI document per app, regenerated when its schema changes, and a TypeScript client generated from it | The generated client creates a record against a fresh app with no hand-written code | 2 |
+
+### P2
+
+### B-87 App embedding (8 points)
+
+ToolJet has public embeds and private embeds with per-user, per-app tokens; Budibase embeds through an iframe with a
+host-signed JWT (ES256, RS256 or HS256). Both charge for the authenticated kind.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8701 | Public embeds of an app's public pages and forms, with an allowlist of host sites per app (`frame-ancestors`) | An app page embeds on an allowed site and is refused by the browser on any other | 3 |
+| B-8702 | Signed embeds: the host site signs a short-lived JWT with a key registered for the app (or a tenant CA certificate), mapped to an existing user by a configurable claim; the embedded session is scoped to that app, expires on its own and is kept apart from console sessions; audited | An embed with an expired or wrongly signed token is refused, and a valid one sees only what the mapped user may | 5 |
+
+## Platform port (decisions of 2026-10-06)
+
+From `docs/exprsn-platform-port-findings.md` (compiled 2026-10-06, kept outside the repository), whose 23 decisions the
+owner answered on 2026-10-06. The port items go to 1.7.0 (`Backlog-1.7.0.md`, B-90 to B-99 and B-112 to B-114) except
+this one, which is wanted early: platform-tools could not create HTTP-backed tools.
+
+### P1
+
+### B-89 HTTP tool kind (10 points)
+
+Added 2026-10-07 (findings section 4.10, decision D11c: port it). exprsn-platform's agent runtime (cortex) had an HTTP
+tool kind; Exprsn-AI's registry has built-in, MCP, script and workflow tools, so calling an outside HTTP API means
+writing an MCP server or publishing a workflow as a tool, and workflow HTTP steps reach internal hosts only
+(`workflows/http.ts`). The owner chose to port it against the findings' first suggestion (use MCP or a workflow
+instead); it is built with the constraints the findings set: the outbound address guard, credentials only as vault
+references, and the tool-call guardrail.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-8901 | `impl: http` registry tools: method (GET, POST, PUT, PATCH, DELETE), a URL template whose path and query parameters come from the tool's JSON input schema, header and body templates, a response mapping (a JSON pointer or the body, capped in size) and a timeout; GET tools are `read`, every other method `write` unless the author raises it to `destructive`; drafts go through the registry's review and publish lifecycle like any tool | A published GET tool answers a chat tool call with the mapped field, and a PATCH tool is offered only where write tools are | 3 |
+| B-8902 | The outbound address guard: every call goes through `platform/egress.ts` (resolved once, every address checked, the connection pinned, redirects not followed); internal hosts only as the service allow-list permits, public hosts only from a per-tenant list a tenant admin keeps (the list workflow HTTP steps reuse, B-9101); secret-bearing headers, query parameters and body fields only as `vault:path#key` references resolved at call time, never stored literally | A tool whose host resolves to 169.254.169.254, or to a public host off the tenant's list, is refused; saving a literal `Authorization` header is refused | 3 |
+| B-8903 | Guardrails, limits and audit: arguments pass the tool-call guardrail before the request and the result after it, marked as untrusted content (B-6901); calls count against the registry's tool rate limits; each call is metered and audited `registry.http.called` with host, method, status, size and latency, never a secret value | A response carrying an injected instruction reaches the model marked as data, and the audit entry names the host without the header's secret | 2 |
+| B-8904 | Console: the Registry screen's tool form gets the HTTP kind (method, URL template, parameters mapped from the schema, vault reference pickers, response mapping) with a test call through the guard, and the tenant's list of allowed public hosts; prototype board first, its specs with axe-core and the reflow checks | An HTTP tool is created, tested and published from the console with no axe or reflow finding | 2 |
 
 ## Release
 
-| ID | Item | Pts |
+| ID | Item | Done when |
 | --- | --- | --- |
-| B-5101 | Version `1.6.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands; the full Playwright suite run locally at the end of the release, its findings fixed and the cross-screen sweeps (`a-first-look`, `zz-every-screen`, `y-accessibility`, `y-reflow`, `y-reflow-overlays`) green (owner, 2026-10-06: sprints run only the specs of the screens they change) (Sprint 37) | The full Playwright suite passes locally and in CI |
+| B-5101 | Version `1.6.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands; the full Playwright suite run locally at the end of the release, its findings fixed and the cross-screen sweeps (`a-first-look`, `zz-every-screen`, `y-accessibility`, `y-reflow`, `y-reflow-overlays`) green (owner, 2026-10-06: sprints run only the specs of the screens they change) (Sprint 39; was Sprint 37 before the gaps were merged on 2026-10-07) | The full Playwright suite passes locally and in CI |
 
 ---
 
@@ -181,20 +462,39 @@ guardrail and evaluation rules as everything else.
 | --- | --- |
 | Live streaming | Dropped (2026-10-05): no live streaming in Exprsn-AI |
 | End-to-end-encrypted messaging | Dropped (2026-10-05): server-side guardrails and AI features stay |
-| Governance voting | 1.7 or later |
+| Governance voting | 1.7 or later (port decision D7); not yet in a backlog |
 | Recurring events and VTIMEZONE in calendar feeds | 1.7 or later |
 | Web push notifications | 1.7 or later |
 | SMS one-time codes | 1.7 or later; needs a paid SMS provider |
-| Server log view in the console | 1.7 or later; traces and metrics only for now |
+| Server log view in the console | 1.7 or later; traces and metrics only for now (the audit export and SIEM feed are B-75) |
+| A2A protocol between systems | Unscheduled; no peer's A2A support was verified (2026-10-05 research); handoffs inside one instance are B-78 |
+| CA-signed bearer tokens and capability tokens (B-5001) | Dropped (2026-10-07, port decision D3) |
+| A tenant-wide or public feed, explore and trending posts | Dropped (2026-10-06, port decision D4): workspace and group feeds only |
+| Self-serve organizations | Dropped (2026-10-06, port decision D5): tenants and workspaces stay; tenant templates are B-4501 |
+| Hardware key custody (HSM, PKCS#11) and FIPS mode | Left open (2026-10-06, port decision D10) |
+| An IPFS blob backend | Dropped (2026-10-06, port decision D11e) |
 | A tenant's own handle domain for the PDS | Deferred from 1.5.0 (B-2901); not yet groomed |
 
 ## Open decisions
 
-- [ ] Capability tokens (B-5001): do share links and scoped API keys migrate onto the new mechanism in 1.6.0, or keep
-  their own tables with the token model added beside them?
+- [x] Capability tokens (B-5001): closed; B-5001 was dropped on 2026-10-07 (port decision D3), so share links and
+  scoped API keys keep their own tables.
 - [ ] Group locations (B-4403): is a location visible to every member who can see the group, or only to members?
 - [ ] Model servers (B-43): is Apple's on-device model also offered as a `classify` fallback beside TEV on Apple
   silicon nodes?
+- [x] Industry gaps: a fourth sprint for 1.6.0, or move P2 gap epics to 1.7? Answered 2026-10-07: the owner merged the
+  gaps into 1.6.0, now Sprints 37 to 39 after Sprint 36 took image classification.
+- [ ] Injection classifier (B-6902): a guard model through the existing guard-model path, or a trained classifier
+  (weak below 200 labels a class, a 1.4.0 known gap)?
+- [ ] App promotion (B-82): an in-product pipeline with fixed packages and approvals, like Power Platform (assumed),
+  or git-backed releases across instances, like Retool?
+- [ ] Workbench mockups (provisional B-63 to B-68): schedule them in 1.6.0 or 1.7? Whole-app generation and the
+  visual builder wait for B-63, and so do custom code components (sandboxed in an iframe or under CSP, approved per
+  tenant), which the second research pass found at ToolJet and Budibase.
+- [x] A fifth sprint (39) for the second-pass items and the release? Answered 2026-10-07: yes, Sprint 39 carries them and the
+  release.
+- [ ] HTTP tool kind (B-89): one tenant list of allowed public hosts shared with workflow HTTP steps (B-9101, 1.7.0), as
+  assumed, or a host list per tool?
 
 ## Risks
 
@@ -202,4 +502,8 @@ guardrail and evaluation rules as everything else.
 | --- | --- | --- |
 | Configuration overrides | A bad override takes every instance down at the next restart | Dual control, the descriptor's types and constraints, restart-required settings flagged, and the environment value restored by removing the override |
 | Blob deduplication | A shared blob deleted with one reference loses another tenant's or user's file | Dedup within a tenant only, reference counts in the same transaction as the file row, the integrity job (B-4204) checks counts |
+| Injection trust marking | Marking every chunk as untrusted lowers answer quality on some models | Per-profile switch, measured with the B-6903 corpus and the profile's evaluations before it becomes default |
+| MCP server | A published tool reachable from outside widens the attack surface | OAuth resource server with audience checks, tools filtered by permission and label, every call through the guardrails and audited |
+| Row policies | Row conditions slow records queries further (p95 732 ms against 250 ms in 1.4.0) | Record queries (B-3601) land first; policies compile to indexed SQL filters and the load test covers a policy-filtered query |
+| HTTP tool kind | A tool reaches an internal service or leaks a credential | The egress guard on every call, public hosts only from the tenant's list, secrets only as vault references, results marked as untrusted |
 | Vault sharing | A share widens who reads a secret beyond its policy | Shares are policy grants, explain names them, anomaly detection (B-4803) ships first |
