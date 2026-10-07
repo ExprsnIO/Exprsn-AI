@@ -244,14 +244,15 @@ tenant, on the tenant's own labelled cases.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/classifiers` | `[{id, slug, name, engine, description, status: draft\|published, version, owner, dataset, platform, labels: [{label, threshold}], family, profile, instructions, trained: {at, samples}\|null, metrics, samples: {<label>: n}, usage: [{set, setId, rule, ruleId, checkpoint}]}]` |
-| `POST /admin/classifiers` `{name, engine: linear\|guard\|llm, labels, profile?, instructions?, description?}` | A draft classifier with its own dataset |
+| `POST /admin/classifiers` `{name, engine: linear\|guard\|llm\|vision, labels, profile?, instructions?, description?}` | A draft classifier with its own dataset. Since 1.6.0 also `vision`, which needs a `profile` (Sprint 36c below) |
 | `GET /admin/classifiers/:id` | The classifier plus `versions` and `usage` |
 | `PATCH /admin/classifiers/:id` `{thresholds?, profile?, instructions?, dataset?, description?}` | A new version |
 | `POST /admin/classifiers/:id/publish` | `409 Eval set too small` below 200 labelled cases per label |
 | `POST /admin/classifiers/:id/evaluate` | `202 {jobId}`: a `classifier.evaluate` job (`classify.batch` on the console) computes precision and recall per label over the dataset |
 | `POST /admin/classifiers/:id/train` | `202 {jobId}`: trains a linear classifier on four fifths of the dataset and evaluates it on the rest |
-| `POST /admin/classifiers/:id/samples` `{items: [{text, expected: <label>\|none, label?}]}` | Adds labelled cases (sealed): `201 {added, samples}` |
-| `POST /classify` `{classifier, text, label?}` (`inference:invoke` or `classifiers:manage`) | Synchronous: `{classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}`; `503` when the model is unavailable |
+| `POST /admin/classifiers/:id/samples` `{items: [{text, expected: <label>\|none, label?}]}` | Adds labelled cases (sealed): `201 {added, samples}`. Since 1.6.0 a vision classifier's cases are images: `{image (base64), expected, label?}` (Sprint 36c) |
+| `PUT /admin/classifiers/:id/samples/image?expected=&label=` (body: the image) | 1.6.0, Sprint 36c: one image case of a vision classifier as a raw upload |
+| `POST /classify` `{classifier, text, label?}` (`inference:invoke` or `classifiers:manage`) | Synchronous: `{classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}`; `503` when the model is unavailable. Since 1.6.0 a vision classifier takes `image` (base64) instead of `text` |
 | `GET /admin/label-names` / `PUT /admin/label-names` `{names, order?}` | The tenant's names for the four levels; a different order fails with `409 Reorder refused` |
 | `GET /eval-sets` (`flags:review` or `classifiers:manage`) | `[{name, cases}]` |
 
@@ -545,7 +546,7 @@ above the caller's clearance are filtered inside every query: they are never lis
 | `GET /knowledge/bases` | `[base]` the caller may read |
 | `POST /knowledge/bases` `{name, description?, label, embedModel, reranker?, sharing: members\|curators, workspaceId?, chunking?: {tokens, overlap}}` | Curators: creates a draft base with an empty serving index v1. The embedding model must be approved, have the `embedding` capability and be cleared for the label |
 | `GET /knowledge/bases/:id` | The base with `sources: [source]`, `indexes: [index]` (newest ten), `quarantined` and `vectorStore: db\|pgvector` |
-| `PATCH /knowledge/bases/:id` `{name?, description?, label?, reranker?, sharing?, status?: draft\|published, chunking?}` | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat |
+| `PATCH /knowledge/bases/:id` `{name?, description?, label?, reranker?, sharing?, status?: draft\|published, chunking?}` | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat. Since 1.6.0 also `visionProfile` and `imageClassifiers` (Sprint 36c below) |
 | `DELETE /knowledge/bases/:id` | Deletes the base, its documents, chunks, vectors and stored files |
 | `POST /knowledge/bases/:id/reindex` `{embedModel?}` | `202 index`: builds the next version beside the serving one by job (`knowledge.reindex`); the switch is one transaction, then the old index is dropped. `409` while one is building |
 | `POST /knowledge/bases/:id/cancel-build` | Cancels the build and discards the partial index; the serving index is untouched |
@@ -555,14 +556,14 @@ above the caller's clearance are filtered inside every query: they are never lis
 | `POST /knowledge/bases/:id/sources` `{kind: upload\|s3\|git\|database, location, labelFloor?, schedule?: 15m\|hourly\|daily\|manual, ref?, path?, connectionId?, idColumn?, watermarkColumn?}` | Adds a source and queues its first sync. S3: `s3://bucket/prefix/`, read with the platform's S3 credentials. Git: an `https://` URL, cloned shallow by job. Database: `pg: schema.view` through a PostgreSQL connection, allow-listed, synced by watermark (`updated_at` by default); its floor is at least the connection's label |
 | `POST /knowledge/sources/:id/sync` | `202 {jobId}` (`knowledge.sync`); unchanged documents are skipped by version (ETag, commit) or content hash |
 | `DELETE /knowledge/sources/:id` | Removes the source and its documents from every index |
-| `GET /knowledge/bases/:id/documents?q=` | `[document]` at or below the caller's clearance |
-| `PUT /knowledge/bases/:id/uploads?name=<file>&label=<label>` (body: the file) | `202 document` in sealed quarantine; `knowledge.scan` detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX) and runs ClamAV when configured, then indexing classifies and chunks it |
-| `GET /knowledge/documents/:id` | `document` with `kb: {id, name}` |
+| `GET /knowledge/bases/:id/documents?q=` | `[document]` at or below the caller's clearance. Since 1.6.0 also `media`, `labels`, `labelsAll`, `minScore` (Sprint 36c) |
+| `PUT /knowledge/bases/:id/uploads?name=<file>&label=<label>` (body: the file) | `202 document` in sealed quarantine; `knowledge.scan` detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX and, since 1.6.0, PNG, JPEG, WebP, GIF and HEIC) and runs ClamAV when configured, then indexing classifies and chunks it |
+| `GET /knowledge/documents/:id` | `document` with `kb: {id, name}`; since 1.6.0 an image's description, labels and a document's image parts (Sprint 36c) |
 | `PATCH /knowledge/documents/:id` `{label, reason?}` | Relabels: never below the classifier's finding or the floor (`409` naming the finding); chunks take the label at once |
 | `POST /knowledge/documents/:id/reindex` | `202 {jobId}`: extraction and embedding again (retry after a failure); embeddings come from the cache where the text is unchanged |
 | `DELETE /knowledge/documents/:id` | Removes it from every index; a synced document stays `removed` so the next sync does not bring it back |
-| `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}` |
-| `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms |
+| `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}`. Since 1.6.0 also `labels: {any?, all?, minScore?}` (Sprint 36c) |
+| `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms; since 1.6.0 also `visionProfiles` and `imageClassifiers` (Sprint 36c) |
 | `GET /knowledge/principals` | Curators: `{workspaces, users, profiles}` to share with |
 | `GET /knowledge/connections` | Curators: `[{id, name, label, objects, columns}]`, the PostgreSQL connections and allow-listed objects a database source can read (never credentials) |
 | `GET /conversations/:id/knowledge` (`context:read`) | Bases attached to one of the caller's conversations |
@@ -4366,3 +4367,88 @@ next `restart`, whether it may be overridden, and the description from the comme
 New settings: `PLATFORM_SETTINGS_OVERRIDES` (default `true`), `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`
 (30), `BLOBS_VERIFY_MINUTES` (1440; 0 turns the schedule off), `BLOBS_ORPHAN_GRACE_HOURS` (24) and
 `BLOBS_DRY_RUN_MINUTES` (60).
+
+## Sprint 36c (1.6.0): image classification in Knowledge (B-8801 to B-8805)
+
+A knowledge base can hold images, describe them with a vision profile, label them with vision classifiers and search
+and filter by those labels. `server/src/knowledge/images.ts` (detection, images inside PDF and Word documents, the
+vision prompt and answer), `server/src/knowledge/service.ts`, and the `vision` engine in
+`server/src/guardrails/classifiers.ts`. Migration `038c_knowledge_images`.
+
+### Image documents (B-8801)
+
+- Uploads accept PNG, JPEG, WebP, GIF and HEIC, detected from the bytes. They pass quarantine (`knowledge.scan`: the
+  type, ClamAV when configured) like any upload; indexing then runs the image safety check (`IMAGE_SAFETY_URL`,
+  `IMAGE_SAFETY_THRESHOLD`; with `IMAGE_SAFETY_REQUIRED` an image no classifier checked is refused too). A flagged
+  image is `rejected`: its content is deleted, nothing reaches an index, and the system audit entry
+  `knowledge.image.withheld` records the score, classifier and categories.
+- The base's vision profile is asked for JSON `{caption, text}` (the text visible in the image). The answer is
+  validated; `# <name>`, the caption and `Text in the image:` with the text become the document's indexed text, so a
+  phrase from a screenshot finds it. The description is sealed with the document. A base without a vision profile, a
+  profile whose model cannot read images, or an invalid answer leaves the document `failed` with the reason and a trace
+  id (retry with `POST /knowledge/documents/:id/reindex`). The call is metered as `embed` usage with the vision model.
+- When the base has a vision profile, the images inside a PDF (JPEG, and 8-bit RGB or grey Flate images) and a Word
+  document (`word/media/`) become its **parts**: documents of their own with `parentId`, named `<document>, image <n>`,
+  at least the document's label and with its row access, through quarantine and the safety check. At most 20 per
+  document; images under 1 KB are skipped. Unchanged images keep their document on a re-index, images no longer in the
+  document are removed, and removing the document removes its parts. A scanned PDF with no text layer but with images
+  is `indexed` with no chunks of its own. A part cannot be relabelled below its document (`409`).
+
+### Vision classifiers (B-8802, B-8805)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/classifiers` `{name, engine: vision, labels, profile, instructions?}` | A draft vision classifier; `profile` names the tenant profile whose model reads images |
+| `PATCH /api/admin/classifiers/:id` `{profile?, instructions?, thresholds?}` | A new version, as for the other model engines. A change to a published vision classifier re-labels the images of every base naming it |
+| `POST /api/admin/classifiers/:id/samples` `{items: [{image, expected, label?}]}` | Image cases in the eval-set format: `image` is base64 (a PNG, JPEG, WebP, GIF or HEIC image, `422` otherwise), `expected` a label or `none`. A vision classifier refuses text cases and the other engines refuse images (`422`). `201 {added, samples}`; audited `classifier.samples.added` with `images: true` |
+| `PUT /api/admin/classifiers/:id/samples/image?expected=<label>&label=<label>` (body: the image) | One image case as a raw upload (up to `ATTACHMENT_MAX_BYTES`), for images larger than a JSON request allows. `409` for a text classifier. `201 {added, samples}` |
+| `POST /api/classify` `{classifier, image, label?}` | A vision classifier scores one image (base64) synchronously; nothing is stored. `422` with text for a vision classifier or an image for another engine; `503` when the model is unavailable |
+
+The vision profile is asked to score every label from 0 to 1 and answer `{"scores": {"<label>": <score>}}`; an
+unknown label, a score outside 0 to 1 or no `scores` is an error (the case counts in `errors` during an evaluation). A
+label at or above its threshold is a hit, as for `llm`. Image cases are sealed in the blob store
+(`eval-images/<tenant>/<case id>`); `samples` and the publish rule count only image cases for a vision classifier (and
+only text cases for the others), so a vision classifier publishes after an evaluation with at least 200 image cases
+per label (`409 Eval set too small` otherwise). The evaluation scores the image cases of the dataset.
+
+### Image labels on knowledge bases (B-8802, B-8803)
+
+| Method and path | What it does |
+| --- | --- |
+| `PATCH /api/knowledge/bases/:id` `{visionProfile?: <profile> \| null, imageClassifiers?: [<id or slug>]}` | The vision profile must route to a model with the `vision` capability, and the profile and the model must be cleared for the base's label (`409`). Image classifiers (at most 10) must be published `vision` classifiers (`409` for a draft or another engine, `404` unknown). A newly named classifier labels the base's images in the background; the labels of one no longer named are deleted. Audited `knowledge.updated` with `visionProfile` and `imageClassifiers` in the detail |
+| `GET /api/knowledge/models` | Adds `visionProfiles: [{name, displayName, model, label}]` (published profiles whose model reads images) and `imageClassifiers: [{id, slug, name, status, version, labels}]` (the tenant's vision classifiers, drafts included, so the form can say why one cannot be picked) |
+| `GET /api/knowledge/bases/:id/documents?media=image&labels=a,b&labelsAll=c&minScore=0.6` | `media=image` lists image documents only; `labels` (any of them) and `labelsAll` (every one), comma-separated, keep the image documents carrying them at or above `minScore`, or at or above each classifier's threshold without it |
+| `GET /api/knowledge/bases/:id/labels` | `[{label, documents}]`: the labels the base's images carry (hits), counted over documents at or below the caller's clearance |
+| `POST /api/knowledge/bases/:id/reclassify` | `202 {jobId, images}`: labels every indexed image again with every classifier the base names (`knowledge.reclassify`, forced). Manage access; `409` when the base names no image classifier. Audited `knowledge.reclassify.started` |
+| `GET /api/knowledge/documents/:id` | Adds `caption`, `text`, `visionModel` (an image's description, `null` otherwise), `labels` and `parts: [document]` (the images of a PDF or Word document, at or below the caller's clearance); `kb` carries `imageClassifiers` (how many the base names) |
+| `GET /api/knowledge/documents/:id/thumbnail` | The image itself (PNG, JPEG, WebP or GIF), for readers cleared for its label and allowed by its row access, once its safety check passed and it was indexed; `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cache-Control: private, no-store`. `404` for HEIC and for quarantined, rejected or failed images. Nothing is resized on the server |
+| `POST /api/knowledge/documents/:id/reclassify` | `202 {jobId, images: 1}`: labels one indexed image again (`knowledge.classify`). Manage access. Audited `knowledge.document.reclassify.started` |
+
+A document gains `parentId`, `media: image | null`, `thumbnail` (the URL above, or `null`), `safetyScore` and, for an
+image, `labels: [{label, score, hit, classifierId, classifier, version}]` (hits first, then by score). Labels are stored
+per document, classifier and label in `knowledge_doc_labels` with the score, whether it reached the threshold and the
+classifier version that scored it; they carry the image's own label and follow a relabel.
+
+Jobs: `knowledge.classify` `{documentId}` scores one indexed image with the base's published vision classifiers (queued
+after the image is indexed, when the base names any); `knowledge.reclassify` `{kbId, classifierId?, force?}` labels the
+base's images again, skipping images the classifier's current version already labelled unless forced, and ends with
+the system audit entry `knowledge.reclassified` `{images, classified, failed, force}`. A published classifier's new
+version (`PATCH` while published, or `publish`) queues `knowledge.reclassify` for each base naming it, so the images are
+re-labelled without being uploaded again.
+
+### Search with label filters (B-8803)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/knowledge/search` `{kbIds, query, k?, rerank?, labels?: {any?: [label], all?: [label], minScore?}}` | With `labels`, only the chunks of image documents carrying any of `any` and every one of `all` (at or above `minScore`, or each classifier's threshold) are ranked; the filter is applied inside the ranking, at or below the caller's clearance |
+
+An image hit adds `image: {caption, ocr, labels, thumbnail}`: `ocr` is an excerpt of the image's text (300
+characters). The caption and excerpt pass the `context` checkpoint as well as the chunk: a blocking rule withholds them
+(`null`), a redacting rule rewrites them.
+
+The built-in tool **`knowledge_search`** (seeded by `038c`, `read`, ceiling `restricted`) is the knowledge step of
+agents and workflows: `{kbIds (1 to 20), query, k? (1 to 20, default 8), labels?: {any?, all?, minScore?}}` returns
+`{ceiling, hits: [{kb, document, documentId, section, label, score, text | withheld, image?}]}`. It needs
+`knowledge:read`, searches only published bases shared with the caller (refused otherwise), and searches at most at the
+label of the conversation or run it is called from, capped by the caller's clearance.
+

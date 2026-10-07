@@ -168,6 +168,18 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
   `y-reflow-overlays.spec.ts`.
 
+- **Knowledge: image documents; Classifiers: the vision engine** (B-8804, Sprint 36c): an image document's thumbnail
+  carries its caption as alt text, or "Image: <document name>" until it has one; the alt is never empty, even where
+  the caption is shown beside it. The label filter chips are buttons with `aria-pressed` and their document counts in
+  text. Label scores are numbers with the threshold state in words ("above threshold", "below threshold"), never by
+  colour alone. The image document drawer keeps the description in text: the caption, and the image's text as a
+  labelled block, so nothing is only in the picture. Re-classify and the classifier setting on a knowledge base are
+  labelled controls in the base's settings dialog, with a disabled control saying why in text (a draft classifier, no
+  vision profile). The Classifiers screen offers `vision` in the engine select of New classifier, and a vision
+  classifier's test dialog takes an image file through a labelled file input. `e2e/tests/knowledge-images.spec.ts` runs
+  axe-core and the in-page checker on the image documents, the drawer, the filter chips and the settings dialog, and
+  checks each for sideways scrolling at 320 and 640 px.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every
