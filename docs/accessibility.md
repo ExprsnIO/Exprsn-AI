@@ -218,6 +218,31 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
+- **Identity: SCIM provisioning** (B-7201, B-7202, Sprint 37c): under User stores and federation, each SCIM store is a
+  section with a level-2 heading naming it; its status is a key and value list in text (users active of total, groups,
+  the stores its users sign in through, last change), its tokens a table with column headers whose Revoke buttons
+  carry the token's name in their accessible names, and its recent changes a timeline whose tone is also said in words
+  (deactivated, created, access changed). A new token is shown once in a notice with the token in a selectable block
+  and labelled Copy token and Done buttons. Add a SCIM store and New SCIM token are labelled dialogs; the sign-in stores
+  are checkboxes in a fieldset with a legend, and server refusals land in the dialog in the server's words.
+  `e2e/tests/identity-additions.spec.ts` runs the in-page checker and axe-core on the section with a store, a token and
+  a provisioned user, once the toast has gone.
+- **Vault: sharing** (B-4801, Sprint 37c): Share is a labelled button beside Edit metadata; its dialog has labelled
+  selects for the kind of grantee, the grantee and the duration, and a note field. Shared with is a panel whose table
+  names the grantee kind in text and whose Revoke buttons name the grantee; an expired share says "expired" in a pill
+  and its date. Shared with you is a list in the paths column, each entry naming who shared it and until when in text,
+  and "a deny refuses you" when one does. A share refused because a deny wins is a problem panel with the deciding
+  grant in words and an Open Policies button. Share grants carry a "share" pill and their expiry in text in the
+  Policies table. `e2e/tests/vault.spec.ts` runs both checkers with a share shown and checks 320 and 640 px.
+- **Messages and feed: quotes and visibility** (B-4901, Sprint 37c): the composer's Visibility is a labelled select
+  (Workspace, Public, Unlisted (link only)); a post's visibility and quote status are pills in words beside its label,
+  never colour alone. Quote opens a labelled dialog (Your comment, Post in, Visibility) that says the quote's label
+  floor in text; the quoted post is embedded as a quotation block naming its author, time and label, or a sentence
+  saying it is out of reach. A post opened by its link is a region named "Post opened by link" with a notice and a
+  labelled Close button; a refused repost is a problem panel in words. Your unlisted posts is an inspector panel whose
+  Open and Copy link buttons sit beside the post's opening words. `e2e/tests/messages.spec.ts` runs both checkers in
+  Standard and Enhanced on the feed with an unlisted post opened by link.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

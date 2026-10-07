@@ -10,6 +10,37 @@
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
 
+### SCIM 2.0, vault sharing, MongoDB leases, quote posts and visibility (Sprint 37c, B-7201, B-7202, B-4801, B-4802, B-4901)
+
+- Migration `039c_scim_vault_posts`: `scim_tokens`, `scim_users`, `scim_groups`, `scim_group_members`;
+  `vault_policies.share_secret_id` and `expires_at`; `feed_posts.visibility` and `quote_of`.
+- SCIM 2.0 provisioning (B-7201): a SCIM store (`kind: scim`) in the tenant's chain, `/scim/v2` Users and Groups
+  (RFC 7643/7644: create, replace, patch, delete, the full filter grammar, paging, `attributes`, ETags), SCIM tokens
+  made and revoked under Identity (`identity:manage`, shown once). Deactivating a user ends their sessions, OAuth
+  refresh tokens, API keys and DAV app passwords in the same request; a delete disables and unlinks them. SCIM users
+  sign in through the upstream stores the SCIM store names. `server/src/identity/scim/`, `routes/scim.ts`.
+- Group membership maps to roles (B-7202): group mappings with the SCIM store name SCIM groups; every membership change
+  recomputes roles, clearance and workspaces (`identity.scim.reapply` after mapping changes). A local conformance suite
+  (`server/test/sprint37c-scim.test.ts`) covers what the Entra ID and Okta validators check; the external validator run
+  could not be made from here (`docs/identity.md`).
+- Vault sharing (B-4801): share a KV secret with a person, a directory group, a workspace or an API key, as a policy
+  grant of read on its exact path, with an expiry (`VAULT_SHARE_MAX_DAYS`), revocable, audited; a deny still wins and
+  the label must clear the grantee. `GET /api/vault/shared-with-me`; expired shares stop applying at once and are
+  removed by `vault.shares.expire`. `server/src/vault/shares.ts`.
+- MongoDB leases (B-4802): `dialect: mongodb` for database engines (createUser with read or readWrite, updateUser on
+  renew, killAllSessionsByPattern and dropUser at the end), tested against `mongo:8`.
+- Quote posts and visibility (B-4901): `POST /api/feed/posts/:id/quote` quotes a post with a comment in any workspace
+  or group the author may post in, labelled at least as high as the quoted post; `visibility: public | workspace |
+  unlisted` on posts. An unlisted post is reachable by its link and absent from every feed, tag and digest; a repost
+  of it is refused, a quote of it is unlisted.
+- Console: Identity shows SCIM stores with their tokens and recent changes; Vault has Share, Shared with and Shared
+  with you; Messages and feed has a visibility choice, Quote, the quoted post, a post opened by its link and Your
+  unlisted posts. Prototype boards first.
+- Settings: `VAULT_SHARE_MAX_DAYS`, `IDENTITY_SCIM_MAX_RESULTS`, `IDENTITY_SCIM_RATE_PER_MINUTE`,
+  `IDENTITY_SCIM_TOKEN_MAX_DAYS`.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/identity.md` (SCIM and its conformance), `docs/security.md` (SCIM
+  tokens, shares, MongoDB lease expiry, what unlisted means), `docs/accessibility.md`, `docs/permissions.md`.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,

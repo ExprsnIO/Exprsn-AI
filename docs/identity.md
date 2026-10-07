@@ -14,6 +14,7 @@ Each tenant has an ordered chain of user stores. A store is one of:
 | `oidc` | an upstream OpenID Connect provider (we are the relying party) | Sign-in by redirect; no passwords, no directory sync. See [Upstream federation](#upstream-federation) |
 | `saml` | an upstream SAML 2.0 identity provider (we are the service provider) | Same; signed assertions only |
 | `atproto` | AT-Protocol accounts (we are an OAuth client of each account's own authorization server; 1.4.0) | Sign-in by redirect after the person gives their handle; a DID bound to a user signs in as that user, others are provisioned with their DID as their only group. See `docs/api.md`, Sprint 26b |
+| `scim` | users and groups pushed by an identity provider (Entra ID, Okta) over SCIM 2.0 (1.6.0) | No passwords and no directory sync: the provider creates, changes and deprovisions users at `/scim/v2`; they sign in through the upstream stores the SCIM store names. See [SCIM 2.0 provisioning](#scim-20-provisioning) |
 
 SQL stores accept **argon2** and **bcrypt** hashes. Rows with any other format (plain text, unsalted digests) never
 authenticate. Give the store a database account with `SELECT` on the user and group tables only.
@@ -283,6 +284,69 @@ The Identity screen's "Test a login" runs the real pieces without creating a ses
 policy, the store lookup, group mappings, second factors, and a token signed with the current key and verified
 against the published JWKS with a test audience. "Device code" issues a real device code for a client that allows the
 grant.
+
+## SCIM 2.0 provisioning
+
+1.6.0 (B-7201, B-7202). A SCIM store (`kind: scim`) holds the users and groups an identity provider pushes to
+`<PUBLIC_URL>/scim/v2` (RFC 7643, RFC 7644): Users and Groups with create, replace, patch, delete, filters, paging,
+`attributes` and `excludedAttributes`, and weak ETags with `If-Match`. Bulk, `/Me`, `/.search`, sorting and password
+changes are not offered (the ServiceProviderConfig says so). The routes are in `docs/api.md`, Sprint 37c.
+
+Set it up under Identity, User stores and federation (or User stores):
+
+1. Add a SCIM store. Name the upstream store (OIDC, SAML or GitHub) of the same provider in `signInStores`: a sign-in
+   there whose username is the SCIM `userName` signs in as the SCIM user.
+2. Make a SCIM token (shown once) and paste the base URL and the token into the provider's provisioning settings
+   (Entra ID: Enterprise application, Provisioning, Tenant URL and Secret Token; Okta: the app's Provisioning tab,
+   SCIM connector base URL, unique identifier `userName`, HTTP Header authentication).
+3. Add group mappings with the SCIM store as provider and the SCIM group's display name as the group. Members get the
+   mapped roles, clearance and workspaces (else the store's `defaultRoles` and `defaultClearance`, empty and
+   `internal` by default); after changing mappings, Re-apply group mappings.
+
+What the provider's operations do:
+
+| Operation | Effect |
+| --- | --- |
+| Create a user | A user of the tenant (the SCIM `id` is the user's id) linked to the store; `userName` becomes the username in lower case. A username of another store is a `409 uniqueness`: a SCIM store never takes over an account |
+| Update a user | Name, address, display name and manager follow; the attributes are kept as pushed |
+| `active: false` | The user is disabled and, in the same request, their sessions (and sockets), OAuth refresh tokens, API keys and DAV app passwords end: their next request is unauthenticated |
+| `active: true` | Re-enabled, if SCIM disabled them; an administrator's own disable stays |
+| Delete a user | Disabled and signed out everywhere, unlinked from the store and its groups; the user row stays for the audit history. Pushed again later, the same user is adopted and re-enabled |
+| Group membership | Recomputes the members' mapped roles, clearance and workspaces; anyone whose access changed is signed out once |
+
+### Conformance (B-7202)
+
+The Microsoft Entra ID SCIM Validator and Okta's SCIM 2.0 test suite (Runscope) call the service from the internet,
+which this installation is not reachable from, so they were **not run** for 1.6.0; B-7202's "the Entra ID validator
+passes with no failure" stays open for that external run. In their place, `server/test/sprint37c-scim.test.ts` runs
+what those validators check against the real routes, on SQLite (and `test/integration/scim-vault-posts.test.ts` the core
+of it on PostgreSQL and MySQL). Result on 2026-10-07: every check below passes.
+
+| Validator check (Entra ID, Okta) | Local test |
+| --- | --- |
+| Discovery: ServiceProviderConfig, Schemas (User, enterprise User, Group), ResourceTypes | discovery and authentication |
+| Requests without a token, with a wrong, expired or revoked token are refused with 401 and the SCIM error schema | discovery and authentication |
+| Create a user with the attributes Entra ID maps by default (userName, active, displayName, emails[type eq "work"], name.givenName and familyName, externalId, title, preferredLanguage, phoneNumbers, addresses, enterprise employeeNumber and department) | users: create |
+| Create a duplicate user (same userName, other case): 409 uniqueness | users: create |
+| Get a user by id; an unknown id is 404 in the SCIM error schema | users: get |
+| Filter `userName eq` (other case), `externalId eq` (case-exact), a filter that matches nothing (totalResults 0), an invalid filter (400 invalidFilter) | users: filter |
+| PATCH as Entra ID sends it: capitalised `Replace` and `Add`, booleans as `"False"`, `emails[type eq "work"].value`, enterprise `department` and `manager` | users: PATCH (Entra) |
+| PATCH as Okta sends it: no path, a value object (`active`, `id` echoed and ignored) | users: PATCH (Okta), deprovisioning |
+| Disable a user (`active: false`) and enable again | deprovisioning |
+| PUT replaces the whole user (Okta) | users: PUT |
+| Paging with startIndex and count; count=0; `attributes` and `excludedAttributes` | users: paging and projection |
+| ETags: a stale If-Match is 412 | users: ETags |
+| Delete a user: 204, then 404 | users: delete |
+| Create a group with members; a duplicate group name (other case) is 409 | groups: create |
+| Filter groups by `displayName eq` with `excludedAttributes=members`; get a group without members | groups: filter |
+| PATCH group members: Entra ID's `Add`/`Remove` with a value list, Okta's `remove` with `members[value eq "…"]`, `replace` of displayName with a value object | groups: PATCH |
+| PUT replaces a group's members; delete a group: 204, then 404 | groups: PUT and delete |
+| Group membership maps to roles, clearance and workspaces | groups: roles; deprovisioning |
+| Deactivating a user ends their open console session within one request (B-7201's done-when) | deprovisioning |
+
+Known differences from a strict reading of RFC 7644: a `replace` or `add` through a value filter that matches nothing
+adds an element made from the filter's `eq` terms (Entra ID relies on it); attributes the schemas do not define are
+ignored rather than refused; `password` is accepted and dropped.
 
 ## API keys
 

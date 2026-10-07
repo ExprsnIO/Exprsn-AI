@@ -257,6 +257,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the
   `vision` classifier engine and image eval cases in `guardrails/classifiers.ts`; the built-in tool `knowledge_search`.
   The fake Ollama answers image prompts from a picture's text chunks (`markedPng` in `server/test/fake-ollama.ts`).
+- 1.6.0 Sprint 37c: `identity/scim/` (`service.ts` `s.scim`: SCIM 2.0 users and groups into a SCIM store, tokens,
+  deactivation, group membership to roles; `filter.ts` the RFC 7644 filter and path grammar; `patch.ts` PATCH and the
+  writable document; `schemas.ts` the discovery documents) with `identity/providers/scim.ts` (the store in the chain)
+  and `routes/scim.ts` (`/scim/v2`, outside `/api`, and the token routes under Identity, B-7201, B-7202);
+  `vault/shares.ts` (`s.vaultShares`, B-4801: a KV secret shared as a policy grant); the MongoDB lease engine in
+  `vault/db-engines.ts` (B-4802); quotes and visibility in `feed/service.ts` (B-4901).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
