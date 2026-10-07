@@ -412,6 +412,53 @@ filter, private `/tmp`, only the state directory writable.
   flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
   vault administrators.
 
+- SCIM 2.0 provisioning (1.6.0, Sprint 37c, B-7201, B-7202). A SCIM token is a bearer secret for one store with no
+  sender binding (no mTLS, no DPoP): anyone holding it creates, changes and deprovisions that store's users and their
+  group memberships, which through group mappings means their roles, clearance and workspaces (never more than the
+  mappings name: a SCIM store cannot give a role no mapping names, and it never takes over a user of another store).
+  Tokens are shown once, kept as an HMAC with `SESSION_SECRET` (rotating it invalidates every SCIM token, as it does
+  API keys), expire after `IDENTITY_SCIM_TOKEN_MAX_DAYS` and are revoked under Identity; the rate limit is per address
+  (`IDENTITY_SCIM_RATE_PER_MINUTE`), not per token. Failed token checks are not written to the audit chain (no tenant
+  is known yet); use the access log. Complex filters are evaluated in memory over at most 50 000 users or groups of the
+  store; one `eq` on an indexed attribute is asked of the database. Deprovisioning ends what can be ended at once
+  (sessions and their sockets, OAuth refresh tokens, API keys, DAV app passwords); an OAuth access token already issued
+  to another relying party stays valid until it expires (at most its lifetime, 5 to 30 minutes) unless that party
+  introspects it, as for any disabled user. Sign-in for SCIM users goes through the upstream stores the SCIM store
+  names, matched by username: an upstream store whose usernames are not the provider's `userName` (Entra ID's UPN,
+  Okta's login) does not link, and an upstream store an administrator names that belongs to another provider would let
+  its accounts with the same names sign in as the SCIM users, so name only the stores of the same provider. The
+  conformance runs of the Entra ID SCIM Validator and Okta's SCIM test suite could not be made from here (they call
+  the service from the internet); `server/test/sprint37c-scim.test.ts` reproduces their checks locally
+  (`docs/identity.md`).
+
+- Vault sharing (1.6.0, Sprint 37c, B-4801). A share is an ordinary allow grant of `read` and `list` on one exact KV
+  path, so it widens who reads that secret by design, within what the policy allows: a deny that names the grantee
+  still wins, and the secret's label still has to clear the grantee's clearance. Sharing with a directory group or a
+  workspace reaches whoever is in it at read time, including people who join later; share with a person when that
+  matters. Whoever may share (holders of `secrets:write` with `read` and `write` on the path) may share with any
+  principal of the tenant, without a second approval. An expired share stops applying in the same instant (the policy
+  query compares the expiry), and is removed by `vault.shares.expire` within five minutes. A grantee who read the value
+  keeps what they read: revoking a share does not rotate the secret. Reveals by grantees are audited and watched for
+  anomalies (B-4803) like the owner's.
+
+- MongoDB leases (1.6.0, Sprint 37c, B-4802). MongoDB accounts carry no expiry, so a leased user exists until the
+  sweeper drops it (every `VAULT_LEASE_SWEEP_SECONDS`, 60 by default) or a revoke does; between the lease's expiry and
+  the next sweep its password still works (PostgreSQL's `VALID UNTIL` closes that window there, MySQL has the same gap).
+  The expiry is recorded in the user's `customData` for operators. Ending a dropped user's open sessions needs
+  `killAnySession`, which `userAdmin` does not include: without it, sessions opened before the drop run until they
+  close. The admin login is checked for `createUser`, `dropUser` and `grantRole` at registration, not for
+  `killAnySession`. Connections use one direct connection to the checked, pinned address (no replica-set discovery);
+  `mongodb+srv` is not supported.
+
+- Quote posts and visibility (1.6.0, Sprint 37c, B-4901). Unlisted means out of feeds, not secret: anyone who may read
+  the post's workspace or group and has its link (or its id, a ULID that encodes its creation time) can open it, and a
+  bookmark keeps it listed for whoever saved it. Moderation, the flag queue, search over the audit chain and exports
+  treat unlisted posts like any other. `public` changes nothing inside the instance (D4: there is no public feed); it
+  only marks posts an author lets the 1.7.0 cross-posting (B-11402) write elsewhere. A quote may sit in another
+  workspace than what it quotes: readers there who cannot read the quoted post see the quote without the embed, but its
+  author's own words about the quoted post are theirs to share, under the guardrail and the quote's label (at least the
+  quoted post's).
+
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
   CardDAV-only password gets `403` there. A PUT waits for its scan (run in the request on the database queue, up to 30

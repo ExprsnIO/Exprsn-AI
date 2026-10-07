@@ -31,6 +31,9 @@ export interface Grant {
   capabilities: (Capability | '*')[];
   effect: Effect;
   description?: string | null;
+  /** 1.6.0 (B-4801): the KV secret this grant shares (a share is a grant of read on its path), and when it ends. */
+  shareSecretId?: string | null;
+  expiresAt?: number | null;
 }
 
 /** Who the caller is, for policy purposes. An API key acts as its owner plus itself. */

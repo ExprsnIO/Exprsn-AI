@@ -33,6 +33,16 @@ import { extractTags, normaliseTag } from './tags.js';
  * - Posts pass the `user-input` guardrail checkpoint before publishing (B-2704): a block refuses, a redaction is what
  *   is stored, and a hold keeps the post `held` (seen by its author only) with a hold flag in the review queue, until a
  *   reviewer approves (it is published then) or rejects it.
+ * - 1.6.0 (B-4901): a post's visibility sits beside its label. `workspace` (the default) and `public` posts are in the
+ *   feeds of their workspace or group; `public` also marks a post the author lets leave the instance later
+ *   (cross-posting, B-11402); within Exprsn AI it reaches nobody a workspace post does not. An `unlisted` post is in no
+ *   feed (home, workspace, group, person, list, tag, trending, digest), indexes no hashtags and raises no live feed
+ *   events: it is reachable by its link (`GET /api/feed/posts/{id}`, the console's `#/messages?post=`) by anyone who
+ *   could read it in its workspace or group. Bookmarks list it for whoever saved it (a bookmark is their saved link).
+ *   A repost of an unlisted post is refused (a repost is a feed entry); a quote of one is unlisted too.
+ * - 1.6.0 (B-4901): a quote is a new post with a comment of its own that embeds another post (`quote_of`), in any
+ *   workspace or group the author may post in. It is labelled at least as high as the quoted post, so it never sits
+ *   below what it quotes; a reader who may not read the quoted post sees the quote with the embed left out.
  */
 
 export const POST_OBJECT = 'feed-post';
@@ -63,7 +73,14 @@ export interface PostRow {
   /** B-3904: what made the post when a person did not type it (a workflow run, an agent run, a plugin). */
   source_kind?: string | null;
   source_id?: string | null;
+  /** 1.6.0 (B-4901): public | workspace | unlisted, and the post a quote embeds. */
+  visibility?: Visibility;
+  quote_of?: string | null;
 }
+
+export const VISIBILITIES = ['public', 'workspace', 'unlisted'] as const;
+export type Visibility = (typeof VISIBILITIES)[number];
+const visibilityOf = (v: unknown): Visibility => (v === 'public' || v === 'unlisted' ? v : 'workspace');
 
 /** B-3904: the source a post records (`workflow-run`, `agent-run`, `message`, `plugin`…) and its id. */
 export interface PostSource {
@@ -111,7 +128,9 @@ export const postFrom = (r: Record<string, unknown>): PostRow => ({
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at),
   published_at: num(r.published_at),
-  edited_at: num(r.edited_at)
+  edited_at: num(r.edited_at),
+  visibility: visibilityOf(r.visibility),
+  quote_of: (r.quote_of as string | null | undefined) ?? null
 });
 const commentFrom = (r: Record<string, unknown>): CommentRow => ({ ...(r as unknown as CommentRow), label: isLabel(r.label) ? r.label : 'restricted', created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 
@@ -269,7 +288,7 @@ export class FeedService {
     if (!rows.length) return [];
     const p = sc.p;
     // The originals of reposts, as the caller may see them now (else `original: null`).
-    const origIds = [...new Set(rows.map((x) => x.repost_of).filter((v): v is string => !!v))];
+    const origIds = [...new Set(rows.flatMap((x) => [x.repost_of, x.quote_of]).filter((v): v is string => !!v))];
     const originals = new Map<string, PostRow>();
     if (origIds.length) {
       const blocked = await this.s().social.blockedWith(p.tenantId, p.userId);
@@ -280,7 +299,7 @@ export class FeedService {
     }
     const all = [...rows, ...originals.values()];
     const ids = [...new Set(all.map((x) => x.id))];
-    const [who, media, tags, reactions, comments, reposts, mine, marks, myReposts] = await Promise.all([
+    const [who, media, tags, reactions, comments, reposts, mine, marks, myReposts, quotes] = await Promise.all([
       this.names(p.tenantId, all.map((x) => x.author_id)),
       this.db('feed_post_media as m').leftJoin('files as f', 'f.id', 'm.file_id').whereIn('m.post_id', ids).orderBy('m.position').select('m.post_id', 'm.file_id', 'f.name', 'f.type', 'f.size', 'f.state', 'f.trashed_at') as Promise<{ post_id: string; file_id: string; name: string | null; type: string | null; size: number | null; state: string | null; trashed_at: number | null }[]>,
       this.db('feed_hashtags').whereIn('post_id', ids).select('post_id', 'tag') as Promise<{ post_id: string; tag: string }[]>,
@@ -289,7 +308,9 @@ export class FeedService {
       this.db('feed_posts').where({ tenant_id: p.tenantId, state: 'published' }).whereIn('repost_of', ids).groupBy('repost_of').select('repost_of').count({ n: '*' }) as Promise<{ repost_of: string; n: number | string }[]>,
       this.db('feed_reactions').whereIn('post_id', ids).andWhere({ user_id: p.userId }).select('post_id', 'kind') as Promise<{ post_id: string; kind: string }[]>,
       this.db('feed_bookmarks').whereIn('post_id', ids).andWhere({ user_id: p.userId }).select('post_id') as Promise<{ post_id: string }[]>,
-      this.db('feed_posts').where({ tenant_id: p.tenantId, author_id: p.userId, state: 'published' }).whereIn('repost_key', ids).select('repost_key') as Promise<{ repost_key: string }[]>
+      this.db('feed_posts').where({ tenant_id: p.tenantId, author_id: p.userId, state: 'published' }).whereIn('repost_key', ids).select('repost_key') as Promise<{ repost_key: string }[]>,
+      // 1.6.0 (B-4901): quotes of each post that are in a feed (unlisted quotes are not counted)
+      this.db('feed_posts').where({ tenant_id: p.tenantId, state: 'published' }).whereNot('visibility', 'unlisted').whereIn('quote_of', ids).groupBy('quote_of').select('quote_of').count({ n: '*' }) as Promise<{ quote_of: string; n: number | string }[]>
     ]);
     const group = <T extends { post_id: string }>(list: T[]) => {
       const m = new Map<string, T[]>();
@@ -302,6 +323,7 @@ export class FeedService {
     const mineBy = group(mine);
     const commentsBy = new Map(comments.map((c) => [c.post_id, Number(c.n)]));
     const repostsBy = new Map(reposts.map((c) => [c.repost_of, Number(c.n)]));
+    const quotesBy = new Map(quotes.map((c) => [c.quote_of, Number(c.n)]));
     const marked = new Set(marks.map((b) => b.post_id));
     const reposted = new Set(myReposts.map((r) => r.repost_key));
     const one = async (x: PostRow) => {
@@ -317,10 +339,12 @@ export class FeedService {
         label: x.label,
         state: x.state,
         repostOf: x.repost_of,
+        visibility: x.visibility ?? 'workspace',
+        quoteOf: x.quote_of ?? null,
         source: x.source_kind && x.source_id ? { kind: x.source_kind, id: x.source_id } : null,
         media: (mediaBy.get(x.id) ?? []).map((m) => ({ fileId: m.file_id, name: m.name, type: m.type, size: m.size == null ? null : Number(m.size), available: m.state === 'ready' && m.trashed_at == null })),
         tags: (tagsBy.get(x.id) ?? []).map((t) => t.tag),
-        counts: { comments: commentsBy.get(x.id) ?? 0, reposts: repostsBy.get(x.id) ?? 0, reactions: counts },
+        counts: { comments: commentsBy.get(x.id) ?? 0, reposts: repostsBy.get(x.id) ?? 0, quotes: quotesBy.get(x.id) ?? 0, reactions: counts },
         mine: { reactions: (mineBy.get(x.id) ?? []).map((r) => r.kind), bookmarked: marked.has(x.id), reposted: reposted.has(x.id) },
         createdAt: x.created_at,
         publishedAt: x.published_at,
@@ -330,7 +354,8 @@ export class FeedService {
     const out = [];
     for (const x of rows) {
       const o = x.repost_of ? originals.get(x.repost_of) : undefined;
-      out.push({ ...(await one(x)), original: x.repost_of ? (o ? await one(o) : null) : undefined });
+      const q = x.quote_of ? originals.get(x.quote_of) : undefined;
+      out.push({ ...(await one(x)), original: x.repost_of ? (o ? await one(o) : null) : undefined, quoted: x.quote_of ? (q ? await one(q) : null) : undefined });
     }
     return out;
   }
@@ -340,7 +365,8 @@ export class FeedService {
     if (!ids.length) return new Map();
     const scope = sc ?? (await this.scope(p));
     const blocked = await this.s().social.blockedWith(p.tenantId, p.userId);
-    const rows = ((await this.db('feed_posts').where({ tenant_id: p.tenantId, state: 'published' }).whereIn('id', ids)) as Record<string, unknown>[]).map(postFrom).filter((x) => this.inScope(scope, x) && !blocked.has(x.author_id));
+    // 1.6.0 (B-4901): digests are feeds; an unlisted post is never in one.
+    const rows = ((await this.db('feed_posts').where({ tenant_id: p.tenantId, state: 'published' }).whereNot('visibility', 'unlisted').whereIn('id', ids)) as Record<string, unknown>[]).map(postFrom).filter((x) => this.inScope(scope, x) && !blocked.has(x.author_id));
     return new Map((await this.views(scope, rows)).map((v) => [v.id, v as unknown]));
   }
 
@@ -357,7 +383,7 @@ export class FeedService {
    * (a workspace, a group, authors, a tag); people in a block with the caller are always left out, and `hide` leaves
    * out more (the people they muted, for the home feed).
    */
-  private async page(sc: Scope, q: PageQuery, filter: (qb: Knex.QueryBuilder) => void, hide: Set<string> = new Set()) {
+  private async page(sc: Scope, q: PageQuery, filter: (qb: Knex.QueryBuilder) => void, hide: Set<string> = new Set(), o: { ownUnlisted?: boolean } = {}) {
     const p = sc.p;
     const limit = Math.min(Math.max(q.limit ?? 20, 1), PAGE_MAX);
     const cursor = decodeCursor(q.cursor);
@@ -368,6 +394,9 @@ export class FeedService {
       .where({ 'x.tenant_id': p.tenantId, 'x.state': 'published' })
       .whereIn('x.label', sc.labels)
       .andWhere((b) => b.where((w) => w.whereNull('x.group_id').whereIn('x.workspace_id', [...sc.workspaces.keys()])).orWhereIn('x.group_id', groups));
+    // 1.6.0 (B-4901): an unlisted post is in no feed (its author may list their own on their page, `ownUnlisted`).
+    if (o.ownUnlisted) qb.andWhere((b) => b.whereNot('x.visibility', 'unlisted').orWhere('x.author_id', p.userId));
+    else qb.whereNot('x.visibility', 'unlisted');
     filter(qb);
     for (let i = 0; i < out.length; i += 1000) qb.whereNotIn('x.author_id', out.slice(i, i + 1000));
     if (cursor) qb.andWhere((b) => b.where('x.published_at', '<', cursor.t).orWhere((e) => e.where('x.published_at', '=', cursor.t).andWhere('x.id', '<', cursor.id)));
@@ -406,15 +435,19 @@ export class FeedService {
     return this.page(sc, q, (qb) => void qb.where('x.group_id', groupId));
   }
 
-  /** A person's posts that the caller may read; someone in a block with the caller, or sharing no workspace, is unknown. */
-  async user(p: Principal, userId: string, q: PageQuery) {
+  /**
+   * A person's posts that the caller may read; someone in a block with the caller, or sharing no workspace, is unknown.
+   * 1.6.0 (B-4901): `unlisted` lists the caller's own unlisted posts with the rest (only on their own page), so they can
+   * find their links; nobody else's unlisted posts are ever listed.
+   */
+  async user(p: Principal, userId: string, q: PageQuery & { unlisted?: boolean | undefined }) {
     const social = this.s().social;
     if (userId !== p.userId) {
       if (await social.isBlocked(p.tenantId, p.userId, userId)) throw notFound('User');
       if (!(await social.sharedWorkspaces(p, userId)).length) throw notFound('User');
     }
     const sc = await this.scope(p);
-    return this.page(sc, q, (qb) => void qb.where('x.author_id', userId));
+    return this.page(sc, q, (qb) => void qb.where('x.author_id', userId), new Set(), { ownUnlisted: !!q.unlisted && userId === p.userId });
   }
 
   /** The posts of the people on one of the caller's lists (B-2702). */
@@ -522,7 +555,7 @@ export class FeedService {
     return { ids, label };
   }
 
-  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined; source?: PostSource | undefined }) {
+  async createPost(ctx: Ctx, input: { workspaceId?: string | undefined; groupId?: string | undefined; body?: string | undefined; media?: string[] | undefined; label?: Label | undefined; source?: PostSource | undefined; visibility?: Visibility | undefined }) {
     const s = this.s();
     const p = ctx.p;
     const sc = await this.scope(p);
@@ -537,13 +570,46 @@ export class FeedService {
     const id = ulid();
     const g = body ? await this.guard(p, { id, workspaceId: t.workspaceId, groupId: t.groupId, label }, body, 'post', true) : { text: '', hold: null, action: 'allow' };
     const now = Date.now();
-    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null, ...(input.source ? { source_kind: input.source.kind.slice(0, 40), source_id: input.source.id.slice(0, 64) } : {}) };
+    const row: PostRow = { id, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: g.text ? await s.keys.seal(p.tenantId, g.text, `feed-post:${id}`) : null, label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null, visibility: input.visibility ?? 'workspace', ...(input.source ? { source_kind: input.source.kind.slice(0, 40), source_id: input.source.id.slice(0, 64) } : {}) };
     await this.db.transaction(async (trx) => {
       await trx('feed_posts').insert(row);
       if (m.ids.length) await trx('feed_post_media').insert(m.ids.map((fileId, i) => ({ post_id: id, tenant_id: p.tenantId, file_id: fileId, position: i })));
     });
     if (g.hold) await this.hold(ctx, row, g.text, g.hold);
-    else await this.published(ctx, row, g.text, { guardrails: g.action, media: m.ids.length });
+    else await this.published(ctx, row, g.text, { guardrails: g.action, media: m.ids.length, visibility: row.visibility });
+    return (await this.views(sc, [row]))[0]!;
+  }
+
+  /**
+   * 1.6.0 (B-4901): quotes a post with a comment, as a new post in a workspace or group the caller may post in (the
+   * quoted post's own place by default). The quote is labelled at least as high as the quoted post and must fit under
+   * its target's ceiling; a quote of an unlisted post is unlisted.
+   */
+  async quote(ctx: Ctx, id: string, input: { body: string; workspaceId?: string | undefined; groupId?: string | undefined; media?: string[] | undefined; label?: Label | undefined; visibility?: Visibility | undefined }) {
+    const s = this.s();
+    const p = ctx.p;
+    const sc = await this.scope(p);
+    const orig = await this.live(sc, id, { reading: true });
+    const body = input.body.trim();
+    if (!body) throw new HttpProblem(422, 'Empty quote', 'A quote carries a comment of its own; to share a post as it is, repost it.');
+    this.checkLength(body);
+    const where = input.workspaceId || input.groupId ? input : orig.group_id && sc.groups.get(orig.group_id)?.post ? { groupId: orig.group_id } : { workspaceId: orig.workspace_id };
+    const t = await this.target(sc, { ...where, label: input.label });
+    const m = await this.media(p, input.media ?? [], t.workspaceId);
+    const label = highest(highest(t.label, m.label), orig.label);
+    if (labelRank(label) > labelRank(t.ceiling)) throw new HttpProblem(422, 'Label above the ceiling', `The quoted post is ${orig.label}; ${t.groupId ? 'the group' : 'the workspace'} allows posts up to ${t.ceiling}, so the quote cannot go there.`, { extensions: { step: 'label', quoted: orig.label, ceiling: t.ceiling } });
+    if (!clears(p.clearance, label)) throw forbidden(`The quote would be ${label}, above your clearance of ${p.clearance}.`, { step: 'clearance' });
+    const visibility: Visibility = orig.visibility === 'unlisted' ? 'unlisted' : (input.visibility ?? 'workspace');
+    const newId = ulid();
+    const g = await this.guard(p, { id: newId, workspaceId: t.workspaceId, groupId: t.groupId, label }, body, 'post', true);
+    const now = Date.now();
+    const row: PostRow = { id: newId, tenant_id: p.tenantId, workspace_id: t.workspaceId, group_id: t.groupId, author_id: p.userId, body: await s.keys.seal(p.tenantId, g.text, `feed-post:${newId}`), label, state: g.hold ? 'held' : 'published', repost_of: null, repost_key: null, flag_id: null, created_at: now, updated_at: now, published_at: g.hold ? null : now, edited_at: null, visibility, quote_of: orig.id };
+    await this.db.transaction(async (trx) => {
+      await trx('feed_posts').insert(row);
+      if (m.ids.length) await trx('feed_post_media').insert(m.ids.map((fileId, i) => ({ post_id: newId, tenant_id: p.tenantId, file_id: fileId, position: i })));
+    });
+    if (g.hold) await this.hold(ctx, row, g.text, g.hold);
+    else await this.published(ctx, row, g.text, { guardrails: g.action, media: m.ids.length, visibility, quoteOf: orig.id });
     return (await this.views(sc, [row]))[0]!;
   }
 
@@ -577,14 +643,15 @@ export class FeedService {
   /** What follows publishing: hashtags, the audit entry, the catalogue event and the live feeds. */
   private async published(ctx: Ctx | null, x: PostRow, text: string, detail: Record<string, unknown>): Promise<void> {
     await this.indexTags(x, text);
-    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}) }, { length: text.length, ...detail, ...(x.source_kind ? { source: { kind: x.source_kind, id: x.source_id } } : {}) }, x.label);
-    this.event(x, 'post.created', x.author_id);
+    if (ctx) await this.audit(ctx, 'feed.post.created', { post: x.id, workspace: x.workspace_id, group: x.group_id, ...(x.repost_of ? { repostOf: x.repost_of } : {}), ...(x.quote_of ? { quoteOf: x.quote_of } : {}) }, { length: text.length, ...detail, ...(x.source_kind ? { source: { kind: x.source_kind, id: x.source_id } } : {}) }, x.label);
+    this.event(x, 'post.created', x.author_id, { visibility: x.visibility ?? 'workspace', ...(x.quote_of ? { quoteOf: x.quote_of } : {}) });
     await this.deliver(x, 'feed.post.created');
   }
 
   private async indexTags(x: PostRow, text: string): Promise<void> {
     await this.db('feed_hashtags').where({ post_id: x.id }).delete();
-    const tags = x.state === 'published' ? extractTags(text) : [];
+    // 1.6.0 (B-4901): an unlisted post is in no tag feed and never trends.
+    const tags = x.state === 'published' && x.visibility !== 'unlisted' ? extractTags(text) : [];
     const rows = tags.map((tag) => ({ post_id: x.id, tenant_id: x.tenant_id, workspace_id: x.workspace_id, tag, published_at: x.published_at ?? Date.now() }));
     if (!rows.length) return;
     try {
@@ -612,6 +679,8 @@ export class FeedService {
    */
   private async deliver(x: PostRow, event: 'feed.post.created' | 'feed.post.updated' | 'feed.post.deleted'): Promise<void> {
     const s = this.s();
+    // 1.6.0 (B-4901): no feed shows an unlisted post, so no feed room hears of it.
+    if (x.visibility === 'unlisted') return;
     const data = { postId: x.id, authorId: x.author_id, workspaceId: x.workspace_id, groupId: x.group_id, repostOf: x.repost_of };
     const below = await this.below(x.tenant_id, x.label);
     await s.social.emitToRoom({ tenantId: x.tenant_id, kind: 'feed', id: x.group_id ?? x.workspace_id, event, data, exceptUserId: x.author_id, ...(below.length ? { exceptUserIds: below } : {}) }, x.author_id);
@@ -679,13 +748,18 @@ export class FeedService {
     return { postId: x.id, state };
   }
 
-  async updatePost(ctx: Ctx, id: string, body: string) {
+  async updatePost(ctx: Ctx, id: string, body: string | undefined, visibility?: Visibility) {
     const s = this.s();
     const p = ctx.p;
     const sc = await this.scope(p);
     const x = await this.visible(sc, id);
     if (x.author_id !== p.userId) throw forbidden('Only the author edits a post.', { step: 'owner' });
     if (x.state !== 'published') throw conflict(`The post is ${x.state}.`);
+    if (visibility !== undefined && visibility !== x.visibility) {
+      await this.setVisibility(ctx, x, visibility);
+      x.visibility = visibility;
+    }
+    if (body === undefined) return (await this.views(sc, [x]))[0]!;
     if (x.repost_of && x.body == null) throw conflict('A plain repost has no text to edit.');
     const text = body.trim();
     if (!text && !(await this.db('feed_post_media').where({ post_id: x.id }).first('file_id'))) throw new HttpProblem(422, 'Empty post', 'Write something or delete the post.');
@@ -702,6 +776,23 @@ export class FeedService {
     this.event(after, 'post.updated', p.userId);
     await this.deliver(after, 'feed.post.updated');
     return (await this.views(sc, [after]))[0]!;
+  }
+
+  /** 1.6.0 (B-4901): moves a published post in or out of the feeds. */
+  private async setVisibility(ctx: Ctx, x: PostRow, visibility: Visibility): Promise<void> {
+    if (x.repost_of && visibility === 'unlisted') throw conflict('A repost is a feed entry; delete it instead of unlisting it.');
+    const quoted = x.quote_of ? await this.row(x.tenant_id, x.quote_of) : null;
+    if (quoted?.visibility === 'unlisted' && visibility !== 'unlisted') throw conflict('This quotes an unlisted post, so it stays unlisted.');
+    const n = await this.db('feed_posts').where({ id: x.id, state: 'published' }).update({ visibility, updated_at: Date.now() });
+    if (!n) throw conflict('The post changed meanwhile.');
+    const before = x.visibility ?? 'workspace';
+    const after: PostRow = { ...x, visibility };
+    await this.indexTags(after, (await this.open(x.tenant_id, x.body, `feed-post:${x.id}`)) ?? '');
+    await this.audit(ctx, 'feed.post.visibility', { post: x.id, workspace: x.workspace_id, group: x.group_id }, { from: before, to: visibility }, x.label);
+    this.event(after, 'post.updated', ctx.p.userId, { visibility });
+    // Leaving the feeds reads as a removal there; joining them as a new post.
+    if (visibility === 'unlisted') await this.deliver({ ...x, visibility: before }, 'feed.post.deleted');
+    else if (before === 'unlisted') await this.deliver(after, 'feed.post.created');
   }
 
   async deletePost(ctx: Ctx, id: string) {
@@ -733,6 +824,7 @@ export class FeedService {
     const sc = await this.scope(p);
     let orig = await this.live(sc, id);
     if (orig.repost_of && orig.body == null) orig = await this.live(sc, orig.repost_of);
+    if (orig.visibility === 'unlisted') throw conflict('An unlisted post is shared by its link and stays out of feeds, so it cannot be reposted. Quote it instead: the quote is unlisted too.');
     if (orig.group_id && !sc.groups.get(orig.group_id)?.post) throw forbidden('Join the group to repost in it.', { step: 'group-role' });
     const text = body?.trim() ?? '';
     this.checkLength(text);
@@ -815,8 +907,9 @@ export class FeedService {
     const row: CommentRow = { id, tenant_id: p.tenantId, post_id: x.id, parent_id: input.parentId ?? null, author_id: p.userId, body: await s.keys.seal(p.tenantId, g.text, `feed-comment:${id}`), label: x.label, state: 'published', created_at: now, updated_at: now };
     await this.db('feed_comments').insert(row);
     await this.audit(ctx, 'feed.comment.created', { post: x.id, comment: id, ...(row.parent_id ? { parent: row.parent_id } : {}) }, { length: g.text.length, guardrails: g.action }, x.label);
-    const below = await this.below(x.tenant_id, x.label);
-    await s.social.emitToRoom({ tenantId: x.tenant_id, kind: 'feed', id: x.group_id ?? x.workspace_id, event: 'feed.comment.created', data: { postId: x.id, commentId: id, parentId: row.parent_id, authorId: p.userId }, exceptUserId: p.userId, ...(below.length ? { exceptUserIds: below } : {}) }, p.userId);
+    // 1.6.0 (B-4901): an unlisted post's comments are not announced in the feed room it is absent from.
+    const below = x.visibility === 'unlisted' ? [] : await this.below(x.tenant_id, x.label);
+    if (x.visibility !== 'unlisted') await s.social.emitToRoom({ tenantId: x.tenant_id, kind: 'feed', id: x.group_id ?? x.workspace_id, event: 'feed.comment.created', data: { postId: x.id, commentId: id, parentId: row.parent_id, authorId: p.userId }, exceptUserId: p.userId, ...(below.length ? { exceptUserIds: below } : {}) }, p.userId);
     return (await this.commentViews(p.tenantId, [row]))[0]!;
   }
 

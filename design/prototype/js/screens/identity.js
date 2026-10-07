@@ -71,6 +71,20 @@
     { name: 'Claude', clientId: 'c_5a64c298', type: 'public', redirect: 'https://claude.ai/api/mcp/auth_callback', scopes: 'tools:invoke agents:run inference:invoke knowledge:read records:read records:write', used: 'today 10:12', created: '2 Oct 2026' },
     { name: 'MCP Inspector', clientId: 'c_0be41c77', type: 'public', redirect: 'http://localhost:6274/oauth/callback', scopes: 'records:read', used: 'never', created: '6 Oct 2026' }
   ];
+  // 1.6.0 (B-7201, B-7202): a SCIM 2.0 store, pushed to by Entra ID at /scim/v2, with its tokens and recent changes
+  const SCIM0 = {
+    id: 'scim-entra', name: 'Entra ID provisioning', enabled: true, baseUrl: 'https://ai.northwind.local/scim/v2', users: 412, activeUsers: 398, groups: 23, groupMappings: 6, lastChangeAt: '19 Sep 2026, 13:42', signInStores: ['AD FS, corp.northwind.local'], defaultRoles: [],
+    tokens: [
+      { id: 'st-3', name: 'Entra ID connector', prefix: '3f9a1c0b7d21', state: 'active', createdAt: '2 Sep 2026', expiresAt: '2 Sep 2027', lastUsedAt: '2 min ago', lastUsedIp: '10.40.2.18' },
+      { id: 'st-1', name: 'Okta pilot', prefix: '91be04d2c6aa', state: 'revoked', createdAt: '12 Jun 2026', expiresAt: '12 Jun 2027', lastUsedAt: '30 Jun 2026', lastUsedIp: '10.40.2.77' }
+    ],
+    changes: [
+      { title: 'scim.user.deactivated: d.okonkwo', text: 'active false from Entra ID: 2 sessions, 1 OAuth grant, 1 API key and 1 app password ended', meta: '13:42', tone: 'danger' },
+      { title: 'scim.user.access.changed: k.asante', text: 'Added to Finance Analysts: knowledge-curator, confidential, workspace Finance Ops; sessions ended', meta: '13:40', tone: 'info' },
+      { title: 'scim.group.patched: Finance Analysts', text: '1 member added, 1 removed', meta: '13:40', tone: '' },
+      { title: 'scim.user.created: r.steiner@northwind.local', text: 'Default roles none: waits for a group', meta: '11:05', tone: 'ok' }
+    ]
+  };
   const SAMPLE_CSV = 'kind,username,display_name,email,roles,clearance,workspace,provider,group\nuser,dokonkwo,Dami Okonkwo,d.okonkwo@northwind.local,member;flag-reviewer,confidential,,,\nmembership,dokonkwo,,,,,finance-ops,,\nmapping,,,,knowledge-curator,internal,,OpenLDAP,cn=kb-curators\nuser,tweber,Tomasz Weber,t.weber@northwind.local,member,internal,,,';
 
   const SESSIONS = [
@@ -81,6 +95,22 @@
   ];
 
   const jwks = (keys) => JSON.stringify({ keys: keys.filter((k) => !/removed/.test(k.rotates)).map((k) => ({ kty: 'EC', crv: 'P-256', use: 'sig', alg: k.alg, kid: k.kid, x: k.kid === 'k-2026-07' ? 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU' : k.kid === 'k-2026-04' ? 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0' : 'WbL0aQ8XdYvPq8j2hCnJf1lyuY3fNc6h8gJ1F2pKq7c', y: k.kid === 'k-2026-07' ? 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0' : k.kid === 'k-2026-04' ? '4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM' : 'p9c2Hn0yQ4mR7dJxK1sVb3wFzLqT8uE6aC5oN2iG4kY' })) }, null, 2);
+
+  // 1.6.0 (B-7201, B-7202): SCIM provisioning in the user stores and federation tab.
+  function scimPanel(st) {
+    const sc = st.scim;
+    const live = sc.tokens.filter((t) => t.state === 'active');
+    const shown = st.scimShown ? UI.notice('<b>Copy the token now: it is shown once.</b> Paste it with the base URL into the provisioning settings of ' + esc(st.scimShown.name) + '.<div class="codebox mono" style="margin-top:6px;word-break:break-all" data-scimtoken>' + esc(st.scimShown.token) + '</div><div class="muted" style="font-size:12px">Expires ' + esc(st.scimShown.expiresAt) + '. We keep only its prefix and a keyed hash.</div>', 'accent', UI.btn('Copy token', { size: 'sm', attrs: 'data-scimcopy' }) + UI.btn('Done', { size: 'sm', kind: 'ghost', attrs: 'data-scimdone' })) : '';
+    const deprov = st.scimDeprovisioned ? UI.notice('<b>d.okonkwo was deprovisioned by Entra ID</b> at 13:42 (active false). The account is disabled; 2 sessions, 1 OAuth grant, 1 API key and 1 app password ended within the same request. A later active true re-enables it; an administrator\'s own disable stays.', 'danger', UI.btn('Open audit', { size: 'sm', kind: 'ghost', attrs: 'data-scimaudit' })) : '';
+    const tokens = UI.table(['Token', 'Prefix', 'State', 'Last used', 'Expires', ''], sc.tokens.map((t) => ['<b>' + esc(t.name) + '</b><div class="muted" style="font-size:12px">made ' + esc(t.createdAt) + '</div>', '<span class="mono">exai_scim1_' + esc(t.prefix) + '_…</span>', UI.pill(t.state, t.state === 'active' ? 'ok' : t.state === 'revoked' ? '' : 'warn'), esc(t.lastUsedAt) + (t.lastUsedIp ? '<div class="muted mono" style="font-size:12px">' + esc(t.lastUsedIp) + '</div>' : ''), esc(t.expiresAt), t.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'danger', attrs: 'data-scimrevoke="' + esc(t.id) + '" aria-label="Revoke ' + esc(t.name) + '"' }) : '']), { clickable: false, minWidth: '640px', emptyTitle: 'No SCIM tokens', emptyText: 'Make a token for the identity provider that provisions this store.' });
+    return '<section class="panel" aria-labelledby="identity-scim-h"><div class="hstack wrap"><h2 class="eyebrow" id="identity-scim-h" style="margin:0">SCIM provisioning: ' + esc(sc.name) + '</h2>' + UI.pill(sc.enabled ? 'enabled' : 'disabled', sc.enabled ? 'ok' : '') + '<span class="right hstack gap6">' + UI.btn('Re-apply group mappings', { size: 'sm', kind: 'ghost', attrs: 'data-scimreapply' }) + UI.btn('New SCIM token', { size: 'sm', icon: 'key', kind: 'primary', attrs: 'data-scimtokennew' }) + '</span></div>'
+      + '<div class="fg2" style="font-size:13px;margin:6px 0">Entra ID or Okta pushes users and groups here (SCIM 2.0, RFC 7643 and 7644): create, replace, patch, delete, filters and paging. The store takes no passwords; its users sign in through the stores it names. Group mappings with this store turn SCIM groups into roles, clearance and workspaces.</div>'
+      + shown + deprov
+      + UI.kv([['Base URL', '<span class="mono">' + esc(sc.baseUrl) + '</span> ' + UI.btn('Copy', { size: 'xs', kind: 'ghost', attrs: 'data-copy="' + esc(sc.baseUrl) + '" aria-label="Copy the SCIM base URL"' })], ['Users', sc.activeUsers + ' active of ' + sc.users], ['Groups', sc.groups + ', ' + sc.groupMappings + ' group mappings name them'], ['Sign in through', sc.signInStores.map(esc).join(', ') || 'none named: its users cannot sign in yet'], ['Last change', esc(sc.lastChangeAt)], ['Live tokens', String(live.length)]], 2)
+      + tokens
+      + '<div class="eyebrow" style="margin-top:10px">Recent SCIM changes</div>' + UI.timeline(sc.changes)
+      + '</section>';
+  }
 
   App.register({
     id: 'identity', title: 'Identity', section: 'admin', summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings, the MCP server (publication, self-registration)',
@@ -96,6 +126,8 @@
       { title: 'Sign-up pending approval', tone: 'warn', text: 'With the approval mode, a new account is created disabled and identity admins get a notice. Approve activates it; reject keeps it disabled and tells the user by email.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'signups'; ctx.rerender(); } },
       { title: 'MFA grace restarted', tone: 'info', text: 'Widening the MFA requirement restarts the grace period: covered accounts sign in without a factor for graceDays, then enrol first. Audited with graceRestarted.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'policy'; ctx.state.graceRestarted = true; ctx.rerender(); } },
       { title: 'Import dry run with conflicts', tone: 'warn', text: 'A dry run plans and reports every row; conflicts (an account linked to another store, a reused address) and errors (a role the importer may not grant) change nothing.', apply(ctx) { ctx.state.tab = 'imports'; ctx.state.importSel = 'imp-13'; ctx.rerender(); } },
+      { title: 'SCIM token shown once', tone: 'info', text: 'A new SCIM token is shown once, with the base URL to paste into Entra ID or Okta; afterwards only its prefix and last use are listed.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.scimShown = { name: 'Entra ID connector', token: 'exai_scim1_5c2e9d40a1f3_Qm7wT2xK9pLr4ZcV8nB1sYdF6hJ3gA0eUiOqWtXyRkM', expiresAt: '19 Sep 2027' }; ctx.rerender(); } },
+      { title: 'Deprovisioned by SCIM', tone: 'danger', text: 'Entra ID set active to false: the user is disabled and their sessions, OAuth grants, API keys and app passwords end within one request. Audited as scim.user.deactivated.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.scimDeprovisioned = true; ctx.rerender(); } },
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7102): the MCP server.
       { title: 'MCP server published', tone: 'ok', text: 'A workspace publishes its MCP server: clients connect to its URL, sign in through this issuer and see the groups it publishes, filtered by each person\'s roles and the label.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpJust = 'Finance Ops'; ctx.rerender(); } },
@@ -104,7 +136,7 @@
     ],
     render(root, ctx) {
       const st = ctx.state;
-      st.tab = st.tab || 'clients'; st.client = st.client || 'svc-close-bot'; st.revealed = st.revealed || {}; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.clients = st.clients || CLIENTS.map((c) => Object.assign({}, c)); st.saml = st.saml || SAML.slice(); st.upstream = st.upstream || UPSTREAM.slice(); st.revoked = st.revoked || {}; st.q = st.q || '';
+      st.tab = st.tab || 'clients'; st.client = st.client || 'svc-close-bot'; st.revealed = st.revealed || {}; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.clients = st.clients || CLIENTS.map((c) => Object.assign({}, c)); st.saml = st.saml || SAML.slice(); st.upstream = st.upstream || UPSTREAM.slice(); st.scim = st.scim || JSON.parse(JSON.stringify(SCIM0)); st.revoked = st.revoked || {}; st.q = st.q || '';
       if (ctx.params.client) { const c = st.clients.find((x) => x.name === ctx.params.client || x.id === ctx.params.client); if (c) { st.client = c.id; st.tab = 'clients'; } }
       if (ctx.params.tab) st.tab = ctx.params.tab;
       st.policy = st.policy || JSON.parse(JSON.stringify(POLICY0)); st.policyView = st.policyView || 'policy'; st.signups = st.signups || SIGNUPS0.map((x) => Object.assign({}, x)); st.invites = st.invites || INVITES0.map((x) => Object.assign({}, x)); st.imports = st.imports || IMPORTS0.map((x) => Object.assign({}, x)); st.dids = st.dids || DIDS0.map((x) => Object.assign({}, x)); st.signupFilter = st.signupFilter || 'pending';
@@ -138,6 +170,7 @@
         body = '<div class="hstack"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right">' + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
           + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by', ''], st.upstream.map((u, i) => ['<b>' + esc(u.name) + '</b>', /^(github|atproto)$/.test(u.protocol) ? UI.pill(u.protocol, 'outline') : esc(u.protocol), esc(u.reach), UI.pill(u.status), esc(u.used), u.detail ? UI.btn('Settings', { size: 'xs', kind: 'ghost', attrs: 'data-storedetail="' + i + '"' }) : '']), { clickable: false, minWidth: '720px' })
           + UI.notice('Since 1.4.0 the chain also takes a <b>GitHub</b> store (OAuth app, allowed organisations, verified primary address only) and an <b>AT-Protocol</b> store (a bound DID signs in as its user; others are provisioned just in time with the handle as username and the DID as their only group). Both pass the service URL checks when saved and at every connection.', 'info')
+          + scimPanel(st)
           + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', 'HTTP/ai.northwind.local keytab, validated against the KDC'], ['LDAP bind', 'LDAPS to OpenLDAP; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles'], ['Device flow', 'RFC 8628 for the CLI, Phase 5'], ['Fallback order', 'Kerberos, then password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
           + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers in the directory zone or over a partner link can be upstream.', 'info') + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
       } else if (st.tab === 'policy') {
@@ -353,6 +386,18 @@
       ctx.on('click', '[data-rotatekey]', rotateKey);
       ctx.on('click', '[data-saml]', samlImport);
       ctx.on('click', '[data-upstream]', upstreamModal);
+      // ----- SCIM (1.6.0, B-7201) -----
+      ctx.on('click', '[data-scimtokennew]', () => ctx.modal({
+        title: 'New SCIM token',
+        body: '<div class="formgrid">' + UI.field('Name', UI.input('Entra ID connector', { attrs: 'data-scimname aria-label="Token name"' }), 'Who uses it, so the list says which provider it is.') + UI.field('Expires after', UI.select(['30 days', '90 days', '365 days'], '365 days', 'data-scimdays aria-label="Expires after"'), 'At most IDENTITY_SCIM_TOKEN_MAX_DAYS (365) on this server.') + '</div>' + UI.notice('The token is shown once. It reads and writes this store\'s users and groups only; holders of identity:manage revoke it here.', 'info'),
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Make token', { kind: 'primary', attrs: 'data-close data-scimmake' }),
+        onMount(m) { m.querySelector('[data-scimmake]').addEventListener('click', () => { const name = m.querySelector('[data-scimname]').value.trim() || 'SCIM token'; const days = m.querySelector('[data-scimdays]').value; st.scim.tokens.unshift({ id: 'st-' + Date.now(), name, prefix: '5c2e9d40a1f3', state: 'active', createdAt: '19 Sep 2026', expiresAt: days === '30 days' ? '19 Oct 2026' : days === '90 days' ? '18 Dec 2026' : '19 Sep 2027', lastUsedAt: 'never', lastUsedIp: null }); st.scimShown = { name, token: 'exai_scim1_5c2e9d40a1f3_Qm7wT2xK9pLr4ZcV8nB1sYdF6hJ3gA0eUiOqWtXyRkM', expiresAt: st.scim.tokens[0].expiresAt }; ctx.rerender(); ctx.toast('SCIM token made. Copy it now: it is shown once.', 'ok'); }); }
+      }));
+      ctx.on('click', '[data-scimcopy]', () => { st.scimShown = null; ctx.rerender(); ctx.toast('Token copied. It is no longer shown here.', 'ok'); });
+      ctx.on('click', '[data-scimdone]', () => { st.scimShown = null; ctx.rerender(); });
+      ctx.on('click', '[data-scimrevoke]', async (e, t) => { const tok = st.scim.tokens.find((x) => x.id === t.dataset.scimrevoke); const ok = await ctx.confirm({ title: 'Revoke ' + esc(tok.name) + '?', tag: 'stops provisioning', tone: 'danger', body: '<p class="fg2" style="margin:0">The provider\'s next request is refused with 401. Users and groups already provisioned stay as they are.</p>', kv: [['Prefix', '<span class="mono">' + esc(tok.prefix) + '</span>'], ['Last used', esc(tok.lastUsedAt)]], ok: 'Revoke' }); if (!ok) return; tok.state = 'revoked'; ctx.rerender(); ctx.toast(esc(tok.name) + ' revoked. Audited as scim.token.revoked.', 'warn'); });
+      ctx.on('click', '[data-scimreapply]', async () => { const ok = await ctx.confirm({ title: 'Re-apply group mappings', tone: 'info', body: '<p class="fg2" style="margin:0">Recomputes roles, clearance and workspaces for every user of ' + esc(st.scim.name) + ' from their SCIM groups, as a job. Anyone whose access changes is signed out once.</p>', kv: [['Users', String(st.scim.users)], ['Group mappings', String(st.scim.groupMappings)]], ok: 'Re-apply' }); if (!ok) return; st.scim.changes.unshift({ title: 'scim.mappings.reapplied', text: 'Job identity.scim.reapply queued for ' + st.scim.users + ' users', meta: 'now', tone: 'info' }); ctx.rerender(); ctx.toast('Re-applying group mappings to ' + st.scim.users + ' users. Follow it under Jobs.', 'ok'); });
+      ctx.on('click', '[data-scimaudit]', () => ctx.navigate('usage-audit', { tab: 'audit', q: 'scim.user.deactivated' }));
       ctx.on('click', '[data-testlogin]', testLogin);
       ctx.on('click', '[data-samlenable]', (e, t) => { const s = st.saml[+t.dataset.samlenable]; ctx.confirm({ title: 'Enable ' + esc(s.name), tone: 'info', body: '<p class="fg2" style="margin:0">Its signing certificate expired on 1 Aug 2026. Upload fresh metadata first, or enable with signed requests off.</p>', ok: 'Enable anyway' }).then((ok) => { if (!ok) return; s.status = 'active'; s.cert = 'expired 1 Aug 2026, unsigned requests'; ctx.rerender(); ctx.toast(esc(s.name) + ' enabled. Audit event written.', 'warn'); }); });
       ctx.on('click', '[data-copysecret]', () => { st.revealed[client.id] = '19 Sep 2026, 13:51'; ctx.rerender(); ctx.toast('Secret copied. It is no longer shown here.', 'ok'); });

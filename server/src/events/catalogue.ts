@@ -110,7 +110,9 @@ const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folde
 const group = (extra: Record<string, JsonSchema> = {}) => obj({ group: id26, workspace: id26, actor: nullable(id26), ...extra });
 const channel = (extra: Record<string, JsonSchema> = {}) => obj({ channel: id26, session: id26, workspace: id26, ...extra });
 const message = (extra: Record<string, JsonSchema> = {}) => obj({ conversation: id26, message: id26, actor: nullable(id26), ...extra });
-const post = (extra: Record<string, JsonSchema> = {}) => obj({ post: id26, feed: { type: 'string', enum: ['workspace', 'group', 'user'] }, workspace: id26, group: nullable(id26), actor: nullable(id26), ...extra });
+const POST_BASE = ['post', 'feed', 'workspace', 'group', 'actor'];
+/** 1.6.0 (B-4901): `visibility` and `quoteOf` are optional (added in 1.6.0; older consumers ignore them). */
+const post = (extra: Record<string, JsonSchema> = {}) => obj({ post: id26, feed: { type: 'string', enum: ['workspace', 'group', 'user'] }, workspace: id26, group: nullable(id26), actor: nullable(id26), visibility: { type: 'string', enum: ['public', 'workspace', 'unlisted'] }, quoteOf: id26, ...extra }, [...POST_BASE, ...Object.keys(extra)]);
 
 const flagActions: [string, string][] = [
   ['created', 'A rule, a fail-open decision or a report raised a flag'],

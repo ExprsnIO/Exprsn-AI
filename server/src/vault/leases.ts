@@ -11,8 +11,10 @@ import { leasePassword, leaseUsername, SCHEMA_NAME, type DbAdmin, type DbAdminFa
 import { databasePolicyPath } from './policy.js';
 
 /*
- * Database leases (B-1704): short-lived accounts on a tenant's own PostgreSQL or MySQL server, made by the built-in
- * engines when OpenBao is not the source (B-416 covers OpenBao for data connections).
+ * Database leases (B-1704): short-lived accounts on a tenant's own PostgreSQL or MySQL server, and since 1.6.0
+ * (B-4802) MongoDB, made by the built-in engines when OpenBao is not the source (B-416 covers OpenBao for data
+ * connections). A MongoDB engine's `database` is where leased users are created and authenticate (default `admin`);
+ * a MongoDB role names the databases (`schemas`) its users get `read` or `readWrite` on.
  *
  * - An engine is registered by a holder of `connections:manage`, in a zone whose ceiling covers the engine's label
  *   (the zone checks of B-415), with an admin login whose password is sealed with the tenant key or is a `vault:`
@@ -292,6 +294,8 @@ export class DatabaseLeases {
   async registerEngine(p: Principal, input: EngineInput, ctx: Ctx = {}) {
     if (!!input.adminPassword === !!input.adminPasswordRef) throw badRequest('Give the admin password, or a vault reference to it (adminPasswordRef), not both.');
     if (input.dialect === 'mysql' && !input.database) throw badRequest('A MySQL engine names the database its roles are granted on by default.');
+    // 1.6.0 (B-4802): a MongoDB engine creates its users in `database`, `admin` unless named.
+    if (input.dialect === 'mongodb') input = { ...input, database: input.database || 'admin' };
     this.checkTtls(input.defaultTtlSeconds, input.maxTtlSeconds);
     try {
       await this.checkPlacement(p, input.zone, input.label);
@@ -394,8 +398,10 @@ export class DatabaseLeases {
 
   async putRole(p: Principal, engineName: string, roleName: string, input: RoleInput, ctx: Ctx = {}) {
     const e = await this.engineRow(p.tenantId, engineName, p.clearance);
+    if (e.dialect === 'mongodb' && !input.schemas?.length && (!e.database || e.database === 'admin')) throw badRequest('A MongoDB role names the databases it reads or writes (schemas).');
     const schemas = [...new Set(input.schemas?.length ? input.schemas : e.dialect === 'postgres' ? ['public'] : [e.database!])];
     if (schemas.some((x) => !SCHEMA_NAME.test(x))) throw badRequest('Schema and database names are letters, digits, _, $ and -, starting with a letter or _.');
+    if (e.dialect === 'mongodb' && schemas.some((x) => x.includes('$') || ['admin', 'local', 'config'].includes(x))) throw badRequest('A MongoDB role is granted on application databases: not admin, local or config, and no $ in the name.');
     const maxTtl = input.maxTtlSeconds ?? e.max_ttl_s;
     const defTtl = input.defaultTtlSeconds ?? Math.min(e.default_ttl_s, maxTtl);
     if (maxTtl > e.max_ttl_s) throw badRequest(`A role's maximum TTL cannot pass the engine's (${e.max_ttl_s} seconds).`);

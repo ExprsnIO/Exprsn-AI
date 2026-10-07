@@ -4826,3 +4826,111 @@ audited `mcp.oauth.expired`. `DELETE /api/mcp/servers/:id/token` revokes the ref
 authorization server (RFC 7009, when it names a revocation endpoint) before deleting them; the audit entry
 `mcp.token.removed` records `revoked`. Metadata, registration, token and revocation requests go through the same
 internal-hosts dispatcher as MCP calls (`MCP_ALLOWED_HOSTS`); only the browser visits the authorization endpoint.
+
+## Sprint 37c (1.6.0): SCIM 2.0, vault sharing, MongoDB leases, quote posts and visibility (B-7201, B-7202, B-4801, B-4802, B-4901)
+
+Migration `039c_scim_vault_posts`. New settings: `VAULT_SHARE_MAX_DAYS` (0: shares may be open-ended),
+`IDENTITY_SCIM_MAX_RESULTS` (200), `IDENTITY_SCIM_RATE_PER_MINUTE` (1200) and `IDENTITY_SCIM_TOKEN_MAX_DAYS` (365; 0:
+open-ended). Jobs: `identity.scim.reapply` and `vault.shares.expire` (every 5 minutes).
+
+### SCIM 2.0 provisioning (B-7201, B-7202)
+
+A **SCIM store** is a user store of kind `scim` in the tenant's chain (`POST /api/admin/identity-providers` with
+`kind: scim` and `config: {signInStores?: [store id], defaultRoles?, defaultClearance?}`). An identity provider (Entra
+ID, Okta) pushes users and groups to it at `/scim/v2` with a SCIM token; the store takes no passwords, and its users
+sign in through the upstream OIDC, SAML or GitHub stores named in `signInStores` (a sign-in there with the user's
+username signs in as the SCIM user, with the roles its SCIM groups give; `signInStores` must name upstream stores of
+the tenant, else `400`). Directory sync skips SCIM stores. Deleting the store drops its SCIM records and revokes its
+tokens; its users stay (as for any store).
+
+Tokens, under Identity (`identity:manage`):
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/identity-providers/:id/scim` | `{store: {id, name, enabled, config}, baseUrl, users, activeUsers, groups, groupMappings, lastChangeAt, tokens: [Token]}`. A Token is `{id, name, prefix, state: active \| expired \| revoked, createdBy, createdAt, expiresAt, lastUsedAt, lastUsedIp, revokedAt}`. `400` for a store that is not a SCIM store |
+| `POST /api/admin/identity-providers/:id/scim/tokens` `{name, expiresInDays?}` | `201` Token plus `token` (`exai_scim1_<prefix>_<secret>`, shown once; we keep the prefix and an HMAC) and `baseUrl`. At most `IDENTITY_SCIM_TOKEN_MAX_DAYS` (the default expiry). Audited `scim.token.created` |
+| `DELETE /api/admin/identity-providers/:id/scim/tokens/:tokenId` | The Token, revoked: the provider's next request is `401`. Audited `scim.token.revoked` |
+| `POST /api/admin/identity-providers/:id/scim/reapply` | `202 {jobId}`: `identity.scim.reapply` recomputes every user's mapped roles, workspaces and clearance from their SCIM groups (after group mappings changed). Audited `scim.mappings.reapplied` |
+
+The SCIM API (RFC 7644), outside `/api`, authenticated by `Authorization: Bearer <SCIM token>` only. Bodies are
+`application/scim+json` (or `application/json`) up to 1 MB; answers are `application/scim+json`; errors are the SCIM
+error document `{schemas: [urn:ietf:params:scim:api:messages:2.0:Error], status, scimType?, detail}` (`401` with
+`WWW-Authenticate: Bearer` for a missing, wrong, expired or revoked token; `403` for a disabled store; `429` past
+`IDENTITY_SCIM_RATE_PER_MINUTE` per address).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /scim/v2/ServiceProviderConfig` | patch yes, bulk no, filter yes (`maxResults` = `IDENTITY_SCIM_MAX_RESULTS`), changePassword no, sort no, etag yes, `oauthbearertoken` |
+| `GET /scim/v2/ResourceTypes[/User\|Group]`, `GET /scim/v2/Schemas[/<urn>]` | The User (with the enterprise extension `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User`) and Group resource types and schemas |
+| `GET /scim/v2/Users?filter=&startIndex=&count=&attributes=&excludedAttributes=` | ListResponse `{schemas, totalResults, itemsPerPage, startIndex, Resources}`. Filters: the full RFC 7644 grammar (`eq ne co sw ew gt ge lt le pr`, `and or not`, parentheses, value filters such as `emails[type eq "work"]`, schema-qualified paths); `userName` and string values compare without case, `id` and `externalId` with case, timestamps as instants. One `eq` on `userName`, `externalId` or `id` is asked of the database; anything else is evaluated over the store's users (refused with `400 tooMany` past 50 000). `count` is capped at `IDENTITY_SCIM_MAX_RESULTS`; `count=0` answers the total only |
+| `POST /scim/v2/Users` | `201` the User with `Location` and `ETag`. `userName` (required, at most 190 characters) becomes the username in lower case; `displayName` (else `name.formatted`, else the name parts) the display name; the primary (else work, else first) email the address; the enterprise `manager.value` the manager. Attributes the schemas do not define are ignored; `password` is never kept. `409 uniqueness` for a userName the store has (any case) or that belongs to a user of another store (a SCIM store never takes over an account; a user with no other store, such as one the store deleted before, is adopted and re-enabled). Audited `scim.user.created` |
+| `GET /scim/v2/Users/:id` | The User: `id` (the user's id), `externalId`, `userName`, the attributes as pushed, `active`, `groups` (read only: `value`, `display`, `$ref`), `meta` (`created`, `lastModified`, `version` as a weak ETag, `location`) |
+| `PUT /scim/v2/Users/:id` | Replaces the whole User (attributes not sent are removed). Audited `scim.user.replaced` with the changed attribute names |
+| `PATCH /scim/v2/Users/:id` `{schemas: [PatchOp], Operations: [{op, path?, value?}]}` | `add`, `replace`, `remove` (any case, as Entra ID writes them; `"True"`/`"False"` strings for booleans), with or without a path, with value filters (`emails[type eq "work"].value`) and extension paths. A `replace` or `add` through a value filter that matches nothing adds an element from the filter's `eq` terms (Entra ID relies on it). `400 mutability` for `id` or `meta`, `noTarget` for a remove without a path, `invalidPath` for an unknown attribute. Audited `scim.user.patched` |
+| `DELETE /scim/v2/Users/:id` | `204`. The user is disabled (`SCIM: deleted`) with every way they are signed in ended (below), their SCIM record, group memberships and link to the store removed, their mapped roles and workspaces cleared; the user row stays for the audit history. Audited `scim.user.deleted` |
+| `GET /scim/v2/Groups?…`, `POST /scim/v2/Groups`, `GET \| PUT \| PATCH \| DELETE /scim/v2/Groups/:id` | Groups `{displayName (required, unique in the store without case), externalId, members: [{value: user id}]}`. Members must be users of the store (`400 invalidValue` otherwise). `members` is read only when the answer includes it (`excludedAttributes=members`, as Entra ID asks). PATCH adds and removes members by a value list (Entra ID) or a value filter `members[value eq "…"]` (Okta). Audited `scim.group.created`, `.replaced`, `.patched`, `.deleted` |
+
+`PUT`, `PATCH` and `DELETE` honour `If-Match` (a stale version is `412`). Bulk, `/Me`, `/.search` and sorting are not
+offered (`501` or `404` in the SCIM error format).
+
+**Deactivation.** `active: false` (by PATCH or PUT) disables the user (`SCIM: deactivated`) and in the same request
+revokes their sessions (their sockets close; their next request is unauthenticated), OAuth refresh tokens, API keys
+and DAV app passwords. Audited `scim.user.deactivated` with the counts. `active: true` re-enables a user SCIM disabled
+(`scim.user.reactivated`); a user an administrator disabled stays disabled (`scim.user.reactivation-skipped`).
+
+**Group membership maps to roles.** A user's SCIM groups are recorded on their link to the store (normalised display
+names), so the tenant's group mappings with the SCIM store as provider give roles, clearance and workspaces (else the
+store's `defaultRoles` and `defaultClearance`). Every change to a group or a membership recomputes its members; when a
+member's roles, clearance or workspaces change, their sessions end (`scim.user.access.changed`).
+
+### Vault sharing (B-4801)
+
+`server/src/vault/shares.ts` (`s.vaultShares`). A share is a vault policy grant (`vault_policies`, B-1703) of `allow
+read, list` on one secret's exact path (`kv/<path>`) to a user, directory group, workspace or API key, marked with the
+secret (`shareSecretId`) and an optional expiry (`expiresAt`). The policy rules apply unchanged: a deny that names the
+grantee wins; the secret's label must clear the grantee's clearance. Grants list and explain name shares with these
+two fields; `PATCH /api/vault/policies/:id` on a share is `409` (revoke and share again).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/vault/kv/shares/*path` | `secrets:read`, and the path policy's `read` and `write`. `{shares: [Share]}`: `{id, path, subjectKind, subject, subjectName, capabilities: [read, list], note, sharedBy, sharedByName, sharedAt, expiresAt, state: active \| expired}` |
+| `POST /api/vault/kv/shares/*path` `{subjectKind, subject, expiresInDays?, note?}` | `secrets:write`, and the path policy's `read` and `write`. `201` Share. Sharing again with the same subject moves its expiry and note. `VAULT_SHARE_MAX_DAYS` caps (and defaults) the expiry. Refused: `400` for oneself or an unknown subject; `422 step clearance` for a user below the secret's label; `422 step role` for a user without `secrets:read`; `409 step vault-policy` with the deciding `grant` when a deny names the user (it would not apply). A user shared with is notified. Audited `vault.secret.shared` (or `vault.secret.share.updated`) |
+| `DELETE /api/vault/shares/:id` | `secrets:write`. `{id, revoked: true}`: by whoever shared it, anyone who may share the secret, or `secrets:admin`. Audited `vault.secret.share.revoked` |
+| `GET /api/vault/shared-with-me` | `secrets:read`. `{shares: [Share & {label, currentVersion, updatedAt, readable}]}`: the shares naming the caller (as a user, a group, a workspace member or the API key), within their clearance; `readable: false` when a deny refuses them anyway |
+
+An expired share stops applying at once (the policy query leaves it out); `vault.shares.expire` removes it and audits
+`vault.secret.share.expired`. Removing a secret removes its shares, so a secret written later at the same path is not
+shared by them. Reveals by a grantee are audited and watched for anomalies (B-4803) like any other.
+
+### MongoDB leases (B-4802)
+
+`POST /api/vault/database/engines` takes `dialect: mongodb`. `database` is where leased users are created and
+authenticate (default `admin`); `adminUsername` may be written `<authdb>/<user>` (default auth database `admin`). The
+admin needs `createUser`, `dropUser` and `grantRole` on that database (`userAdmin` there or `userAdminAnyDatabase`),
+which Test connection checks with `connectionStatus`, and `killAnySession` to end a dropped user's sessions (else they
+run until they close). A role (`PUT /api/vault/database/engines/:name/roles/:role`) names its databases in `schemas`
+(required when the users live in `admin`; never `admin`, `local` or `config`); its users get `read` or `readWrite` on
+each. Issue runs `createUser` (SCRAM-SHA-256, the lease's expiry in `customData`), renew `updateUser` (MongoDB users carry
+no expiry: the sweeper enforces it), revoke and expiry `killAllSessionsByPattern` then `dropUser`. The issue answer's
+`connection` is `{dialect: mongodb, endpoint, database (the authentication database), tls}`.
+
+### Quote posts and per-post visibility (B-4901)
+
+Posts gain `visibility: public | workspace | unlisted` (default `workspace`, every existing post), `quoteOf` (the id a
+quote embeds, else null), `quoted` (the quoted post as the caller may see it, `null` when blocked, gone or out of
+reach) and `counts.quotes` (listed quotes). `workspace` and `public` posts are in the feeds of their workspace or group;
+`public` also marks a post its author lets leave the instance later (cross-posting, B-11402) and reaches nobody a
+workspace post does not. An **unlisted** post is in no feed (home, workspace, group, person, list, tag, trending,
+digest), indexes no hashtags and raises no `feed.post.*` or `feed.comment.created` room events; `GET
+/api/feed/posts/:id` (and the console's `#/messages?post=<id>`) opens it for anyone who may read its workspace or
+group. Bookmarks list it for whoever saved it.
+
+| Method and path | What changes |
+| --- | --- |
+| `POST /api/feed/posts` | Takes `visibility` |
+| `PATCH /api/feed/posts/:id` `{body?, visibility?}` | The author moves a published post in or out of the feeds (tags and live feeds follow). `409` for unlisting a repost, or listing a quote of an unlisted post. Audited `feed.post.visibility` `{from, to}` |
+| `POST /api/feed/posts/:id/quote` `{body, workspaceId?, groupId?, media?, label?, visibility?}` | `feed:write`. `201` (or `202` held) the quote: a post of its own in any workspace or group the caller may post in (the quoted post's own place by default), through the `user-input` guardrail like a post. Its label is at least the quoted post's; a target whose ceiling is below that is `422 step label` with `quoted` and `ceiling`. A quote of an unlisted post is unlisted. `422` without a comment. Audited `feed.post.created` with `quoteOf` |
+| `POST /api/feed/posts/:id/repost` | `409` for an unlisted post (a repost is a feed entry; quote it instead) |
+| `GET /api/feed/users/:id?unlisted=true` | On one's own page, adds one's own unlisted posts (nobody else's are ever listed) |
+
+The catalogue events `post.*` carry `visibility` and, for a quote, `quoteOf` (optional fields).

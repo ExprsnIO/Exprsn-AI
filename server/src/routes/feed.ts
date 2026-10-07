@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { LABELS } from '../authz/labels.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../http/middleware.js';
 import { notFound } from '../http/problem.js';
-import { REACTIONS, type Ctx } from '../feed/service.js';
+import { REACTIONS, VISIBILITIES, type Ctx } from '../feed/service.js';
 import type { Services } from '../services.js';
 
 const id26 = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'an id');
@@ -48,7 +48,9 @@ export function feedRoutes(s: Services): Router {
   });
 
   r.get('/feed/users/:id', read, async (req, res) => {
-    res.json(await f.user(principalOf(req), idOf(req), q(req)));
+    // 1.6.0 (B-4901): `unlisted=true` adds the caller's own unlisted posts on their own page.
+    const query = parseBody(page.extend({ unlisted: z.enum(['true', 'false']).optional() }), req.query);
+    res.json(await f.user(principalOf(req), idOf(req), { ...query, unlisted: query.unlisted === 'true' }));
   });
 
   r.get('/feed/lists/:id', read, async (req, res) => {
@@ -75,7 +77,7 @@ export function feedRoutes(s: Services): Router {
   // ---------- posts ----------
 
   r.post('/feed/posts', write, async (req, res) => {
-    const body = parseBody(z.object({ workspaceId: id26.optional(), groupId: id26.optional(), body: z.string().max(100_000).optional(), media: z.array(id26).max(10).optional(), label: z.enum(LABELS).optional() }).strict(), req.body);
+    const body = parseBody(z.object({ workspaceId: id26.optional(), groupId: id26.optional(), body: z.string().max(100_000).optional(), media: z.array(id26).max(10).optional(), label: z.enum(LABELS).optional(), visibility: z.enum(VISIBILITIES).optional() }).strict(), req.body);
     const post = await f.createPost(ctx(req), body);
     res.status(post.state === 'held' ? 202 : 201).json(post);
   });
@@ -85,8 +87,8 @@ export function feedRoutes(s: Services): Router {
   });
 
   r.patch('/feed/posts/:id', write, async (req, res) => {
-    const body = parseBody(z.object({ body: z.string().max(100_000) }).strict(), req.body);
-    res.json(await f.updatePost(ctx(req), idOf(req), body.body));
+    const body = parseBody(z.object({ body: z.string().max(100_000).optional(), visibility: z.enum(VISIBILITIES).optional() }).strict().refine((b) => b.body !== undefined || b.visibility !== undefined, 'Send body, visibility or both'), req.body);
+    res.json(await f.updatePost(ctx(req), idOf(req), body.body, body.visibility));
   });
 
   r.delete('/feed/posts/:id', write, async (req, res) => {
@@ -97,6 +99,13 @@ export function feedRoutes(s: Services): Router {
     const body = parseBody(z.object({ body: z.string().max(100_000).optional() }).strict(), req.body ?? {});
     const out = await f.repost(ctx(req), idOf(req), body.body);
     res.status(out.post.state === 'held' ? 202 : out.created ? 201 : 200).json(out.post);
+  });
+
+  // 1.6.0 (B-4901): quote a post with a comment, in the caller's workspace or group of choice.
+  r.post('/feed/posts/:id/quote', write, async (req, res) => {
+    const body = parseBody(z.object({ body: z.string().max(100_000), workspaceId: id26.optional(), groupId: id26.optional(), media: z.array(id26).max(10).optional(), label: z.enum(LABELS).optional(), visibility: z.enum(VISIBILITIES).optional() }).strict(), req.body);
+    const post = await f.quote(ctx(req), idOf(req), body);
+    res.status(post.state === 'held' ? 202 : 201).json(post);
   });
 
   r.delete('/feed/posts/:id/repost', write, async (req, res) => {
