@@ -1,7 +1,7 @@
 (function () {
   const { UI, esc } = App;
 
-  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts', oidc: 'Upstream OIDC', saml: 'Upstream SAML', github: 'GitHub', atproto: 'AT-Protocol accounts' };
+  const KIND_LABEL = { ldap: 'OpenLDAP / LDAP', sql: 'SQL user table', local: 'Local accounts', oidc: 'Upstream OIDC', saml: 'Upstream SAML', github: 'GitHub', atproto: 'AT-Protocol accounts', scim: 'SCIM 2.0 provisioning' };
   const TEMPLATES = {
     ldap: { url: 'ldaps://ldap.example.internal:636', bindDN: 'cn=exprsn-svc,ou=services,dc=example,dc=internal', bindPassword: 'env:LDAP_BIND_PASSWORD', userBase: 'ou=people,dc=example,dc=internal', groupBase: 'ou=groups,dc=example,dc=internal', caFile: '/etc/exprsn-ai/ldap-ca.pem' },
     'sql:pg': { dialect: 'pg', connection: 'env:HR_PG_URL', table: 'users', columns: { id: 'id', username: 'username', passwordHash: 'password_hash', displayName: 'full_name', email: 'email', disabled: 'disabled', groups: 'groups' }, defaultRoles: [], defaultClearance: 'internal' },
@@ -9,9 +9,12 @@
     'sql:sqlite': { dialect: 'sqlite', connection: 'file:/etc/exprsn-ai/secrets/hr-sqlite-path', table: 'users', columns: { username: 'username', passwordHash: 'password_hash', displayName: 'display_name' }, defaultRoles: ['member'], defaultClearance: 'internal' },
     // 1.4.0: GitHub sign-in (B-1804) and AT-Protocol accounts (B-1808).
     github: { clientId: 'Iv1.0123456789abcdef', clientSecret: 'file:/run/secrets/github-client-secret', webUrl: 'https://github.com', apiUrl: 'https://api.github.com', allowedOrgs: [], scopes: 'read:user user:email read:org', defaultRoles: [], defaultClearance: 'internal' },
-    atproto: { boundOnly: true, authServers: [], defaultRoles: ['member'], defaultClearance: 'internal' }
+    atproto: { boundOnly: true, authServers: [], defaultRoles: ['member'], defaultClearance: 'internal' },
+    // 1.6.0 (B-7201): users and groups pushed by Entra ID or Okta at /scim/v2; tokens under Identity.
+    scim: { signInStores: [], defaultRoles: [], defaultClearance: 'internal' }
   };
   const KIND_HINT = {
+    scim: 'Users and groups are pushed by your identity provider (Entra ID, Okta) to <span class="mono">&lt;issuer&gt;/scim/v2</span> with a SCIM token made under Identity, User stores and federation. No passwords: <span class="mono">signInStores</span> names the OIDC, SAML or GitHub stores (by id) its users sign in through. Group mappings with this store name the SCIM groups\' display names; deactivation ends sessions, OAuth grants, API keys and app passwords at once.',
     github: 'GitHub or GitHub Enterprise Server as an OAuth app. Register its callback as <span class="mono">&lt;issuer&gt;/federation/github/callback</span>. Only a verified primary address is kept; organisations become groups <span class="mono">org</span> and teams <span class="mono">org/team-slug</span>; <span class="mono">allowedOrgs</span> refuses everyone else. Both addresses pass the service URL checks when saved and at every connection.',
     atproto: 'No passwords and no directory. A DID bound to a user (in their Settings) signs in as that user; others are provisioned just in time with the handle as username and the DID as their only group. <span class="mono">boundOnly</span> refuses unbound DIDs; <span class="mono">authServers</span> (origins) limits the authorization servers accepted.'
   };
@@ -108,7 +111,7 @@
       });
       ctx.on('click', '[data-remove]', async () => { const ok = await ctx.confirm({ title: 'Remove ' + sel.name + '?', tag: 'cannot be undone', tone: 'danger', body: '<div class="fg2">Its group mappings and identity links go with it. Users keep their accounts but cannot sign in through this store.</div>', ok: 'Remove store' }); if (ok) act(() => App.del('/api/admin/identity-providers/' + encodeURIComponent(sel.id)), 'Store removed. Audit entry written.').then(() => { st.sel = null; }); });
       const storeModal = (existing) => {
-        const kinds = [{ value: 'ldap', label: 'OpenLDAP / LDAP directory' }, { value: 'sql:pg', label: 'PostgreSQL user table' }, { value: 'sql:mysql', label: 'MySQL user table' }, { value: 'sql:sqlite', label: 'SQLite user table' }, { value: 'local', label: 'Local accounts' }, { value: 'github', label: 'GitHub sign-in' }, { value: 'atproto', label: 'AT-Protocol accounts' }];
+        const kinds = [{ value: 'ldap', label: 'OpenLDAP / LDAP directory' }, { value: 'sql:pg', label: 'PostgreSQL user table' }, { value: 'sql:mysql', label: 'MySQL user table' }, { value: 'sql:sqlite', label: 'SQLite user table' }, { value: 'local', label: 'Local accounts' }, { value: 'github', label: 'GitHub sign-in' }, { value: 'atproto', label: 'AT-Protocol accounts' }, { value: 'scim', label: 'SCIM 2.0 provisioning (Entra ID, Okta)' }];
         // `existing` is a store to edit, or the kind (a TEMPLATES key) a new store starts as.
         const preset = typeof existing === 'string' ? existing : null;
         if (preset) existing = null;

@@ -55,6 +55,8 @@
       { title: 'Sign-up pending approval', tone: 'warn', text: 'With the approval mode, a new account is created disabled and identity admins get a notice. Approve activates it; reject keeps it disabled and tells the user by email.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'signups'; ctx.state.signupFilter = 'pending'; ctx.rerender(); } },
       { title: 'MFA grace restarted', tone: 'info', text: 'Widening the MFA requirement restarts the grace period: covered accounts sign in without a factor for graceDays, then enrol first. Audited with graceRestarted.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'policy'; ctx.state.graceRestarted = true; ctx.rerender(); } },
       { title: 'Import dry run with conflicts', tone: 'warn', text: 'A dry run plans and reports every row; conflicts (an account linked to another store, a reused address) and errors (a role the importer may not grant) change nothing.', apply(ctx) { const st = ctx.state; st.tab = 'imports'; const x = (st.imports || []).find((i) => i.dryRun && i.summary && (i.summary.conflict || i.summary.error)) || (st.imports || []).find((i) => i.dryRun); if (x) st.importSel = x.id; ctx.rerender(); } },
+      { title: 'SCIM token shown once', tone: 'info', text: 'A new SCIM token is shown once, with the base URL to paste into Entra ID or Okta; afterwards only its prefix and last use are listed.', apply(ctx) { const st = ctx.state; st.tab = 'upstream'; st.scimShown = { storeId: null, name: 'Entra ID connector', token: 'exai_scim1_5c2e9d40a1f3_' + 'x'.repeat(43), expiresAt: Date.now() + 365 * DAY }; ctx.rerender(); } },
+      { title: 'Deprovisioned by SCIM', tone: 'danger', text: 'The identity provider set active to false: the user is disabled and their sessions, OAuth grants, API keys and app passwords end within one request. Audited as scim.user.deactivated.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.scimDeprovisioned = true; ctx.rerender(); } },
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -118,6 +120,37 @@
       const wsName = (id) => (!id ? 'none' : (myWorkspaces.find((w) => w.id === id) || { name: id }).name);
       const who = (id) => { if (!id) return 'system'; if (App.me && id === App.me.user.id) return 'you'; const u = (st.people || []).find((x) => x.id === id); return u ? u.displayName : id; };
 
+      // 1.6.0 (B-7201, B-7202): SCIM stores, their status, tokens and recent changes (identity:manage; changes with audit:read).
+      const scimStores = (st.stores || []).filter((p) => p.kind === 'scim');
+      if (st.tab === 'upstream' && st.stores && st.scim === undefined && !st.scimLoading) {
+        st.scimLoading = true;
+        Promise.all(scimStores.map((x) => Promise.all([App.get('/api/admin/identity-providers/' + encodeURIComponent(x.id) + '/scim'), App.can('audit:read') ? App.get('/api/admin/audit?action=scim.&target=' + encodeURIComponent(x.id) + '&limit=8').catch(() => []) : Promise.resolve(null)]).then(([status, changes]) => Object.assign(status, { changes }))))
+          .then((list) => { st.scim = list; st.scimError = null; })
+          .catch((err) => { st.scim = []; st.scimError = err; })
+          .finally(() => { st.scimLoading = false; if (App.state.route === 'identity' && !document.querySelector('.modal')) ctx.rerender(); });
+      }
+      const reloadScim = () => { st.scim = undefined; ctx.rerender(); };
+      const storeName = (id) => { const x = (st.stores || []).find((p) => p.id === id); return x ? x.name : id; };
+      function scimSection() {
+        if (!st.stores) return '';
+        const head = '<div class="hstack wrap"><h2 class="eyebrow" id="identity-scim-h" style="margin:0">SCIM provisioning</h2><span class="right hstack gap6">' + UI.btn('Add a SCIM store', { size: 'sm', kind: scimStores.length ? 'ghost' : 'primary', attrs: 'data-scimstore' }) + '</span></div>';
+        const intro = '<div class="fg2" style="font-size:13px;margin:6px 0">Entra ID or Okta pushes users and groups to a SCIM store (SCIM 2.0, RFC 7643 and 7644): create, replace, patch, delete, filters and paging. The store takes no passwords; its users sign in through the stores it names. Group mappings with the store turn SCIM groups into roles, clearance and workspaces.</div>';
+        if (st.scimError) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + UI.problem('SCIM status could not be loaded', st.scimError.message, st.scimError.problem && st.scimError.problem.trace_id) + '</section>';
+        if (!scimStores.length) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + intro + UI.empty('No SCIM store', 'Add one, make a token, and paste the base URL and the token into your identity provider\'s provisioning settings.') + '</section>';
+        if (!st.scim) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + UI.notice('Loading…', 'info') + '</section>';
+        const deprov = st.scimDeprovisioned ? UI.notice('<b>Deprovisioned by SCIM.</b> When the provider sets active to false, the user is disabled and their sessions, OAuth grants, API keys and app passwords end within the same request (scim.user.deactivated). A later active true re-enables them; an administrator\'s own disable stays.', 'danger') : '';
+        return st.scim.map((sc) => {
+          const shown = st.scimShown && (st.scimShown.storeId === sc.store.id || st.scimShown.storeId === null) ? UI.notice('<b>Copy the token now: it is shown once.</b> Paste it with the base URL into the provisioning settings of ' + esc(st.scimShown.name) + '.<div class="codebox mono" style="margin-top:6px;word-break:break-all" data-scimtoken>' + esc(st.scimShown.token) + '</div><div class="muted" style="font-size:12px">' + (st.scimShown.expiresAt ? 'Expires ' + esc(date(st.scimShown.expiresAt)) + '. ' : '') + 'We keep only its prefix and a keyed hash.</div>', 'accent', UI.btn('Copy token', { size: 'sm', attrs: 'data-scimcopy' }) + UI.btn('Done', { size: 'sm', kind: 'ghost', attrs: 'data-scimdone' })) : '';
+          const signIn = (sc.store.config.signInStores || []).map(storeName);
+          const tokens = UI.table(['Token', 'Prefix', 'State', 'Last used', 'Expires', ''], sc.tokens.map((t) => ['<b>' + esc(t.name) + '</b><div class="muted" style="font-size:12px">made ' + esc(date(t.createdAt)) + '</div>', '<span class="mono">exai_scim1_' + esc(t.prefix) + '_…</span>', UI.pill(t.state, t.state === 'active' ? 'ok' : t.state === 'revoked' ? '' : 'warn'), (t.lastUsedAt ? esc(when(t.lastUsedAt)) : 'never') + (t.lastUsedIp ? '<div class="muted mono" style="font-size:12px">' + esc(t.lastUsedIp) + '</div>' : ''), t.expiresAt ? esc(date(t.expiresAt)) : 'when revoked', t.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'danger', attrs: 'data-scimrevoke="' + esc(t.id) + '" data-store="' + esc(sc.store.id) + '" aria-label="Revoke ' + esc(t.name) + '"' }) : '']), { clickable: false, minWidth: '640px', emptyTitle: 'No SCIM tokens', emptyText: 'Make a token for the identity provider that provisions this store.' });
+          const changes = sc.changes ? (sc.changes.length ? UI.timeline(sc.changes.map((e) => ({ title: esc(e.action) + (e.target && e.target.username ? ': ' + esc(e.target.username) : e.target && e.target.name ? ': ' + esc(e.target.name) : ''), text: e.redacted ? 'above your clearance' : esc(e.action === 'scim.user.deactivated' ? 'ended sessions, OAuth grants, API keys and app passwords' : e.action === 'scim.user.access.changed' ? 'roles, clearance or workspaces changed; sessions ended' : ''), meta: esc(when(e.ts)), tone: e.action === 'scim.user.deactivated' || e.action === 'scim.user.deleted' ? 'danger' : e.action === 'scim.user.created' ? 'ok' : e.action === 'scim.user.access.changed' ? 'info' : '' }))) : '<div class="muted" style="font-size:12px">No SCIM changes yet.</div>') : '<div class="muted" style="font-size:12px">Recent changes need audit:read.</div>';
+          return '<section class="panel" aria-labelledby="identity-scim-h-' + esc(sc.store.id) + '"><div class="hstack wrap"><h2 class="eyebrow" id="identity-scim-h-' + esc(sc.store.id) + '" style="margin:0">SCIM provisioning: ' + esc(sc.store.name) + '</h2>' + UI.pill(sc.store.enabled ? 'enabled' : 'disabled', sc.store.enabled ? 'ok' : '') + '<span class="right hstack gap6">' + UI.btn('Re-apply group mappings', { size: 'sm', kind: 'ghost', attrs: 'data-scimreapply="' + esc(sc.store.id) + '"' }) + UI.btn('New SCIM token', { size: 'sm', icon: 'key', kind: 'primary', attrs: 'data-scimtokennew="' + esc(sc.store.id) + '"' }) + '</span></div>'
+            + intro + shown + deprov
+            + UI.kv([['Base URL', '<span class="mono">' + esc(sc.baseUrl) + '</span> ' + UI.btn('Copy', { size: 'xs', kind: 'ghost', attrs: 'data-idcopy="' + esc(sc.baseUrl) + '" data-what="SCIM base URL" aria-label="Copy the SCIM base URL"' })], ['Users', sc.activeUsers + ' active of ' + sc.users], ['Groups', sc.groups + ', ' + sc.groupMappings + ' group mapping' + (sc.groupMappings === 1 ? '' : 's') + ' name them'], ['Sign in through', signIn.length ? signIn.map(esc).join(', ') : 'none named: its users cannot sign in yet'], ['Last change', sc.lastChangeAt ? esc(when(sc.lastChangeAt)) : 'none yet'], ['Live tokens', String(sc.tokens.filter((t) => t.state === 'active').length)]], 2)
+            + tokens + '<div class="eyebrow" style="margin-top:10px">Recent SCIM changes</div>' + changes + '</section>';
+        }).join('') + (scimStores.length ? '<div>' + UI.btn('Add a SCIM store', { size: 'sm', kind: 'ghost', attrs: 'data-scimstore' }) + '</div>' : '');
+      }
+
       let body = '';
       if (st.tab === 'clients') {
         const rows = clients.filter((c) => !st.q || (c.name + ' ' + c.typeLabel + ' ' + c.scopes.join(' ')).toLowerCase().includes(st.q.toLowerCase()));
@@ -151,6 +184,7 @@
         body = '<div class="hstack wrap"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right hstack gap6">' + UI.btn('Add GitHub or AT-Protocol store', { size: 'sm', kind: 'ghost', attrs: 'data-addstore' }) + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
           + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by', 'Metadata', ''], upRows.map((u) => ['<b>' + esc(u.name) + '</b>', /^(github|atproto)$/.test(u.protocol) ? UI.pill(u.protocol, 'outline') : esc(u.protocolLabel), esc(u.reach), UI.pill(u.status, u.status === 'connected' ? 'ok' : u.status === 'disabled' ? '' : 'danger'), esc(u.usedBy), u.protocol === 'saml' ? sourceCell(u.id) : u.protocol === 'oidc' ? '<span class="muted">discovery</span>' : '<span class="muted">none</span>', /^(github|atproto)$/.test(u.protocol) && (st.stores || []).some((p) => p.id === u.id) ? UI.btn('Settings', { size: 'xs', kind: 'ghost', attrs: 'data-storedetail="' + esc(u.id) + '" aria-label="Settings of ' + esc(u.name) + '"' }) : '']), { clickable: false, minWidth: '720px', emptyTitle: 'No upstream providers', emptyText: 'Users sign in with the user stores. Add an on-prem OIDC or SAML provider, a GitHub or an AT-Protocol store to federate.' })
           + UI.notice('Since 1.4.0 the chain also takes a <b>GitHub</b> store (OAuth app, allowed organisations, verified primary address only) and an <b>AT-Protocol</b> store (a bound DID signs in as its user; others are provisioned just in time with the handle as username and the DID as their only group). Both pass the service URL checks when saved and at every connection.', 'info')
+          + scimSection()
           + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', k.available && k.enabled ? esc(k.detail) + (k.realms.length ? ', realms ' + esc(k.realms.join(', ')) : ', any realm') : k.enabled ? 'not available: ' + esc(k.detail) : 'turned off for this tenant'], ['LDAP bind', 'LDAPS or StartTLS to the directory; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles, also after Kerberos and upstream sign-in'], ['Device flow', 'RFC 8628 at <span class="mono">' + esc(ov.device.verificationUri) + '</span>, codes live ' + ov.device.minutes + ' min'], ['Fallback order', 'Kerberos, then upstream or password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
           + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers on internal addresses' + (ov.upstream.allowList ? ', or hosts on the allow-list (' + esc(ov.upstream.allowList) + '),' : '') + ' can be upstream.', 'info') + UI.kv([['OIDC redirect URI', '<span class="mono">' + esc(ov.upstream.redirectUri) + '</span>'], ['SAML ACS URL', '<span class="mono">' + esc(ov.upstream.acsUrl) + '</span>'], ['SAML single logout', '<span class="mono">' + esc(ov.upstream.sloUrl) + '</span>']], 1) + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
       } else if (st.tab === 'policy') {
@@ -558,6 +592,53 @@
       ctx.on('click', '[data-rotatekey]', rotateKey);
       ctx.on('click', '[data-saml]', samlImport);
       ctx.on('click', '[data-upstream]', upstreamModal);
+      // ----- SCIM (1.6.0, B-7201, B-7202) -----
+      ctx.on('click', '[data-scimtokennew]', (e, t) => {
+        const storeId = t.dataset.scimtokennew;
+        ctx.modal({
+          title: 'New SCIM token',
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('Entra ID connector', { attrs: 'data-scimname aria-label="Token name" maxlength="100"' }), 'Who uses it, so the list says which provider it is.') + UI.field('Expires after', UI.select([{ value: '30', label: '30 days' }, { value: '90', label: '90 days' }, { value: '365', label: '365 days' }], '365', 'data-scimdays aria-label="Expires after"'), 'At most IDENTITY_SCIM_TOKEN_MAX_DAYS on this server.') + '</div>' + UI.notice('The token is shown once. It reads and writes this store\'s users and groups only; holders of identity:manage revoke it here.', 'info') + '<div data-scimerr></div>',
+          actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Make token', { kind: 'primary', attrs: 'data-scimmake' }),
+          onMount(m) {
+            m.querySelector('[data-scimmake]').addEventListener('click', () => {
+              const name = m.querySelector('[data-scimname]').value.trim() || 'SCIM token';
+              App.post('/api/admin/identity-providers/' + encodeURIComponent(storeId) + '/scim/tokens', { name, expiresInDays: +m.querySelector('[data-scimdays]').value })
+                .then((tok) => { st.scimShown = { storeId, name: tok.name, token: tok.token, expiresAt: tok.expiresAt }; App.closeOverlay(); reloadScim(); ctx.toast('SCIM token made. Copy it now: it is shown once.', 'ok'); })
+                .catch((err) => { m.querySelector('[data-scimerr]').innerHTML = UI.notice(problemText(err), 'danger'); });
+            });
+          }
+        });
+      });
+      ctx.on('click', '[data-scimcopy]', () => { const tok = st.scimShown && st.scimShown.token; if (tok) copy(tok, 'Token', ctx); st.scimShown = null; ctx.rerender(); });
+      ctx.on('click', '[data-scimdone]', () => { st.scimShown = null; ctx.rerender(); });
+      ctx.on('click', '[data-scimrevoke]', async (e, t) => {
+        const sc = (st.scim || []).find((x) => x.store.id === t.dataset.store); const tok = sc && sc.tokens.find((x) => x.id === t.dataset.scimrevoke); if (!tok) return;
+        const ok = await ctx.confirm({ title: 'Revoke ' + esc(tok.name) + '?', tag: 'stops provisioning', tone: 'danger', body: '<p class="fg2" style="margin:0">The provider\'s next request is refused with 401. Users and groups already provisioned stay as they are.</p>', kv: [['Prefix', '<span class="mono">' + esc(tok.prefix) + '</span>'], ['Last used', tok.lastUsedAt ? esc(when(tok.lastUsedAt)) : 'never']], ok: 'Revoke' });
+        if (!ok) return;
+        App.del('/api/admin/identity-providers/' + encodeURIComponent(sc.store.id) + '/scim/tokens/' + encodeURIComponent(tok.id)).then(() => { reloadScim(); ctx.toast(esc(tok.name) + ' revoked. Audited as scim.token.revoked.', 'warn'); }).catch(App.fail);
+      });
+      ctx.on('click', '[data-scimreapply]', async (e, t) => {
+        const sc = (st.scim || []).find((x) => x.store.id === t.dataset.scimreapply); if (!sc) return;
+        const ok = await ctx.confirm({ title: 'Re-apply group mappings', tone: 'info', body: '<p class="fg2" style="margin:0">Recomputes roles, clearance and workspaces for every user of ' + esc(sc.store.name) + ' from their SCIM groups, as a job. Anyone whose access changes is signed out once.</p>', kv: [['Users', String(sc.users)], ['Group mappings', String(sc.groupMappings)]], ok: 'Re-apply' });
+        if (!ok) return;
+        App.post('/api/admin/identity-providers/' + encodeURIComponent(sc.store.id) + '/scim/reapply').then((r) => { reloadScim(); ctx.toast('Re-applying group mappings to ' + sc.users + ' users (job ' + esc(r.jobId) + '). Follow it under Jobs.', 'ok'); }).catch(App.fail);
+      });
+      ctx.on('click', '[data-scimstore]', () => {
+        const ups = (st.stores || []).filter((p) => /^(oidc|saml|github)$/.test(p.kind));
+        ctx.modal({
+          title: 'Add a SCIM store',
+          body: UI.field('Name', UI.input('Entra ID provisioning', { attrs: 'data-scimsname aria-label="Store name" maxlength="100"' })) + '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="eyebrow">Its users sign in through</legend>' + (ups.length ? ups.map((p) => UI.check(p.name + ' (' + p.kind + ')', false, 'data-scimsin="' + esc(p.id) + '"')).join('') : '<div class="muted" style="font-size:12px">No OIDC, SAML or GitHub store yet: add one under Upstream providers, then name it here.</div>') + '</fieldset>' + UI.notice('A SCIM store takes no passwords. Users the provider pushes get roles from group mappings that name its groups (with this store as provider), else none until a group gives them some.', 'info') + '<div data-scimserr></div>',
+          actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Add store', { kind: 'primary', attrs: 'data-scimsave' }),
+          onMount(m) {
+            m.querySelector('[data-scimsave]').addEventListener('click', () => {
+              const signInStores = Array.prototype.slice.call(m.querySelectorAll('input[data-scimsin]')).filter((x) => x.checked).map((x) => x.dataset.scimsin);
+              App.post('/api/admin/identity-providers', { name: m.querySelector('[data-scimsname]').value.trim() || 'SCIM', kind: 'scim', config: { signInStores, defaultRoles: [], defaultClearance: 'internal' } })
+                .then((row) => { st.stores = (st.stores || []).concat([row]); App.closeOverlay(); reloadScim(); ctx.toast(esc(row.name) + ' added. Make a SCIM token next.', 'ok'); })
+                .catch((err) => { m.querySelector('[data-scimserr]').innerHTML = UI.notice(problemText(err), 'danger'); });
+            });
+          }
+        });
+      });
       ctx.on('click', '[data-testlogin]', testLogin);
       ctx.on('click', '[data-idcopy]', (e, t) => copy(t.dataset.idcopy, t.dataset.what || 'Value', ctx));
       ctx.on('click', '[data-idpmeta]', () => window.open(ov.idp.metadataUrl, '_blank', 'noopener'));

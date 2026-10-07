@@ -1,5 +1,7 @@
 import { test, expect, open, expectLive, toast, confirmDialog, apiAs } from './support/fixtures';
 import { reflowProblems } from './support/reflow';
+import { expectAccessible } from './support/a11y';
+import { expectAxeClean } from './support/axe';
 
 // B-3403: the Vault screen against the real vault API. The vault is default deny, so each test first gives root a grant
 // on its own unique prefix (through the console in the policy test, through the API where the grant is only setup).
@@ -267,6 +269,49 @@ test.describe('Vault', () => {
       await page.waitForTimeout(250);
       expect(await reflowProblems(page)).toEqual([]);
     }
+    await api.close();
+  });
+
+  // 1.6.0 (B-4801): a secret shared with a person is readable by them, and no longer once the share is revoked.
+  test('shares a secret with a person and revokes it', async ({ page }) => {
+    const pre = `e2e-sh-${uid()}`;
+    await grantRoot(`kv/${pre}`, ['*']);
+    const api = await apiAs('root');
+    await api.put(`/api/vault/kv/data/${pre}/db`, { data: { password: 'shared-value' } });
+    const member = await apiAs('member');
+    const memberId = (await member.get('/api/me')).user.id as string;
+    const read = async () => (await member.ctx.get(`/api/vault/kv/data/${pre}/db`)).status();
+    expect(await read()).toBe(403);
+
+    await open(page, `vault?path=kv/${pre}/db`);
+    await expectLive(page);
+    await page.locator('#main [data-share]').first().click();
+    const modal = page.locator('#overlay .modal');
+    await expect(modal).toContainText(`Share kv/${pre}/db`);
+    await modal.locator('[data-shkind]').selectOption('user');
+    await modal.locator('[data-shsub]').selectOption(memberId);
+    await modal.locator('[data-shfor]').selectOption('7');
+    await modal.locator('[data-shnote]').fill('e2e on-call');
+    await modal.locator('[data-shok]').click();
+    await toast(page, /Shared with .* until/);
+    const panel = page.locator('#main .panel', { hasText: 'Shared with' });
+    await expect(panel).toContainText('e2e on-call');
+    expect(await read()).toBe(200);
+    await expect(page.locator('#toasts .toast')).toHaveCount(0, { timeout: 15_000 }); // measured once the toast has gone
+    await expectAccessible(page, 'vault, shared with');
+    await expectAxeClean(page, 'aa', 'vault, shared with');
+    expect((await member.get('/api/vault/shared-with-me')).shares.map((x: { path: string }) => x.path)).toContain(`${pre}/db`);
+
+    await panel.locator('[data-unshare]').first().click();
+    await confirmDialog(page, 'Revoke');
+    await toast(page, /revoked/);
+    expect(await read()).toBe(403);
+    for (const width of [320, 640]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(250);
+      expect(await reflowProblems(page)).toEqual([]);
+    }
+    await member.close();
     await api.close();
   });
 });

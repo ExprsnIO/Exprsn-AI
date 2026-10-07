@@ -44,7 +44,7 @@
   async function loadAll() {
     const canConn = App.can('connections:manage');
     const tid = App.me && App.me.tenant ? App.me.tenant.id : null;
-    const [list, keyList, pol, engines, leases, roles, users, ws, zones, rflags] = await Promise.all([
+    const [list, keyList, pol, engines, leases, roles, users, ws, zones, rflags, mine] = await Promise.all([
       App.get('/api/vault/kv'),
       App.get('/api/vault/transit/keys'),
       App.get('/api/vault/policies'),
@@ -55,11 +55,13 @@
       App.can('tenant:manage') && tid ? App.get('/api/admin/tenants/' + enc(tid) + '/workspaces').catch(() => null) : Promise.resolve(null),
       canConn && App.can('zones:manage') ? App.get('/api/admin/zones').catch(() => null) : Promise.resolve(null),
       // 1.6.0 (B-4803): flags on unusual reveals of the caller's secrets (every flag with secrets:admin).
-      App.can('secrets:read') ? App.get('/api/vault/reveal-flags?state=all').catch(() => ({ flags: [] })) : Promise.resolve({ flags: [] })
+      App.can('secrets:read') ? App.get('/api/vault/reveal-flags?state=all').catch(() => ({ flags: [] })) : Promise.resolve({ flags: [] }),
+      // 1.6.0 (B-4801): secrets shared with the caller.
+      App.can('secrets:read') ? App.get('/api/vault/shared-with-me').catch(() => ({ shares: [] })) : Promise.resolve({ shares: [] })
     ]);
     const secrets = await Promise.all(list.secrets.slice(0, 200).map((x) => App.get('/api/vault/kv/metadata/' + apiPath(x.path)).catch(() => Object.assign({ versions: [], customMetadata: {} }, x))));
     const keys = await Promise.all(keyList.keys.map((k) => App.get('/api/vault/transit/keys/' + enc(k.name)).catch(() => Object.assign({ versions: [], supports: [] }, k))));
-    return { secrets, keys, grants: pol.policies, engines: engines ? engines.engines : null, leases: leases.leases, roles: roles.roles, users, workspaces: ws, zones: zones && zones.zones ? zones.zones.map((z) => z.id) : null, rflags: rflags.flags || [] };
+    return { secrets, keys, grants: pol.policies, engines: engines ? engines.engines : null, leases: leases.leases, roles: roles.roles, users, workspaces: ws, zones: zones && zones.zones ? zones.zones.map((z) => z.id) : null, rflags: rflags.flags || [], sharedWithMe: mine.shares || [], shares: {} };
   }
 
   /** A design state applied before the data arrived is shown once it has. States never call an unsafe API. */
@@ -94,6 +96,17 @@
     } else if (k === 'noflags') {
       st.tab = 'flags'; st.rfFilter = 'open';
       if (st.rflags.some((x) => x.state === 'open')) st.flash = { kind: 'warn', html: '<b>Some flags are open.</b> Resolve each as expected or suspicious; with none open, the list is empty.' };
+    } else if (k === 'sharedeny') {
+      st.tab = 'kv';
+      const g = st.grants.find((x) => x.effect === 'deny' && x.subjectKind === 'user' && /^kv(\/|$)/.test(x.path));
+      const s = g ? st.secrets.find((x) => ('kv/' + x.path === g.path || ('kv/' + x.path).startsWith(g.path + '/'))) : null;
+      if (g && s) { st.sel = s.path; st.shareProblem = { who: plain(st, 'user', g.subject), grant: g.id, path: 'kv/' + s.path }; }
+      else st.flash = { kind: 'danger', html: '<b>No user deny covers a secret here.</b> Sharing a secret with someone a deny names is refused with 409 and the deciding grant: a deny wins over any share, so the share would not apply.' };
+    } else if (k === 'sharedwithme') {
+      st.tab = 'kv';
+      const x = (st.sharedWithMe || [])[0];
+      if (x && st.secrets.some((s) => s.path === x.path)) st.sel = x.path;
+      else if (!x) st.flash = { kind: 'info', html: '<b>Nothing is shared with you.</b> A secret shared with you, your directory group or your workspace is listed under Shared with you, until the share ends or is revoked.' };
     } else if (k === 'overdue') {
       st.tab = 'kv';
       const s = st.secrets.find(overdue);
@@ -108,7 +121,7 @@
     Object.assign(st, { init: true, tab: 'kv', sel: null, query: '', selKey: null, subjectFilter: 'all', effectFilter: 'all', selEngine: null, leaseFilter: 'all', leaseEngine: 'all', selLease: null,
       revealed: {}, shown: {}, explainIn: { user: myId(), key: '', path: 'kv', capability: 'read' }, explainOut: null, cas: null, gone: null, password: null, tests: {}, flash: null, denyDemo: null });
   };
-  const pend = (k, tab) => (ctx) => { fresh(ctx.state); ctx.state.pending = k; ctx.state.tab = tab; ctx.state.flash = null; ctx.state.cas = null; ctx.state.gone = null; ctx.state.denyDemo = null; ctx.rerender(); };
+  const pend = (k, tab) => (ctx) => { fresh(ctx.state); ctx.state.pending = k; ctx.state.tab = tab; ctx.state.flash = null; ctx.state.cas = null; ctx.state.gone = null; ctx.state.denyDemo = null; ctx.state.shareProblem = null; ctx.rerender(); };
 
   App.register({
     id: 'vault', title: 'Vault', live: true, section: 'admin', crumb: ['Admin', 'Vault'],
@@ -125,6 +138,8 @@
       { title: 'Lease revoke failed', tone: 'warn', text: 'The database refused DROP USER. The lease waits in revoking with lastError and attempts; the sweeper retries with back-off (30 s doubling to an hour) and the connection admins were notified once.', apply: pend('revoking', 'leases') },
       { title: 'Burst from a new address', tone: 'danger', text: 'Someone revealed a secret from an address it was never revealed from, several times in a minute. The first reveal raised a flag for its owner; the reveals were answered.', apply: pend('burst', 'flags') },
       { title: 'No flags', tone: 'ok', text: 'Nothing unusual: every reveal came from an address, an hour and a pace the secrets have seen before.', apply: pend('noflags', 'flags') },
+      { title: 'Share refused: a deny wins', tone: 'danger', text: 'Sharing a secret with someone a deny names is refused with 409 and the deciding grant: a deny wins over any share, so it would not apply.', apply: pend('sharedeny', 'kv') },
+      { title: 'Shared with you', tone: 'info', text: 'A secret someone shared with you is listed under Shared with you until the share ends; reading it is audited and watched for unusual reveals like any other.', apply: pend('sharedwithme', 'kv') },
       { title: 'Rotation overdue', tone: 'danger', text: 'A secret past its rotation period: the rotation check sent the due and overdue notices to its owner. Writing a new version starts the schedule again.', apply: pend('overdue', 'kv') }
     ],
     render(root, ctx) {
@@ -165,6 +180,22 @@
       const flash = st.flash ? UI.notice(st.flash.html, st.flash.kind, UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearflash' })) : '';
       let left = '', body = '', insp = '';
 
+      // 1.6.0 (B-4801): the shares of the selected secret, for those who may share it (secrets:write, read and write on it).
+      const sharesPanel = (sec) => {
+        if (!App.can('secrets:write')) return '';
+        const key = sec.path;
+        if (st.shares[key] === undefined && st.sharesLoading !== key) {
+          st.sharesLoading = key;
+          App.get('/api/vault/kv/shares/' + apiPath(key)).then((r) => { st.shares[key] = r.shares; }).catch((err) => { st.shares[key] = err.status === 403 ? null : []; }).finally(() => { st.sharesLoading = null; refresh(); });
+        }
+        const list = st.shares[key];
+        const problem = st.shareProblem ? UI.problem('Share refused: a deny wins', 'A vault policy denies ' + st.shareProblem.who + ' read on ' + st.shareProblem.path + ' (grant ' + st.shareProblem.grant.slice(-8) + '); a deny wins over a share, so it would not apply. 409 with step vault-policy and the grant.', false) + '<div>' + UI.btn('Open Policies', { size: 'sm', kind: 'ghost', attrs: 'data-gopolicies' }) + UI.btn('Dismiss', { size: 'sm', kind: 'ghost', attrs: 'data-clearshare' }) + '</div>' : '';
+        const inner = list === undefined ? UI.notice('Loading…', 'info') : list === null ? small('Your policy does not let you share this secret: sharing needs read and write on its path.') : list.length
+          ? UI.table(['Grantee', 'Note', 'Shared', 'Expires', { label: '', right: true }], list.map((x) => [small(esc(x.subjectKind.replace('_', ' '))) + ' ' + (x.subjectName ? esc(x.subjectName) : subjectText(st, x.subjectKind, x.subject)), esc(x.note || ''), esc(day(x.sharedAt)) + ' by ' + (x.sharedByName ? esc(x.sharedByName) : who(st, x.sharedBy)), x.expiresAt ? esc(day(x.expiresAt)) + (x.state === 'expired' ? ' ' + UI.pill('expired', 'warn') : '') : '<span class="muted">until revoked</span>', UI.btn('Revoke', { size: 'xs', kind: 'danger', attrs: 'data-unshare="' + esc(x.id) + '" aria-label="Revoke the share with ' + esc(x.subjectName || x.subject) + '"' })]), { clickable: false, minWidth: '0', cls: 'bare' })
+          : UI.empty('Not shared', 'Share this secret with a person, a directory group or a workspace\'s members. A share is a policy grant of read on this exact path; a deny that names someone still wins.', UI.btn('Share', { size: 'sm', attrs: 'data-share' }));
+        return problem + UI.panel('Shared with', inner + small('Sharing needs secrets:write and both read and write on the path. Grantees read with their own clearance; reveals are audited and watched for unusual use.'));
+      };
+
       // ---------------- KV ----------------
       if (st.tab === 'kv') {
         const q = st.query.toLowerCase();
@@ -175,18 +206,20 @@
         left = '<div class="leftpane w320"><div class="hstack"><div class="eyebrow grow">Paths</div>' + UI.btn('New secret', { size: 'xs', icon: 'plus', attrs: 'data-newsecret' }) + '</div>' + UI.search('Filter paths', 'data-search', st.query)
           + Object.keys(groups).map((g) => '<div class="vault-group"><div class="muted mono" style="font-size:11px;padding:4px 8px 0">' + esc(g) + '/</div>' + groups[g].map((x) => UI.listItem('<span class="mono">' + esc(kvp(x.path).slice(g.length + 1) || x.path) + '</span>', 'v' + x.currentVersion + ', ' + esc(day(x.updatedAt)) + (x.rotationPeriodDays ? ', rotates every ' + r1(x.rotationPeriodDays) + ' d' : ''), { active: x.path === st.sel, attrs: 'data-path="' + esc(x.path) + '"', right: overdue(x) ? UI.pill('overdue', 'danger') : UI.label(x.label, { sm: true }) })).join('') + '</div>').join('')
           + (list.length ? '' : st.secrets.length ? UI.empty('No paths match', 'Paths are 1 to 16 segments of lower-case letters, digits, dots, hyphens and underscores.') : UI.empty('No secrets you may list', 'Create a secret, or add a grant with list on kv under Policies: the vault is default deny.'))
-          + small('Paths above your clearance, and paths your policy does not let you list, are not shown (404).') + '</div>';
+          + small('Paths above your clearance, and paths your policy does not let you list, are not shown (404).')
+          + '<div class="eyebrow" style="margin-top:10px">Shared with you</div>' + ((st.sharedWithMe || []).length ? st.sharedWithMe.map((x) => UI.listItem('<span class="mono">' + esc(kvp(x.path)) + '</span>', 'from ' + esc(x.sharedByName || 'someone') + (x.expiresAt ? ', until ' + esc(day(x.expiresAt)) : '') + (x.readable ? '' : ', a deny refuses you'), { attrs: 'data-mineshare="' + esc(x.id) + '"', active: x.path === st.sel, right: UI.label(x.label, { sm: true }) })).join('') : small('Nothing is shared with you.')) + '</div>';
         body += flash;
         if (s) {
           const rev = st.revealed[s.path];
           const rot = s.rotationPeriodDays ? (overdue(s) ? '<span style="color:var(--danger-fg)">every ' + r1(s.rotationPeriodDays) + ' d, overdue since ' + esc(day(s.rotationDueAt)) + '</span>' : 'every ' + r1(s.rotationPeriodDays) + ' d, due ' + esc(day(s.rotationDueAt))) : 'none';
           const cur = s.versions.find((v) => v.version === s.currentVersion);
-          body += UI.pagehead(kvp(s.path), 'Current version ' + s.currentVersion + ', written ' + esc(day(s.updatedAt)) + (cur ? ' by ' + who(st, cur.createdBy) : '') + '. Values are sealed with the tenant data key; reads are audited as vault.secret.read (path, version and key count, never values).', UI.label(s.label) + UI.btn('Write new version', { kind: 'primary', size: 'sm', icon: 'edit', attrs: 'data-write' }) + UI.btn('Edit metadata', { size: 'sm', attrs: 'data-meta' }) + UI.btn('Rotation schedule', { size: 'sm', icon: 'clock', attrs: 'data-rotation' }) + UI.btn('Remove path', { kind: 'danger', size: 'sm', attrs: 'data-removepath' }))
+          body += UI.pagehead(kvp(s.path), 'Current version ' + s.currentVersion + ', written ' + esc(day(s.updatedAt)) + (cur ? ' by ' + who(st, cur.createdBy) : '') + '. Values are sealed with the tenant data key; reads are audited as vault.secret.read (path, version and key count, never values).', UI.label(s.label) + UI.btn('Write new version', { kind: 'primary', size: 'sm', icon: 'edit', attrs: 'data-write' }) + UI.btn('Edit metadata', { size: 'sm', attrs: 'data-meta' }) + (App.can('secrets:write') ? UI.btn('Share', { size: 'sm', icon: 'link', attrs: 'data-share' }) : '') + UI.btn('Rotation schedule', { size: 'sm', icon: 'clock', attrs: 'data-rotation' }) + UI.btn('Remove path', { kind: 'danger', size: 'sm', attrs: 'data-removepath' }))
             + (overdue(s) ? UI.notice('<b>Rotation overdue.</b> Version ' + s.currentVersion + ' was written ' + esc(day(s.rotatedAt)) + ' on a ' + r1(s.rotationPeriodDays) + ' day schedule, due ' + esc(day(s.rotationDueAt)) + '. ' + who(st, s.owner) + ' gets the due notice and then the overdue notice (audited vault.rotation.due and vault.rotation.overdue). Writing a new version starts the schedule again.', 'danger', UI.btn('Write new version', { size: 'sm', attrs: 'data-write' })) : '')
             + (st.cas ? UI.problem('Write refused: version check failed', 'The write named cas ' + st.cas.given + ' but the current version is ' + st.cas.current + '. 409 with currentVersion. ' + (s.casRequired ? 'This path requires cas, so read the metadata and write again naming version ' + st.cas.current + '.' : 'Write again naming version ' + st.cas.current + '.'), st.cas.trace || false) + '<div class="hstack">' + UI.btn('Retry with cas ' + st.cas.current, { size: 'sm', attrs: 'data-retrycas' }) + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearcas' }) + '</div>' : '')
             + (st.gone ? UI.notice('<b>Version ' + st.gone.version + ' is ' + esc(st.gone.state) + '.</b> 410 with state ' + esc(st.gone.state) + (st.gone.state === 'destroyed' ? ': the sealed values were removed for good' + ((s.versions.find((v) => v.version === st.gone.version) || {}).destroyedAt ? ' on ' + esc(day(s.versions.find((v) => v.version === st.gone.version).destroyedAt)) : '') + '. The version number stays in the metadata.' : ': undelete it to read it again.'), 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-cleargone' })) : '')
             + '<div class="grid2">' + UI.panel('Metadata', UI.kv([['Label', UI.label(s.label, { sm: true })], ['Current version', '<span class="num">' + s.currentVersion + '</span>'], ['Oldest kept', '<span class="num">' + (s.oldestVersion == null ? '' : s.oldestVersion) + '</span>'], ['Max versions', '<span class="num">' + s.maxVersions + '</span>'], ['CAS required', s.casRequired ? 'yes' : 'no'], ['Rotation', rot], ['Owner', who(st, s.owner)], ['Created', esc(day(s.createdAt)) + ' by ' + who(st, s.createdBy)]], 2) + (Object.keys(s.customMetadata || {}).length ? '<div class="eyebrow">Custom metadata</div><div class="vstack gap4" style="font-size:12px">' + Object.keys(s.customMetadata).map((k) => '<div><span class="mono">' + esc(k) + '</span> <span class="muted">=</span> ' + esc(s.customMetadata[k]) + '</div>').join('') + '</div>' : ''))
             + UI.panel('Referenced by', small('The server does not report which objects reference a path.') + '<span class="muted" style="font-size:12px">A <span class="mono">vault:' + esc(s.path) + '#key</span> reference (user stores, data connections, MCP servers, workflow HTTP steps, database engines) is read as the person who saved it, under their policy and clearance now, and audited with actor.via naming the object.</span>') + '</div>'
+            + sharesPanel(s)
             + UI.panel('Versions', UI.table(['Version', 'State', 'Written by', 'Written', { label: '', right: true }], s.versions.slice().reverse().map((v) => ({ cells: ['<span class="num">' + v.version + '</span>' + (v.version === s.currentVersion ? ' ' + UI.pill('current', 'accent') : ''), UI.pill(v.state, v.state === 'active' ? 'ok' : v.state === 'deleted' ? 'warn' : 'danger') + (v.deletedAt && v.state === 'deleted' ? ' ' + small('deleted ' + esc(day(v.deletedAt))) : '') + (v.destroyedAt ? ' ' + small('destroyed ' + esc(day(v.destroyedAt))) : ''), who(st, v.createdBy), esc(when(v.createdAt)), '<span class="hstack gap6" style="justify-content:flex-end">' + (v.state === 'active' ? UI.btn(rev && rev.version === v.version ? 'Hide' : 'Reveal', { size: 'xs', attrs: 'data-reveal="' + v.version + '"' }) + UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-softdel="' + v.version + '"' }) : v.state === 'deleted' ? UI.btn('Undelete', { size: 'xs', attrs: 'data-undel="' + v.version + '"' }) : UI.btn('Reveal', { size: 'xs', attrs: 'data-reveal="' + v.version + '"' })) + (v.state !== 'destroyed' ? UI.btn('Destroy', { kind: 'ghost', size: 'xs', attrs: 'data-destroy="' + v.version + '"' }) : '') + '</span>'], attrs: 'data-version="' + v.version + '"' })), { clickable: false, minWidth: '0', emptyTitle: 'No versions kept' })
               + (rev ? '<div class="eyebrow">Version ' + rev.version + ' values</div>' + UI.notice('Revealed to you at ' + esc(when(rev.at)) + '; audited as <span class="mono">vault.secret.read</span> with the path, version and ' + Object.keys(rev.data).length + ' keys. Values stay masked until you show them.', 'info') + UI.table(['Key', 'Value', { label: '', right: true }], Object.keys(rev.data).map((k) => ['<span class="mono">' + esc(k) + '</span>', '<span class="mono vault-val">' + (st.shown[s.path + '#' + k] ? esc(rev.data[k]) : mask(rev.data[k])) + '</span>', '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn(st.shown[s.path + '#' + k] ? 'Hide' : 'Show', { kind: 'ghost', size: 'xs', attrs: 'data-show="' + esc(k) + '" aria-label="' + (st.shown[s.path + '#' + k] ? 'Hide ' : 'Show ') + esc(k) + '"' }) + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-vcopy="' + esc(k) + '" aria-label="Copy ' + esc(k) + '"' }) + '</span>']), { clickable: false, minWidth: '0', cls: 'bare' }) : '')
               + small('Soft delete and undelete need secrets:write and the delete capability; destroy and removing the path need secrets:admin and destroy. Versions beyond max versions are removed oldest first.'));
@@ -226,7 +259,7 @@
           + UI.panel('Who can', UI.field('Capability on path', '<div class="hstack wrap gap6">' + UI.input(st.whoPath || 'kv', { attrs: 'data-whopath aria-label="Path"' }) + UI.select(CAPS.filter((c) => c !== '*'), st.whoCap || 'read', 'data-whocap aria-label="Capability"') + UI.btn('Check', { size: 'sm', attrs: 'data-who' }) + '</div>')
             + (st.whoOut ? UI.table(['User', 'Decision', 'Deciding grant'], st.whoOut.map((w) => [who(st, w.user), UI.pill(w.allow ? 'allowed' : 'denied', w.allow ? 'ok' : 'danger'), w.grant ? '<span class="mono">' + esc(w.grant.id) + '</span> ' + esc(w.grant.subjectKind.replace('_', ' ')) + ' ' + subjectText(st, w.grant.subjectKind, w.grant.subject) : '<span class="muted">default deny</span>']), { clickable: false, minWidth: '0', cls: 'bare' }) : small('Runs explain for every active user of the tenant' + (st.users ? '' : ' you can see (users:manage shows the others)') + '. Each row is the same answer the vault gives that person.'))) + '</div>'
           + '<div class="hstack wrap"><div class="toolbar grow"><span class="relative">' + UI.btn(st.subjectFilter === 'all' ? 'Subject kind' : 'Subject: ' + st.subjectFilter, { size: 'sm', icon: 'filter', attrs: 'data-menu="subject"', cls: st.subjectFilter !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn(st.effectFilter === 'all' ? 'Effect' : 'Effect: ' + st.effectFilter, { size: 'sm', icon: 'filter', attrs: 'data-menu="effect"', cls: st.effectFilter !== 'all' ? 'active' : '' }) + '</span>' + small(rows.length + ' of ' + st.grants.length + ' grants') + '</div>' + UI.btn('Add grant', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newgrant' }) + '</div>'
-          + UI.table(['Grant', 'Subject', 'Path prefix', 'Capabilities', 'Effect', 'Description', 'Created', { label: '', right: true }], rows.map((g) => ({ cells: ['<span class="mono">' + esc(g.id.slice(-8)) + '</span>', small(esc(g.subjectKind.replace('_', ' '))) + ' ' + (g.subjectKind === 'workspace' ? '<a href="#" data-go="tenants">' + subjectText(st, g.subjectKind, g.subject) + '</a>' : g.subjectKind === 'group' ? '<a href="#" data-go="directories">' + esc(g.subject) + '</a>' : subjectText(st, g.subjectKind, g.subject)), '<span class="mono">' + esc(g.path) + '</span>', g.capabilities.map((c) => UI.pill(c, c === '*' ? 'accent' : 'outline')).join(' '), UI.pill(g.effect, g.effect === 'allow' ? 'ok' : 'danger'), esc(g.description || ''), esc(day(g.createdAt)) + ' by ' + who(st, g.createdBy), '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn('Edit', { kind: 'ghost', size: 'xs', attrs: 'data-editgrant="' + esc(g.id) + '" aria-label="Edit grant ' + esc(g.id) + '"' }) + UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-delgrant="' + esc(g.id) + '" aria-label="Delete grant ' + esc(g.id) + '"' }) + '</span>'], attrs: 'data-grant="' + esc(g.id) + '"' })), { clickable: false, minWidth: '980px', emptyTitle: st.grants.length ? 'No grants match' : 'No grants yet', emptyText: st.grants.length ? 'Change the filters.' : 'The vault is default deny: nobody reaches a path until a grant allows it.' });
+          + UI.table(['Grant', 'Subject', 'Path prefix', 'Capabilities', 'Effect', 'Description', 'Created', { label: '', right: true }], rows.map((g) => ({ cells: ['<span class="mono">' + esc(g.id.slice(-8)) + '</span>' + (g.shareSecretId ? ' ' + UI.pill('share', 'accent') + (g.expiresAt ? '<div class="muted" style="font-size:12px">until ' + esc(day(g.expiresAt)) + '</div>' : '') : ''), small(esc(g.subjectKind.replace('_', ' '))) + ' ' + (g.subjectKind === 'workspace' ? '<a href="#" data-go="tenants">' + subjectText(st, g.subjectKind, g.subject) + '</a>' : g.subjectKind === 'group' ? '<a href="#" data-go="directories">' + esc(g.subject) + '</a>' : subjectText(st, g.subjectKind, g.subject)), '<span class="mono">' + esc(g.path) + '</span>', g.capabilities.map((c) => UI.pill(c, c === '*' ? 'accent' : 'outline')).join(' '), UI.pill(g.effect, g.effect === 'allow' ? 'ok' : 'danger'), esc(g.description || ''), esc(day(g.createdAt)) + ' by ' + who(st, g.createdBy), '<span class="hstack gap6" style="justify-content:flex-end">' + UI.btn('Edit', { kind: 'ghost', size: 'xs', attrs: 'data-editgrant="' + esc(g.id) + '" aria-label="Edit grant ' + esc(g.id) + '"' }) + UI.btn('Delete', { kind: 'ghost', size: 'xs', attrs: 'data-delgrant="' + esc(g.id) + '" aria-label="Delete grant ' + esc(g.id) + '"' }) + '</span>'], attrs: 'data-grant="' + esc(g.id) + '"' })), { clickable: false, minWidth: '980px', emptyTitle: st.grants.length ? 'No grants match' : 'No grants yet', emptyText: st.grants.length ? 'Change the filters.' : 'The vault is default deny: nobody reaches a path until a grant allows it.' });
       }
 
       // ---------------- Leases ----------------
@@ -314,6 +347,21 @@
       ctx.on('click', '[data-clearflash]', () => { st.flash = null; ctx.rerender(); });
       ctx.on('click', '[data-path]', (e, t) => { st.sel = t.dataset.path; st.cas = null; st.gone = null; ctx.rerender(); });
       ctx.on('click', '[data-gopath]', (e, t) => { e.preventDefault(); st.tab = 'kv'; st.sel = t.dataset.gopath; ctx.rerender(); });
+      // ---- shares (1.6.0, B-4801) ----
+      ctx.on('click', '[data-clearshare]', () => { st.shareProblem = null; ctx.rerender(); });
+      ctx.on('click', '[data-gopolicies]', () => { st.tab = 'policies'; st.shareProblem = null; ctx.rerender(); });
+      ctx.on('click', '[data-mineshare]', (e, t) => {
+        const x = (st.sharedWithMe || []).find((m) => m.id === t.dataset.mineshare); if (!x) return;
+        if (st.secrets.some((s) => s.path === x.path)) { st.sel = x.path; ctx.rerender(); return; }
+        ctx.drawer({ title: esc(kvp(x.path)) + ' ' + UI.label(x.label, { sm: true }), body: UI.kv([['Shared by', esc(x.sharedByName || '')], ['Until', x.expiresAt ? esc(day(x.expiresAt)) : 'revoked'], ['You may', x.readable ? 'read and list' : 'nothing: a deny that names you wins']], 1) + UI.notice('Reading it is audited as vault.secret.read and compared with its reveal history; its owner hears of unusual reveals.', 'info'), actions: UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }) });
+      });
+      ctx.on('click', '[data-share]', () => shareModal(ctx, st.secrets.find((x) => x.path === st.sel), () => { delete st.shares[st.sel]; return reload(); }));
+      ctx.on('click', '[data-unshare]', async (e, t) => {
+        const key = st.sel; const x = (st.shares[key] || []).find((y) => y.id === t.dataset.unshare); if (!x) return;
+        const yes = await ctx.confirm({ title: 'Revoke the share with ' + esc(x.subjectName || x.subject) + '?', tag: 'audited', tone: 'danger', body: '<p class="fg2" style="margin:0">The grant is removed now: their next read of ' + esc(kvp(key)) + ' is refused unless another grant allows it. Audited as vault.secret.share.revoked.</p>', ok: 'Revoke' });
+        if (!yes) return;
+        try { await App.del('/api/vault/shares/' + enc(x.id)); delete st.shares[key]; ctx.toast('Share with ' + esc(x.subjectName || x.subject) + ' revoked.', 'warn'); await reload(); } catch (err) { App.fail(err, 'Not revoked'); }
+      });
       ctx.on('click', 'tr[data-key]', (e, t) => { st.selKey = t.dataset.key; ctx.rerender(); });
       ctx.on('click', 'tr[data-engine]', (e, t) => { if (e.target.closest('a')) return; st.selEngine = t.dataset.engine; ctx.rerender(); });
       ctx.on('click', 'tr[data-lease]', (e, t) => { if (e.target.closest('button')) return; st.selLease = t.dataset.lease; ctx.rerender(); });
@@ -503,6 +551,34 @@
         out.innerHTML = UI.code(JSON.stringify(res, null, 2), 'json');
       });
     }
+  }
+
+  function shareModal(ctx, sec, after) {
+    const st = ctx.state;
+    if (!sec) return;
+    const kindOpts = [{ value: 'user', label: 'A person' }, { value: 'group', label: 'A directory group' }, { value: 'workspace', label: 'A workspace\'s members' }, { value: 'api_key', label: 'An API key (id)' }];
+    const subjectField = (kind) => kind === 'user' ? UI.select(userOptions(st).filter((u) => u.value !== myId()), null, 'data-shsub aria-label="Person"') : kind === 'workspace' ? UI.select(workspaces(st).map((w) => ({ value: w.id, label: w.name })), null, 'data-shsub aria-label="Workspace"') : UI.input('', { placeholder: kind === 'group' ? 'cn=finance-analysts,ou=groups,dc=example' : '26-character key id', attrs: 'data-shsub aria-label="' + (kind === 'group' ? 'Group' : 'API key id') + '"' });
+    ctx.modal({
+      title: 'Share ' + esc(kvp(sec.path)),
+      body: '<div class="formgrid">' + UI.field('With', UI.select(kindOpts, 'user', 'data-shkind aria-label="Share with"')) + UI.field('Who', '<div data-shsubbox>' + subjectField('user') + '</div>') + UI.field('For', UI.select([{ value: '1', label: '1 day' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days' }, { value: '', label: 'until revoked' }], '7', 'data-shfor aria-label="Share for"'), 'Ends by itself (VAULT_SHARE_MAX_DAYS may cap it); revoke it any time.') + UI.field('Note', UI.input('', { placeholder: 'Why they need it', attrs: 'data-shnote aria-label="Note" maxlength="500"' })) + '</div>'
+        + UI.notice('They may read and list this exact path, nothing beside it. A person\'s clearance must reach ' + esc(sec.label) + '; a deny that names them still wins. Audited as vault.secret.shared; a person shared with is told.', 'info') + '<div data-sherr></div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Share', { kind: 'primary', attrs: 'data-shok' }),
+      onMount(m) {
+        const kindEl = m.querySelector('[data-shkind]');
+        kindEl.addEventListener('change', () => { m.querySelector('[data-shsubbox]').innerHTML = subjectField(kindEl.value); });
+        m.querySelector('[data-shok]').addEventListener('click', async () => {
+          const subject = (m.querySelector('[data-shsub]').value || '').trim(); const days = m.querySelector('[data-shfor]').value; const note = m.querySelector('[data-shnote]').value.trim();
+          if (!subject) { m.querySelector('[data-sherr]').innerHTML = UI.notice('Name who to share with.', 'warn'); return; }
+          try {
+            const out = await App.post('/api/vault/kv/shares/' + apiPath(sec.path), { subjectKind: kindEl.value, subject, expiresInDays: days ? +days : null, note: note || null });
+            App.closeOverlay(); st.shareProblem = null; ctx.toast('Shared with ' + esc(out.subjectName || out.subject) + (out.expiresAt ? ' until ' + esc(new Date(out.expiresAt).toLocaleDateString()) : '') + '. Audited as vault.secret.shared.', 'ok', 5000); await after();
+          } catch (err) {
+            if (err.status === 409 && err.problem && err.problem.step === 'vault-policy') { App.closeOverlay(); st.shareProblem = { who: plain(st, kindEl.value, subject), grant: err.problem.grant || '', path: kvp(sec.path) }; ctx.rerender(); return; }
+            m.querySelector('[data-sherr]').innerHTML = UI.notice('<b>' + esc((err.problem && err.problem.title) || 'Not shared') + '.</b> ' + esc((err.problem && err.problem.detail) || err.message), 'danger');
+          }
+        });
+      }
+    });
   }
 
   function grantModal(ctx, g, reload) {
