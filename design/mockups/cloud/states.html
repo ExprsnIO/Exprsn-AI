@@ -1,0 +1,72 @@
+<section class="section" id="states">
+  <div class="part-head">
+    <span class="eyebrow">Part 8 · states for every cloud screen</span>
+    <h2>States to design</h2>
+    <p>Each cloud screen carries these states in its prototype module (applied from the command palette and by the smoke run). They reuse the console's empty, skeleton, problem and notice components, so a cloud failure looks like every other failure in the console: what happened, what still works, and what to do next, with the trace id.</p>
+    <p class="example">Example data on Monday 28 Sep 2026.</p>
+  </div>
+  <div class="threecol">
+    <div class="frame full"><div class="screen"><div class="fhead">Cloud accounts · <b>empty</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="empty"><h3>No cloud accounts yet</h3><p>Connect an AWS, Azure, DigitalOcean or Cloudflare account to deploy Exprsn-AI, provision data services or add GPU pools. Nothing is created until you review a plan.</p><div><button type="button" class="btn sm primary">Connect an account</button></div></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>empty</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="empty"><h3>No deployments</h3><p>aws-prod and azure-eu are connected. A deployment starts as a plan with a cost estimate; apply runs only after you confirm it.</p><div><button type="button" class="btn sm primary">New deployment</button></div></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Cloud data · <b>loading</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="skeleton" style="width:60%"></div><div class="skeleton"></div><div class="skeleton" style="width:85%"></div><div class="skeleton" style="width:70%"></div>
+      <span class="muted" style="font-size:12px">Reading inventory from 6 accounts. Rows appear as each provider answers.</span>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>provider API error</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="problem"><div class="ptitle">Azure Resource Manager did not answer</div><div class="ptext">Reading nw-dr-azure failed with 503 from management.azure.com after 3 attempts. The deployment keeps running; plans and drift checks for azure-eu wait until ARM answers.</div><div class="trace"><span>Trace</span><span class="mono">9c2e4a7b1d3f4e5a8b6c0d2e4f6a8b1c</span></div></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>rate limited</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice warn"><span class="grow" style="min-width:0"><b>DigitalOcean is throttling do-team.</b> 250 requests a minute reached; step 4 of lab-do retries at 09:41:20 (Retry-After honoured). Other accounts are not affected.</span></div>
+      <span class="muted" style="font-size:12px">Per account and API class token buckets, shared across instances (B-10108).</span>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Cloud accounts · <b>permission denied</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="problem"><div class="ptitle">You need cloud:read</div><div class="ptext">Felix Brandt (Member, Finance Ops) cannot open Cloud accounts. Ask a Cloud admin for the Cloud operator or FinOps analyst role.</div><div class="trace"><span>Trace</span><span class="mono">1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c</span></div></div>
+      <div class="tablewrap minitable bare"><table class="dt"><tbody>
+        <tr><td>1 Role</td><td class="fg2">Member grants no cloud permission</td></tr>
+        <tr><td>2 Scopes</td><td class="fg2">not reached</td></tr>
+        <tr><td>3 Result</td><td class="fg2"><span class="pill danger">denied</span> audited as authz.denied</td></tr>
+      </tbody></table></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>budget hard stop</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice danger"><span class="grow" style="min-width:0"><b>Plan refused: budget_exceeded.</b> lab-do adds $214 a month; do-team is at 103 % of $4,000. Request an override or wait for October.</span></div>
+      <div class="hstack wrap gap6"><button type="button" class="btn sm">Request override</button><button type="button" class="btn sm ghost">Open budget</button></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Cloud accounts · <b>credential expiring</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice warn"><span class="grow" style="min-width:0"><b>azure-contoso client secret expires 4 Oct.</b> Rotation needs Application permissions the account does not hold; add a new secret in Entra ID and paste it here, or switch to federation.</span></div>
+      <div class="hstack wrap gap6"><button type="button" class="btn sm primary">Rotate now</button><button type="button" class="btn sm">Switch to federated</button></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>drift detected</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice warn"><span class="grow" style="min-width:0"><b>1 resource drifted on nw-prod-eu.</b> sg-0example1 gained inbound 0.0.0.0/0 port 22, by ops-break-glass on 27 Sep 22:14.</span></div>
+      <div class="hstack wrap gap6"><button type="button" class="btn sm primary">Revert</button><button type="button" class="btn sm">Adopt</button><button type="button" class="btn sm ghost">Ignore field</button></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>plan expired</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice info"><span class="grow" style="min-width:0"><b>This plan is older than 60 minutes</b> or the observed state changed since it was made. Apply only runs the plan you reviewed, so make a new one.</span></div>
+      <div><button type="button" class="btn sm primary">Plan again</button></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Deployments · <b>apply failed, rolled back</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice danger"><span class="grow" style="min-width:0"><b>Step 7 of 12 failed:</b> RDS create refused (DBInstanceQuotaExceeded). Steps 5 and 6 were rolled back; the network and security groups stay. Nothing is half-created.</span></div>
+      <div class="hstack wrap gap6"><button type="button" class="btn sm">Open journal</button><button type="button" class="btn sm primary">Retry from step 7</button></div>
+    </div></div></div></div>
+    <div class="frame full"><div class="screen"><div class="fhead">Cloud accounts · <b>dual control pending</b></div><div class="fbody" style="min-height:0"><div class="fpage">
+      <div class="notice info"><span class="grow" style="min-width:0"><b>Waiting for a second Cloud admin.</b> Mara Okafor proposed connecting cf-edge at 09:31. Jonas Lindqvist or another Cloud admin approves; the proposer cannot.</span></div>
+      <div class="hstack wrap gap6"><button type="button" class="btn sm">View proposal</button><button type="button" class="btn sm ghost">Withdraw</button></div>
+    </div></div></div></div>
+  </div>
+  <div class="state-strip">
+    <div class="state-card"><div class="st neutral">Empty</div><div class="sd">No accounts or no deployments; one primary action, nothing created until a plan is reviewed.</div></div>
+    <div class="state-card"><div class="st info">Loading</div><div class="sd">Skeleton rows while each provider's inventory answers.</div></div>
+    <div class="state-card"><div class="st danger">Provider API error</div><div class="sd">Problem panel with the provider's status, what keeps running and the trace id.</div></div>
+    <div class="state-card"><div class="st warn">Rate limited</div><div class="sd">Throttled account named, next retry time shown, other accounts unaffected.</div></div>
+    <div class="state-card"><div class="st danger">Permission denied</div><div class="sd">cloud:read missing; explain steps and the roles that grant it.</div></div>
+    <div class="state-card"><div class="st danger">Budget hard stop</div><div class="sd">New cost refused with budget_exceeded; override is dual-controlled for at most 7 days.</div></div>
+    <div class="state-card"><div class="st warn">Credential expiring</div><div class="sd">Vaulted secret near expiry; rotate or switch to federation.</div></div>
+    <div class="state-card"><div class="st warn">Drift detected</div><div class="sd">Out-of-band change with who and when; revert, adopt or ignore the field.</div></div>
+    <div class="state-card"><div class="st info">Plan expired</div><div class="sd">Plans live 60 minutes and only the reviewed plan applies.</div></div>
+    <div class="state-card"><div class="st danger">Apply failed</div><div class="sd">Failed step named, replaceable steps rolled back, retry from the failed step.</div></div>
+    <div class="state-card"><div class="st info">Dual control pending</div><div class="sd">Proposal waits for a second Cloud admin; the proposer cannot approve.</div></div>
+  </div>
+</section>

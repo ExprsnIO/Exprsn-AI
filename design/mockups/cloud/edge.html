@@ -1,0 +1,110 @@
+<section class="section" id="edge">
+  <div class="part-head"><span class="eyebrow">Part 6 · B-109</span><h2>Cloudflare edge and hosting</h2>
+  <p>Cloudflare does two jobs. As a front door it puts DNS, edge TLS, a Tunnel, WAF rules and optionally Access in front of any deployment, including an on-premises one. As a host it runs the app tier on Cloudflare Containers, while PostgreSQL, Redis and the GPUs stay on AWS, Azure, DigitalOcean or on premises. It is never a full platform host.</p></div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / nw-prod-eu / <b>Front door</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="twocol">
+          <div class="panel"><div class="hstack"><div class="eyebrow grow">DNS and TLS</div><span class="pill ok">active</span></div><div class="kv" style="--cols:1"><div><div class="k">Records</div><div class="v mono">ai.northwind-example.com, proxied</div></div><div><div class="k">Edge certificate</div><div class="v">Cloudflare universal, renews automatically <span class="callout">1</span></div></div><div><div class="k">Origin</div><div class="v">Tunnel only, no public origin address</div></div></div></div>
+          <div class="panel"><div class="hstack"><div class="eyebrow grow">Tunnel</div><span class="pill ok">2 connectors healthy</span></div><div class="kv" style="--cols:1"><div><div class="k">Connector</div><div class="v"><span class="mono">cloudflared</span> as a Deployment beside the app, 2 replicas</div></div><div><div class="k">Inbound ports</div><div class="v">none open on the cluster or VPC <span class="callout">2</span></div></div><div><div class="k">Token</div><div class="v mono">vault:cloud/cf-edge#tunnel-nw-prod-eu</div></div></div></div>
+          <div class="panel"><div class="hstack"><div class="eyebrow grow">WAF and rate limits</div><span class="pill ok">enforcing</span></div>
+            <div class="tablewrap bare minitable"><table class="dt"><tbody>
+              <tr><td>Managed ruleset</td><td>on, OWASP core in log mode for <span class="mono">/v1</span></td></tr>
+              <tr><td class="mono">/api/auth/*</td><td>20 requests a minute per address</td></tr>
+              <tr><td class="mono">/v1/*</td><td>600 a minute per API key header</td></tr>
+              <tr><td class="mono">/socket.io/*</td><td>WebSocket allowed, no caching</td></tr>
+            </tbody></table></div><span class="muted" style="font-size:12px">Edge limits sit above the server's own limits, never instead of them. <span class="callout">3</span></span></div>
+          <div class="panel"><div class="hstack"><div class="eyebrow grow">Access before the admin console</div><span class="pill info">optional, on</span></div>
+            <div class="fg2" style="font-size:12px">An Access application covers the console. Exprsn-AI's own sign-in, MFA and permissions still decide what a person may do. <span class="callout">4</span></div>
+            <div class="eyebrow">Excluded from Access</div><div class="hstack wrap gap4"><span class="chip mono">/v1/*</span><span class="chip mono">/oauth/*</span><span class="chip mono">/saml/*</span><span class="chip mono">/.well-known/*</span><span class="chip mono">/api/public/*</span><span class="chip mono">share links</span></div></div>
+        </div>
+        <p class="example">Example data. Hostnames use the reserved example domain pattern.</p>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Edge TLS replaces ACME</b> for the public name when Cloudflare is the front door; the existing ACME client still serves internal names (B-10901).</span></li>
+      <li><span class="n">2</span><span><b>Tunnel means no inbound ports.</b> The connector dials out; the cluster, VMs or on-premises hosts keep no public listener. <span class="mono">TRUST_PROXY</span> and <span class="mono">CF-Connecting-IP</span> give the server the client's address (B-10902).</span></li>
+      <li><span class="n">3</span><span><b>WAF rules are generated</b> from the server's routes so WebSockets, streaming and the OpenAI-compatible API keep working (B-10903).</span></li>
+      <li><span class="n">4</span><span><b>Access is an extra layer.</b> Machine clients, federation endpoints and public share links are excluded so they keep working without a Cloudflare identity (B-10904).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="edge-hybrid">
+  <h2>Hybrid hosting on Cloudflare Containers</h2>
+  <p>nw-edge-cf runs the app image on Cloudflare Containers with the console's static assets on Workers static assets. Everything stateful lives on another provider: Hyperdrive pools connections to PostgreSQL, Redis comes from a managed cache, objects go to R2 and the gateway reaches GPU pools over mTLS.</p>
+  <div class="diagram" role="img" aria-label="Hybrid deployment: browsers reach Cloudflare's edge, which serves static assets from Workers and sends API traffic to Cloudflare Containers. Containers reach PostgreSQL through Hyperdrive, Redis on a managed cache, objects in R2 and GPU pools on AWS, Azure, DigitalOcean or on premises.">
+    <svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs><marker id="edge-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+      <rect x="10" y="10" width="560" height="310" rx="8" style="fill:var(--accent-tint);stroke:var(--accent);stroke-dasharray:4 3"/>
+      <text x="24" y="32" style="font-size:12px;font-weight:700;fill:var(--accent)">CLOUDFLARE, APP TIER AND EDGE</text>
+      <rect x="600" y="10" width="350" height="310" rx="8" style="fill:var(--panel2);stroke:var(--line);stroke-dasharray:4 3"/>
+      <text x="614" y="32" style="font-size:12px;font-weight:700;fill:var(--muted)">AWS, AZURE, DIGITALOCEAN OR ON PREMISES</text>
+      <g style="stroke:var(--line)">
+        <rect x="30" y="60" width="150" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="220" y="60" width="150" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="220" y="150" width="150" height="70" rx="6" style="fill:var(--panel)"/>
+        <rect x="410" y="60" width="140" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="410" y="150" width="140" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="410" y="240" width="140" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="630" y="60" width="290" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="630" y="150" width="290" height="56" rx="6" style="fill:var(--panel)"/>
+        <rect x="630" y="240" width="290" height="56" rx="6" style="fill:var(--panel)"/>
+      </g>
+      <g style="font-size:13px">
+        <text x="44" y="84" style="font-weight:600">Edge, WAF, Access</text><text x="44" y="102" style="font-size:11px;fill:var(--muted)">DNS, TLS</text>
+        <text x="234" y="84" style="font-weight:600">Workers static assets</text><text x="234" y="102" style="font-size:11px;fill:var(--muted)">console HTML, CSS, JS</text>
+        <text x="234" y="174" style="font-weight:600">Containers</text><text x="234" y="192" style="font-size:11px;fill:var(--muted)">Exprsn-AI app image,</text><text x="234" y="208" style="font-size:11px;fill:var(--muted)">3 instances</text>
+        <text x="424" y="84" style="font-weight:600">Hyperdrive</text><text x="424" y="102" style="font-size:11px;fill:var(--muted)">pooled PostgreSQL</text>
+        <text x="424" y="174" style="font-weight:600">R2</text><text x="424" y="192" style="font-size:11px;fill:var(--muted)">nw-edge-blobs, EU</text>
+        <text x="424" y="264" style="font-weight:600">AI Gateway</text><text x="424" y="282" style="font-size:11px;fill:var(--muted)">optional, model calls</text>
+        <text x="644" y="84" style="font-weight:600">PostgreSQL 17 with pgvector</text><text x="644" y="102" style="font-size:11px;fill:var(--muted)">Aurora nw-edge-aurora, or on premises via Tunnel</text>
+        <text x="644" y="174" style="font-weight:600">Redis (required)</text><text x="644" y="192" style="font-size:11px;fill:var(--muted)">ElastiCache Valkey nw-edge-valkey; not Workers KV</text>
+        <text x="644" y="264" style="font-weight:600">GPU pools and model APIs</text><text x="644" y="282" style="font-size:11px;fill:var(--muted)">gpu-cloud-eu over mTLS; Bedrock, Azure, DO, Workers AI</text>
+      </g>
+      <g style="stroke:var(--muted);stroke-width:1.4;fill:none" marker-end="url(#edge-arr)">
+        <path d="M180 88H218"/><path d="M105 116V185H218"/><path d="M370 170L408 96"/><path d="M370 185H408"/><path d="M370 200L408 262"/>
+        <path d="M550 88H628"/><path d="M370 214L388 228H590L628 182"/><path d="M550 268H628"/>
+      </g>
+    </svg>
+  </div>
+  <div class="threecol">
+    <div class="panel"><div class="eyebrow">Containers and Hyperdrive · B-10905</div><div class="fg2" style="font-size:12px">The entry Worker routes <span class="mono">/api</span>, <span class="mono">/v1</span> and <span class="mono">/socket.io</span> to the containers and serves the console from static assets. Hyperdrive connects to PostgreSQL on any provider, or on premises through a Tunnel. Migrations run as a one-off container before traffic switches.</div></div>
+    <div class="panel"><div class="eyebrow">Redis is required</div><div class="fg2" style="font-size:12px">BullMQ, the Socket.io adapter and the cross-instance bus need Redis. Cloudflare has no managed Redis and Workers KV is not a substitute, so the wizard requires a cache on another provider. How Containers reach a private cache is an open decision.</div></div>
+    <div class="panel"><div class="eyebrow">R2 · B-10906</div><div class="fg2" style="font-size:12px">R2 is an object store target through the existing S3 adapter (<span class="mono">BLOB_STORE=s3</span>, region <span class="mono">auto</span>): files, backups, training artefacts and export bundles. The EU jurisdiction keeps confidential objects in the EU.</div></div>
+  </div>
+</section>
+
+<section class="section" id="edge-models">
+  <h2>AI Gateway, Workers AI and D1</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Models / <b>Cloud backends, AI Gateway</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="tablewrap minitable"><table class="dt" style="min-width:640px"><thead><tr><th>Backend</th><th>AI Gateway</th><th>Caching</th><th>Logs</th><th>Rate limit</th></tr></thead><tbody>
+          <tr><td><b>Bedrock</b>, aws-prod eu-central-1</td><td><span class="pill">off</span></td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>
+          <tr><td><b>Azure AI Foundry</b>, azure-eu swedencentral</td><td><span class="pill ok">on</span> gw-northwind</td><td>off</td><td>internal and below only <span class="callout">1</span></td><td>1,200 a minute</td></tr>
+          <tr><td><b>DigitalOcean GenAI</b></td><td><span class="pill">off</span></td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>
+          <tr><td><b>Workers AI</b>, cf-edge <span class="callout">4</span></td><td><span class="pill ok">on</span> gw-northwind</td><td>public prompts only</td><td>internal and below only</td><td>600 a minute</td></tr>
+        </tbody></table></div>
+        <div class="notice info"><span class="grow">AI Gateway's fallback is not used for routing. Exprsn-AI's gateway and the profile's fallback decide which model answers. <span class="callout">2</span></span></div>
+        <div class="panel tint"><div class="hstack"><div class="eyebrow grow">D1 database field-notes</div><span class="pill ok">connected, read-only</span></div><div class="fg2" style="font-size:12px">A read-only data connection in the SQLite dialect for Field Sales. Queries are classified and refused unless they only read; D1 is never offered as Exprsn-AI's own database. <span class="callout">3</span></div></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>AI Gateway logs hold prompts,</b> so they are off for content above internal and caching is off unless a prompt is public (B-10908).</span></li>
+      <li><span class="n">2</span><span><b>Never a second router.</b> AI Gateway adds caching, logs and rate limits in front of a cloud call; retries and fallback stay with the gateway and the profile (B-10908).</span></li>
+      <li><span class="n">3</span><span><b>D1 read-only</b> uses the D1 query API with the account token (B-10907).</span></li>
+      <li><span class="n">4</span><span><b>Workers AI</b> is a model backend through its OpenAI-compatible endpoint, a B-43 <span class="mono">kind: openai</span> instance, priced in neurons (B-10509).</span></li>
+    </ol></div>
+  </div>
+  <div class="panel"><div class="eyebrow">Decisions recorded for Cloudflare</div>
+    <div class="tablewrap bare minitable"><table class="dt" style="min-width:560px"><tbody>
+      <tr><td><b>Vectorize</b></td><td>Not used. pgvector stays the vector store, so knowledge, memory and their label filters keep one implementation.</td></tr>
+      <tr><td><b>Workers KV, Queues, Durable Objects</b></td><td>Out of scope as data services. Containers rely on Cloudflare's own internals; Exprsn-AI stores nothing there.</td></tr>
+      <tr><td><b>Credentials</b></td><td>Scoped API token and account ID in the vault; no federation is offered.</td></tr>
+      <tr><td><b>Billing</b></td><td>Billing API and GraphQL Analytics; Workers AI neurons priced into usage records (B-10608).</td></tr>
+      <tr><td><b>Label ceiling</b></td><td>The edge terminates TLS, so the Cloudflare zone <span class="mono">edge</span> has ceiling internal unless raised under dual control.</td></tr>
+    </tbody></table></div></div>
+</section>

@@ -1,0 +1,88 @@
+<header class="section" id="overview">
+  <h1>Cloud deployments and integrations</h1>
+  <p class="lede">Exprsn-AI 2.0.0 works with public clouds in both directions. It deploys itself (application, PostgreSQL, Redis and Ollama GPU nodes) to AWS, Azure or DigitalOcean, with Cloudflare as the front door and as an optional app tier. A running install can also use those clouds' services: model APIs as gateway backends, GPU node groups as pools, and managed databases as its own database or as data connections. Every change is planned, priced and reviewed before the deploy worker applies it with the providers' own SDKs and APIs.</p>
+  <div class="meta"><span>Release 2.0.0, epics B-100 to B-109</span><span>Sprints 44 to 50</span><span>Example data for the Northwind tenant, Monday 28 Sep 2026 09:40 UTC; every account ID, key and price is invented</span><span>Prototype routes <span class="mono">#/cloud</span>, <span class="mono">#/deployments</span>, <span class="mono">#/cloud-data</span>, <span class="mono">#/cloud-compute</span>, <span class="mono">#/finops</span>, <span class="mono">#/models</span></span></div>
+  <div class="flow">
+    <div class="box"><span class="eyebrow">1</span><span class="t">Connect account</span><span class="s">Federated or vaulted credentials, region allow list, label ceilings, budget</span></div>
+    <div class="box"><span class="eyebrow">2</span><span class="t">Plan</span><span class="s">Desired resource graph compared with what the provider reports</span></div>
+    <div class="box"><span class="eyebrow">3</span><span class="t">Review cost and diff</span><span class="s">Monthly estimate, budget check, create, update, replace and delete per resource</span></div>
+    <div class="box"><span class="eyebrow">4</span><span class="t">Apply</span><span class="s">Deploy worker walks the graph; every step is journalled and idempotent</span></div>
+    <div class="box"><span class="eyebrow">5</span><span class="t">Verify</span><span class="s">/readyz over the public URL, database and cache reachable, TLS valid, pools healthy</span></div>
+    <div class="box"><span class="eyebrow">6</span><span class="t">Operate</span><span class="s">Drift, upgrades and rollback, scale to zero, spend against budget</span></div>
+  </div>
+</header>
+
+<section class="section" id="overview-matrix">
+  <h2>What each provider offers</h2>
+  <p>Cloudflare is an edge and app-tier provider. It cannot run PostgreSQL, Redis or Ollama GPUs, so those cells say so and the wizard shows the same reason on disabled choices instead of hiding them.</p>
+  <div class="tablewrap minitable"><table class="dt" style="min-width:820px"><thead><tr><th>Capability</th><th>AWS</th><th>Azure</th><th>DigitalOcean</th><th>Cloudflare</th></tr></thead><tbody>
+    <tr><td><b>App tier</b></td><td>EKS, EC2, ECS Fargate</td><td>AKS, Azure VMs, Container Apps</td><td>DOKS, Droplets, App Platform</td><td>Cloudflare Containers, console assets on Workers static assets <span class="pill info">hybrid only</span></td></tr>
+    <tr><td><b>PostgreSQL as own database</b></td><td>RDS, Aurora PostgreSQL</td><td>Flexible Server</td><td>Managed PostgreSQL</td><td><span class="muted">not offered: runs the app tier only; Hyperdrive reaches a database on another provider</span></td></tr>
+    <tr><td><b>MySQL</b></td><td>RDS, Aurora MySQL</td><td>MySQL Flexible Server</td><td>Managed MySQL</td><td><span class="muted">not offered</span></td></tr>
+    <tr><td><b>Document and key-value</b></td><td>DocumentDB, DynamoDB</td><td>Cosmos DB</td><td>Managed MongoDB</td><td>D1, read-only data connection only <span class="muted">(KV, Queues, Durable Objects out of scope)</span></td></tr>
+    <tr><td><b>Redis for Exprsn-AI</b></td><td>ElastiCache, MemoryDB</td><td>Azure Cache for Redis</td><td>Managed Valkey</td><td><span class="muted">not offered: Workers KV is not a substitute; pick a managed cache elsewhere</span></td></tr>
+    <tr><td><b>Object store</b></td><td>S3</td><td>Blob storage</td><td>Spaces</td><td>R2 (S3-compatible, EU jurisdiction available)</td></tr>
+    <tr><td><b>GPU pools</b></td><td>EKS node groups, EC2, spot</td><td>AKS node pools, NC and ND VMs, spot</td><td>GPU Droplets, DOKS GPU pools; no spot</td><td><span class="muted">not offered: runs the app tier only; pick a provider for GPUs</span></td></tr>
+    <tr><td><b>Model API</b></td><td>Bedrock (Converse)</td><td>Azure AI Foundry, Azure OpenAI</td><td>GenAI serverless inference</td><td>Workers AI; AI Gateway as an optional proxy for all four</td></tr>
+    <tr><td><b>DNS and TLS front door</b></td><td>Route 53 with ACME dns-01</td><td>Azure DNS with ACME dns-01</td><td>DO DNS with ACME dns-01</td><td>Cloudflare DNS, edge TLS, Tunnel, WAF, Access, for any deployment</td></tr>
+    <tr><td><b>Federated credentials</b></td><td><span class="pill ok">OIDC, AssumeRoleWithWebIdentity</span></td><td><span class="pill ok">federated identity credential</span></td><td><span class="pill">not offered</span> vaulted token</td><td><span class="pill">not offered</span> vaulted scoped token</td></tr>
+    <tr><td><b>Billing API</b></td><td>Cost Explorer</td><td>Cost Management</td><td>Balance, billing history, invoices</td><td>Billing API, GraphQL Analytics (neurons)</td></tr>
+  </tbody></table></div>
+</section>
+
+<section class="section" id="overview-arch">
+  <h2>How the server talks to the clouds</h2>
+  <p>No Terraform and no CLI in the request path: the deploy worker calls each provider directly through an adapter, records every step in the operation journal and resumes from it after a restart (B-101).</p>
+  <div class="diagram" role="img" aria-label="Architecture: the console calls the API, which stores plans; the deploy worker reads the resource graph and operation journal and calls provider adapters for AWS, Azure, DigitalOcean and Cloudflare through a shared rate limiter, with credentials from the vault or the OIDC issuer.">
+    <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs><marker id="ov-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+      <g style="stroke:var(--line);stroke-width:1">
+        <rect x="20" y="30" width="170" height="64" rx="6" style="fill:var(--panel)"/>
+        <rect x="20" y="150" width="170" height="64" rx="6" style="fill:var(--panel)"/>
+        <rect x="250" y="30" width="200" height="64" rx="6" style="fill:var(--accent-tint);stroke:var(--accent)"/>
+        <rect x="250" y="150" width="200" height="90" rx="6" style="fill:var(--panel)"/>
+        <rect x="250" y="276" width="200" height="60" rx="6" style="fill:var(--panel2)"/>
+        <rect x="510" y="30" width="170" height="64" rx="6" style="fill:var(--panel)"/>
+        <rect x="510" y="150" width="170" height="90" rx="6" style="fill:var(--panel)"/>
+        <rect x="740" y="20" width="200" height="54" rx="6" style="fill:var(--panel)"/>
+        <rect x="740" y="98" width="200" height="54" rx="6" style="fill:var(--panel)"/>
+        <rect x="740" y="176" width="200" height="54" rx="6" style="fill:var(--panel)"/>
+        <rect x="740" y="254" width="200" height="54" rx="6" style="fill:var(--panel)"/>
+      </g>
+      <g style="font-size:13px">
+        <text x="35" y="56" style="font-weight:600">Console</text><text x="35" y="76" style="font-size:11px;fill:var(--muted)">wizards, plans, approvals</text>
+        <text x="35" y="176" style="font-weight:600">API routes</text><text x="35" y="196" style="font-size:11px;fill:var(--muted)">cloud:read, deploy, admin</text>
+        <text x="265" y="56" style="font-weight:600">Deploy worker</text><text x="265" y="76" style="font-size:11px;fill:var(--muted)">cloud.apply, cloud.poll, cloud.drift</text>
+        <text x="265" y="176" style="font-weight:600">Database</text><text x="265" y="196" style="font-size:11px;fill:var(--muted)">resource graph, plans,</text><text x="265" y="212" style="font-size:11px;fill:var(--muted)">operation journal, prices,</text><text x="265" y="228" style="font-size:11px;fill:var(--muted)">budgets, costs</text>
+        <text x="265" y="300" style="font-weight:600">Audit chain</text><text x="265" y="320" style="font-size:11px;fill:var(--muted)">cloud.* events with request ids</text>
+        <text x="525" y="56" style="font-weight:600">Rate limiter</text><text x="525" y="76" style="font-size:11px;fill:var(--muted)">per account and API class</text>
+        <text x="525" y="176" style="font-weight:600">Credentials</text><text x="525" y="196" style="font-size:11px;fill:var(--muted)">OIDC issuer (AWS, Azure)</text><text x="525" y="212" style="font-size:11px;fill:var(--muted)">vault refs (all four),</text><text x="525" y="228" style="font-size:11px;fill:var(--muted)">signing in OpenBao transit</text>
+        <text x="755" y="44" style="font-weight:600">AWS adapter</text><text x="755" y="62" style="font-size:11px;fill:var(--muted)">AWS SDK v3, SigV4</text>
+        <text x="755" y="122" style="font-weight:600">Azure adapter</text><text x="755" y="140" style="font-size:11px;fill:var(--muted)">ARM SDKs, async operations</text>
+        <text x="755" y="200" style="font-weight:600">DigitalOcean adapter</text><text x="755" y="218" style="font-size:11px;fill:var(--muted)">REST API v2, actions</text>
+        <text x="755" y="278" style="font-weight:600">Cloudflare adapter</text><text x="755" y="296" style="font-size:11px;fill:var(--muted)">API v4, GraphQL Analytics</text>
+      </g>
+      <g style="stroke:var(--muted);stroke-width:1.4;fill:none" marker-end="url(#ov-arr)">
+        <path d="M105 94V148"/><path d="M190 182H248"/><path d="M350 148V96"/><path d="M350 240V274"/><path d="M450 62H508"/><path d="M595 148V96"/>
+        <path d="M680 62H710V47H738"/><path d="M680 62H710V125H738"/><path d="M680 62H710V203H738"/><path d="M680 62H710V281H738"/>
+      </g>
+    </svg>
+  </div>
+  <div class="twocol">
+    <div class="panel"><div class="eyebrow">Design rules carried over</div>
+      <ul style="margin:0;padding-left:18px;color:var(--fg2);display:flex;flex-direction:column;gap:4px">
+        <li>Native SDKs and REST APIs, not Terraform: AWS SDK v3, Azure ARM SDKs, DigitalOcean API v2 (no official Node SDK) and Cloudflare API v4, each behind one <span class="mono">CloudProvider</span> adapter.</li>
+        <li>Plan, then apply, then verify. An apply runs only the plan the reviewer saw, identified by its hash; a changed plan needs a new review.</li>
+        <li>Dual control for adding or removing an account, changing its credential mode, raising a region's label ceiling, destroying protected data and overriding a budget.</li>
+        <li>Labels and zones decide where data may go: each region has a label ceiling and a zone; restricted data stays on premises unless a dual-controlled override says otherwise.</li>
+        <li>Exprsn-AI identity, guardrails and the gateway stay authoritative. Cloudflare Access, Bedrock Guardrails and AI Gateway are extra layers, never replacements.</li>
+        <li>pgvector stays the vector store; Cloudflare Vectorize is not used.</li>
+      </ul></div>
+    <div class="panel"><div class="eyebrow">Two directions</div>
+      <div class="kv" style="--cols:1">
+        <div><div class="k">Deploy Exprsn-AI itself</div><div class="v">Kubernetes with the Helm chart, VMs with the bare-metal installer, or container platforms; managed PostgreSQL and Redis; GPU nodes running Ollama; DNS and TLS through ACME or Cloudflare (B-102, B-109).</div></div>
+        <div><div class="k">Use cloud services from a running install</div><div class="v">Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI as model backends (B-105, needs B-43); GPU node groups as pools (B-104); managed databases as data connections (B-103).</div></div>
+        <div><div class="k">Pay for it knowingly</div><div class="v">An estimate before every apply, monthly budgets with a hard stop on new resources, billing ingestion and showback per workspace (B-106).</div></div>
+      </div></div>
+  </div>
+</section>

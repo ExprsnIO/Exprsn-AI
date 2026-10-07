@@ -1,0 +1,207 @@
+<section class="section" id="deployments">
+  <div class="part-head"><span class="eyebrow">Part 2 · B-101, B-102</span><h2>Deployments</h2>
+  <p>A deployment is Exprsn-AI itself running in a cloud: an app tier, its database, cache and object store, optional GPU pools and a front door. The wizard produces a plan; the plan is priced, diffed and approved; the deploy worker applies it and verifies the result. Afterwards the detail page watches for drift and runs upgrades and rollbacks the same way.</p></div>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / <b>Deployments</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">Deployments</h1><div class="sub">5 deployments · estimates are example data</div></div><div class="actions"><button type="button" class="btn sm primary">New deployment</button></div></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:900px"><thead><tr><th>Deployment</th><th>Account, region</th><th>Target</th><th>Front door</th><th>Release</th><th>State</th><th class="r">Estimate a month</th></tr></thead><tbody>
+          <tr class="row selected"><td><b>nw-prod-eu</b></td><td>aws-prod, eu-central-1</td><td>Kubernetes, EKS 1.33</td><td>Cloudflare</td><td>2.0.0 <span class="pill info">2.0.1 available</span></td><td><span class="pill ok">healthy</span> <span class="pill warn">drift 1</span> <span class="callout">1</span></td><td class="r num">$8,420</td></tr>
+          <tr class="row"><td><b>nw-dr-azure</b></td><td>azure-eu, swedencentral</td><td>VMs, 2 × Standard_D4s_v5</td><td>ACME, Azure DNS</td><td>2.0.0</td><td><span class="pill ok">healthy</span> <span class="muted">warm standby</span></td><td class="r num">$2,310</td></tr>
+          <tr class="row"><td><b>nw-edge-cf</b></td><td>cf-edge + aws-prod</td><td>Cloudflare Containers, hybrid</td><td>Cloudflare</td><td>2.0.0</td><td><span class="pill warn">plan ready, waiting</span> <span class="callout">2</span></td><td class="r num">$1,480</td></tr>
+          <tr class="row"><td><b>lab-do</b></td><td>do-team, ams3</td><td>App Platform</td><td>Cloudflare DNS, WAF</td><td>2.0.0</td><td><span class="pill danger">blocked: budget</span> <span class="callout">3</span></td><td class="r num">$214</td></tr>
+          <tr class="row"><td><b>sandbox-ecs</b></td><td>aws-sandbox, us-east-1</td><td>ECS Fargate</td><td>ACME, Route 53</td><td>2.0.0</td><td><span class="pill info">applying 7 of 12</span></td><td class="r num">$386</td></tr>
+        </tbody></table></div>
+      </div>
+      <div class="finsp"><div class="hstack"><b class="grow">nw-edge-cf</b><span class="pill warn">waiting</span></div><p style="font-size:12px;margin:0" class="fg2">Plan ready: 14 resources to create. Waiting because the cf-edge token lacks Containers Edit.</p><div class="hstack wrap gap6"><button type="button" class="btn sm">Open plan</button><button type="button" class="btn sm">Fix token</button></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Health and drift are separate pills.</b> A healthy deployment can still have drift; the drift pill opens the Drift tab (B-10106).</span></li>
+      <li><span class="n">2</span><span><b>Waiting names the blocker</b> and links to its fix: here a missing Cloudflare token permission (B-10009).</span></li>
+      <li><span class="n">3</span><span><b>Budget blocks are explicit.</b> do-team is at 103 %, so a plan that adds $214 a month is refused until a dual-controlled override or a new month (B-10602).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-target">
+  <h2>New deployment, steps 1 and 2: target and compute</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / <b>New deployment</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Target</span><span class="sep">›</span><span class="cur"><i class="n">2</i>Compute</span><span class="sep">›</span><span><i class="n">3</i>Data</span><span class="sep">›</span><span><i class="n">4</i>Front door</span><span class="sep">›</span><span><i class="n">5</i>Review</span><span class="sep">›</span><span><i class="n">6</i>Apply</span></div>
+        <div class="kv" style="--cols:3"><div><div class="k">Provider</div><div class="v">Cloudflare</div></div><div><div class="k">Account</div><div class="v">cf-edge</div></div><div><div class="k">Region</div><div class="v">Global edge <span class="callout">1</span></div></div></div>
+        <div class="tiles">
+          <div class="tile off"><div class="hstack"><b class="grow">Kubernetes</b><span class="pill">not offered</span></div><span class="muted">Runs the app tier only; pick a provider for data and GPUs</span></div>
+          <div class="tile off"><div class="hstack"><b class="grow">VMs</b><span class="pill">not offered</span></div><span class="muted">No virtual machines on Cloudflare</span></div>
+          <div class="tile on"><div class="hstack"><b class="grow">Cloudflare Containers</b><span class="pill info">hybrid</span></div><span>The app image in Containers behind an entry Worker; console static assets on Workers static assets <span class="callout">2</span></span></div>
+          <div class="tile off"><div class="hstack"><b class="grow">GPU pool</b><span class="pill">not offered</span></div><span class="muted">Runs the app tier only; pick a provider for data and GPUs</span></div>
+        </div>
+        <div class="hstack wrap"><span class="fg2">Size</span><div class="seg"><button type="button">Small</button><button type="button" class="active">Medium</button><button type="button">Large, HA</button></div><span class="muted" style="font-size:12px">3 container instances, 2 vCPU and 4 GiB each</span></div>
+        <div class="notice info"><span class="grow">A Cloudflare deployment is always hybrid: the next step asks where PostgreSQL, Redis and the GPUs run. <span class="callout">3</span></span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Step 1 lists only allowed regions</b> of the chosen account; Cloudflare has one entry, the global edge, with zone <span class="mono">edge</span> and ceiling internal (B-10201).</span></li>
+      <li><span class="n">2</span><span><b>Targets per provider:</b> AWS offers EKS, EC2 and ECS Fargate; Azure AKS, VMs and Container Apps; DigitalOcean DOKS, Droplets and App Platform (B-10203 to B-10205); Cloudflare Containers (B-10905).</span></li>
+      <li><span class="n">3</span><span><b>Unsupported tiers stay visible and disabled</b> with the reason, following the console's rule for unavailable choices.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-data">
+  <h2>Step 3: data</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / New deployment / <b>Data</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Target</span><span class="sep">›</span><span class="done"><i class="n">2</i>Compute</span><span class="sep">›</span><span class="cur"><i class="n">3</i>Data</span><span class="sep">›</span><span><i class="n">4</i>Front door</span><span class="sep">›</span><span><i class="n">5</i>Review</span><span class="sep">›</span><span><i class="n">6</i>Apply</span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:640px"><thead><tr><th>Tier</th><th>Choice</th><th>Where</th><th>Reached by</th></tr></thead><tbody>
+          <tr><td><b>Database</b></td><td><div class="seg"><button type="button" class="active">Provision new</button><button type="button">Use existing</button><button type="button">On premises</button></div></td><td>Aurora PostgreSQL 17, nw-edge-aurora, aws-prod eu-central-1</td><td>Hyperdrive <span class="callout">1</span></td></tr>
+          <tr><td><b>Redis</b> <span class="pill warn">required</span></td><td><div class="seg"><button type="button" class="active">Provision new</button><button type="button">Use existing</button></div></td><td>ElastiCache Valkey 8, nw-edge-valkey, aws-prod eu-central-1</td><td>TLS endpoint, AUTH, IP allow list <span class="callout">2</span></td></tr>
+          <tr><td><b>Object store</b></td><td><div class="seg"><button type="button" class="active">R2</button><button type="button">S3</button></div></td><td>R2 bucket nw-edge-blobs, EU jurisdiction</td><td><span class="mono">BLOB_STORE=s3</span></td></tr>
+          <tr><td><b>GPU pools</b></td><td><div class="seg"><button type="button" class="active">Existing pools</button><button type="button">New pool</button></div></td><td>gpu-cloud-eu (aws-prod)</td><td>Gateway mTLS</td></tr>
+        </tbody></table></div>
+        <div class="notice warn"><span class="grow">Workers KV is not a substitute for Redis: Exprsn-AI needs Redis for its job queue, sockets and cross-instance bus. <span class="callout">3</span></span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Next</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Hyperdrive</b> pools connections from Containers to PostgreSQL on AWS, Azure, DigitalOcean or on premises through a Tunnel (B-10905). For non-Cloudflare targets this column shows a private endpoint instead (B-10202).</span></li>
+      <li><span class="n">2</span><span><b>How Containers reach a private cache</b> is an open decision; the example uses a TLS endpoint with AUTH and an IP allow list.</span></li>
+      <li><span class="n">3</span><span><b>Data choices reuse managed data</b> (B-103): provision new, adopt an existing instance from the account, or point at an on-premises server.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-frontdoor">
+  <h2>Step 4: front door</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / New deployment / <b>Front door</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Target</span><span class="sep">›</span><span class="done"><i class="n">2</i>Compute</span><span class="sep">›</span><span class="done"><i class="n">3</i>Data</span><span class="sep">›</span><span class="cur"><i class="n">4</i>Front door</span><span class="sep">›</span><span><i class="n">5</i>Review</span><span class="sep">›</span><span><i class="n">6</i>Apply</span></div>
+        <div class="tiles">
+          <div class="tile on"><div class="hstack"><b class="grow">Cloudflare</b><span class="pill ok">cf-edge</span></div><span>DNS and edge TLS, Tunnel with no inbound ports, WAF and rate limits, optional Access before the admin console <span class="callout">1</span></span></div>
+          <div class="tile"><div class="hstack"><b class="grow">ACME and provider DNS</b></div><span>Route 53, Azure DNS or DO DNS records; certificates from Let's Encrypt or the Exprsn-AI CA with dns-01</span></div>
+          <div class="tile"><div class="hstack"><b class="grow">Bring your own</b></div><span>A load balancer or proxy you run; Exprsn-AI only checks the public URL</span></div>
+        </div>
+        <div class="formgrid" style="--cols:2">
+          <div class="field"><label>Public URL</label><input class="input mono" value="https://edge.northwind-example.com" aria-label="Public URL"></div>
+          <div class="field"><label>Zone</label><input class="input mono" value="northwind-example.com" aria-label="DNS zone"></div>
+        </div>
+        <div class="hstack wrap gap12"><button type="button" class="toggle on" role="switch" aria-checked="true"><span class="sw"></span><span>Tunnel</span></button><button type="button" class="toggle on" role="switch" aria-checked="true"><span class="sw"></span><span>WAF and rate limits</span></button><button type="button" class="toggle on" role="switch" aria-checked="true"><span class="sw"></span><span>Access before the admin console</span></button><span class="callout">2</span></div>
+        <div class="fb"><button type="button" class="btn sm">Back</button><button type="button" class="btn sm ghost">Cancel</button><span class="grow"></span><button type="button" class="btn sm primary">Review plan</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>The front door is a step for every target,</b> including on-premises installs, so any deployment can sit behind Cloudflare (B-10901 to B-10904). For a Cloudflare app tier it is built in.</span></li>
+      <li><span class="n">2</span><span><b>Access is an extra layer.</b> Exprsn-AI's own sign-in still decides who may act; <span class="mono">/v1</span>, OIDC and SAML endpoints, <span class="mono">/.well-known</span> and public share links stay outside Access. See the Cloudflare edge part.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-review">
+  <h2>Step 5: review the estimate and the plan diff</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / New deployment / <b>Review</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="steps"><span class="done"><i class="n">1</i>Target</span><span class="sep">›</span><span class="done"><i class="n">2</i>Compute</span><span class="sep">›</span><span class="done"><i class="n">3</i>Data</span><span class="sep">›</span><span class="done"><i class="n">4</i>Front door</span><span class="sep">›</span><span class="cur"><i class="n">5</i>Review</span><span class="sep">›</span><span><i class="n">6</i>Apply</span></div>
+        <div class="stats"><div class="stat"><div class="n">$1,480</div><div class="l">Estimate a month</div><div class="d">730 h, 400 GiB, egress assumed 2 TiB</div></div><div class="stat"><div class="n">14</div><div class="l">Resources to create</div><div class="d">0 update, 0 delete</div></div><div class="stat"><div class="n">Pass</div><div class="l">Budget check <span class="callout">1</span></div><div class="d">cf-edge $760 of $1,200; aws-prod $11,660 of $18,000 a month</div></div></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:640px"><thead><tr><th>Change</th><th>Resource</th><th>Provider</th><th class="r">A month</th></tr></thead><tbody>
+          <tr><td class="diff-add">+ create</td><td>Container application nw-edge-app, 3 instances</td><td>Cloudflare</td><td class="r num">$310</td></tr>
+          <tr><td class="diff-add">+ create</td><td>Hyperdrive config nw-edge-db</td><td>Cloudflare</td><td class="r num">$0</td></tr>
+          <tr><td class="diff-add">+ create</td><td>R2 bucket nw-edge-blobs, EU</td><td>Cloudflare</td><td class="r num">$62</td></tr>
+          <tr><td class="diff-add">+ create</td><td>Aurora PostgreSQL nw-edge-aurora, db.r7g.large</td><td>AWS</td><td class="r num">$812</td></tr>
+          <tr><td class="diff-add">+ create</td><td>ElastiCache Valkey nw-edge-valkey</td><td>AWS</td><td class="r num">$248</td></tr>
+          <tr><td class="diff-add">+ create</td><td>DNS, Tunnel, WAF rules, Access application (9 resources)</td><td>Cloudflare</td><td class="r num">$48</td></tr>
+        </tbody></table></div>
+        <div class="panel tint"><div class="eyebrow">Upgrade plan for nw-prod-eu, same view <span class="callout">2</span></div><div class="hstack wrap gap6"><span class="pill ok">4 create</span><span class="pill warn">3 update</span><span class="pill info">1 replace</span><span class="pill">0 delete</span><span class="pill outline">23 no-op</span><span class="muted">+$412 a month</span></div>
+          <div class="mono" style="font-size:12px;overflow-wrap:anywhere"><span class="diff-chg">~ update</span> helm release exprsn-ai: image 2.0.0 → 2.0.1, replicas 3 → 3<br><span class="diff-rep">± replace</span> launch template lt-app: AMI changes (requires new nodes, rolling)</div></div>
+        <div class="fb"><span class="muted" style="font-size:12px">Plan hash <span class="mono">sha256:9c41…e07a</span> · expires in 58 min <span class="callout">3</span></span><span class="grow"></span><button type="button" class="btn sm">Back</button><button type="button" class="btn sm primary">Apply plan</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>The estimate is per resource</b> from the price catalogue with its assumptions stated, and the budget check runs against every account the plan touches (B-10601, B-10602).</span></li>
+      <li><span class="n">2</span><span><b>Diffs are field level</b> with create, update, replace and delete coloured by token; a replace names the field that forces it (B-10103).</span></li>
+      <li><span class="n">3</span><span><b>Apply runs only this plan</b>, identified by its hash; a plan expires after 60 minutes or when the provider's state changes.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-apply">
+  <h2>Step 6: apply progress</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / sandbox-ecs / <b>Apply</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="meter accent"><div class="mrow"><span>Step 7 of 12, RDS create</span><span class="num">about 9 min left</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
+        <div class="timeline">
+          <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">VPC, subnets, NAT, security groups</div><div class="muted" style="font-size:12px">6 operations, 1 throttled and retried after 2 s <span class="callout">1</span></div></div></div>
+          <div class="tl"><div class="dotcol"><i class="ok"></i><b></b></div><div class="tbody"><div style="font-weight:600">ECS cluster, task definition, ALB</div><div class="muted" style="font-size:12px">client token cloud-op-7c1e… reused on retry</div></div></div>
+          <div class="tl"><div class="dotcol"><i class="accent"></i><b></b></div><div class="tbody"><div style="font-weight:600">RDS PostgreSQL 17, db.t4g.medium</div><div class="muted" style="font-size:12px">creating, polled every 30 s <span class="callout">2</span></div></div></div>
+          <div class="tl"><div class="dotcol"><i></i></div><div class="tbody"><div style="font-weight:600">Migrate, start service, verify</div><div class="muted" style="font-size:12px">pending</div></div></div>
+        </div>
+        <div class="fb"><button type="button" class="btn sm">Operation journal</button><span class="grow"></span><button type="button" class="btn sm ghost">Cancel after current step</button></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Every step is a journal row</b> with its idempotency key, provider request id, attempts and error; throttling follows the provider's retry headers (B-10102, B-10108).</span></li>
+      <li><span class="n">2</span><span><b>Long-running operations</b> are polled by the deploy worker and survive a restart: the job resumes from the journal (B-10104).</span></li>
+      <li><span class="n">3</span><span><b>Cancel stops after the current step</b>; nothing is left half-created without a journal row to destroy it from.</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-detail">
+  <h2>Deployment detail: resources and drift</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / <b>nw-prod-eu</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="pagehead"><div><h1 style="font-size:17px">nw-prod-eu</h1><div class="sub">aws-prod, eu-central-1 · EKS 1.33 · release 2.0.0</div></div><div class="actions"><button type="button" class="btn sm">Upgrade to 2.0.1</button><button type="button" class="btn sm danger">Destroy</button></div></div>
+        <nav class="tabs"><button type="button">Overview</button><button type="button">Resources <span class="count">31</span></button><button type="button" class="active">Drift <span class="count">1</span></button><button type="button">Plans</button><button type="button">Journal</button><button type="button">Spend</button></nav>
+        <div class="notice warn"><span class="grow"><b>1 resource drifted.</b> Security group sg-0example1 has an inbound rule the plan does not have. Checked 09:30, next check 10:30. <span class="callout">1</span></span></div>
+        <div class="tablewrap minitable"><table class="dt" style="min-width:620px"><thead><tr><th>Field</th><th>Desired</th><th>Observed</th><th>Changed by</th></tr></thead><tbody>
+          <tr><td class="mono">ingress[2]</td><td class="muted">absent</td><td class="diff-del mono">tcp 22 from 0.0.0.0/0</td><td>ops-break-glass, 27 Sep 22:14 <span class="callout">2</span></td></tr>
+        </tbody></table></div>
+        <div class="hstack wrap gap6"><button type="button" class="btn sm primary">Revert to plan</button><button type="button" class="btn sm">Adopt as desired</button><button type="button" class="btn sm ghost">Ignore this field</button><span class="callout">3</span></div>
+      </div>
+      <div class="finsp"><div class="eyebrow">Resources by tier</div><div class="kv" style="--cols:1"><div><div class="k">App</div><div class="v">EKS cluster, 2 node groups, Helm release, ALB</div></div><div><div class="k">Data</div><div class="v">Aurora nw-prod-aurora <span class="pill outline">protected</span>, Valkey nw-prod-valkey, S3</div></div><div><div class="k">GPU</div><div class="v">gpu-cloud-eu, cpu-cloud-eu</div></div><div><div class="k">Front door</div><div class="v">Cloudflare DNS, Tunnel, WAF, Access</div></div><div><div class="k">Spend</div><div class="v">$5,980 this month of $8,420 estimated</div></div></div></div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Drift is read on a schedule</b> for every managed resource, field by field, plus untagged resources inside managed groups (B-10106).</span></li>
+      <li><span class="n">2</span><span><b>Changed by</b> comes from the provider's own trail (CloudTrail, Azure Activity Log, Cloudflare audit logs) where available (B-10703).</span></li>
+      <li><span class="n">3</span><span><b>Three answers:</b> revert creates a plan back to desired; adopt makes the observed value desired; ignore records the field as unmanaged. Each is audited as <span class="mono">cloud.drift.*</span> (B-10701).</span></li>
+    </ol></div>
+  </div>
+</section>
+
+<section class="section" id="dep-destroy">
+  <h2>Destroy with protected data</h2>
+  <div class="frame">
+    <div class="screen">
+      <div class="fhead">Admin / Deployments / nw-dr-azure / <b>Destroy</b></div>
+      <div class="fbody"><div class="fpage">
+        <div class="panel" style="max-width:560px"><div class="hstack"><b class="grow">Destroy nw-dr-azure</b><span class="pill danger">destructive</span></div>
+          <p class="fg2" style="margin:0;font-size:13px">19 resources are removed in reverse dependency order. Protected data is kept unless you choose otherwise below.</p>
+          <div class="tablewrap bare minitable"><table class="dt"><tbody>
+            <tr><td>nw-dr-flex, PostgreSQL Flexible 17</td><td><span class="pill outline">protected</span> final snapshot, then delete <span class="callout">1</span></td></tr>
+            <tr><td>Blob storage, 1 container</td><td><span class="pill outline">protected</span> keep</td></tr>
+            <tr><td>2 VMs, NICs, disks, Redis, DNS records</td><td>delete</td></tr>
+          </tbody></table></div>
+          <div class="field"><label>Type the deployment name to confirm</label><input class="input mono" value="nw-dr-azure" aria-label="Deployment name"></div>
+          <div class="field"><label>Second approver for protected data</label><input class="input" value="Jonas Lindqvist" aria-label="Second approver"><div class="hint">Required because a protected database is deleted <span class="callout">2</span></div></div>
+          <div class="hstack gap6"><button type="button" class="btn sm">Cancel</button><button type="button" class="btn sm danger">Request destroy</button><span class="callout">3</span></div></div>
+      </div></div>
+    </div>
+    <div class="notes"><h3>Notes</h3><ol>
+      <li><span class="n">1</span><span><b>Data resources are protected by default:</b> deletion protection on, a final snapshot required, retention and its cost shown (B-10307, B-10107).</span></li>
+      <li><span class="n">2</span><span><b>Destroying protected data is dual-controlled.</b> Destroys are never blocked by a budget; scale-down and destroy always remain possible.</span></li>
+      <li><span class="n">3</span><span><b>Rollback of a failed upgrade</b> uses the same journal: the app tier returns to the previous image automatically when verify fails; the database only by snapshot restore with dual control (B-10207).</span></li>
+    </ol></div>
+  </div>
+</section>

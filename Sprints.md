@@ -42,12 +42,18 @@ from prototype data to live only when every control on it is backed by the serve
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Connections | **Done** |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context (1.5.0) | Workflows, Settings | **Done** |
-| 33 | Moved to 1.7.0 on 2026-10-05 as Sprint 38 | — | Moved |
+| 33 | Moved to 1.7.0 on 2026-10-05 as Sprint 38 (now Sprint 40) | — | Moved |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Person (new); Runs, Registry, Settings, Messages and feed, Groups and events | **Done** (B-3606 dropped) |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge (1.6.0) | Groups and events, Storage, Apps, Vault, Knowledge, Classifiers | Next |
-| 37 | Quote posts and per-post visibility; capability tokens; vault sharing and MongoDB leases; release (1.6.0) | Messages and feed, Settings, Identity, Vault | Planned |
-| 38 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen; release (1.7.0) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, User stores, Settings, MCP servers | Planned |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Training, Usage and audit, Settings, Registry, Apps, Chat | Planned |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Apps, Settings | Planned |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Planned |
+| 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, custom roles, group moderation, event extras, linked conversations (1.7.0) | Vault, Settings, Groups and events | Planned |
+| 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Jobs and queues, Plugins and events, AT-Protocol, Messages and feed | Planned |
+| 44–50 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.7.0, which ends at Sprint 43; Sprints 40 to 46 until 2026-10-07) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
 
 **End-to-end tests (owner, 2026-10-06).** During a sprint, each part runs only the Playwright specs of the screens
 it changes (with their accessibility and reflow checks); CI runs the full suite on every pull request. The full
@@ -71,10 +77,20 @@ chart with an optional signer sidecar, supply-chain CI, Prometheus rules and Gra
 and a platform load test. The version is `1.5.0`: Sprints 29 to 34 delivered the [1.5.0 backlog](Backlog-1.5.0.md)
 (Sprint 33 moved to 1.7.0), after Sprints 24 to 28 delivered the server-only [1.4.0 backlog](Backlog-1.4.0.md),
 Sprints 20 to 23 the [1.3.0 backlog](Backlog-1.3.0.md), Sprints 16 to 19 the [1.2.0 backlog](Backlog-1.2.0.md) and
-Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 35 to 37 are planned in the
+Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprint 35 is done and Sprints 36 to 39 are planned in the
 [1.6.0 backlog](Backlog-1.6.0.md): the platform administration screens, model servers beyond Ollama, groups depth,
-tenant templates, blob deduplication, vault extras, and capability tokens; Sprint 38 in the [1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, and dataset import
-(groomed 2026-10-05 with `design/grooming/groom.mjs`).
+tenant templates, blob deduplication, vault extras and image classification (groomed 2026-10-05 with
+`design/grooming/groom.mjs`; capability tokens, B-5001, were dropped on 2026-10-07), an HTTP tool kind, and the
+industry and low-code gaps from the 2026-10-05 research (prompt-injection defence, red-teaming, MCP server and
+authorization, SCIM, an AI inventory, usage analytics, compliance export, DLP and eDiscovery, agent identities and
+handoffs, image provenance, versioned artifacts, row and field permissions, app environments and promotion, data model
+generation, AI field upgrades, outside database sync, entity APIs and app embedding). Sprints 40 to 43 are in the
+[1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, dataset import, and the rest of the exprsn-platform
+port the owner decided on 2026-10-06 (Redis for multi-process installs, the vault for signing keys and session tokens,
+held messages, evidence retention, groups features and groups as access subjects, workflows calling listed public
+hosts, API-key leases, a response cache, a guardrail rule builder, plugin UI surfaces, `did:exprsn` and cross-posting
+to the hosted PDS). Sprints 44 to 50 are in the [2.0.0 backlog](Backlog-2.0.0.md): cloud deployments and
+integrations.
 
 ---
 
