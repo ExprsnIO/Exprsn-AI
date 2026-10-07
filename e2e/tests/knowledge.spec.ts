@@ -4,7 +4,8 @@ test.describe('Knowledge', () => {
   test('creates a knowledge base and uploads a document into it', async ({ page }) => {
     await open(page, 'knowledge');
     await expectLive(page);
-    await page.getByRole('button', { name: 'New knowledge base' }).click();
+    // The empty state's button, or the list's when an earlier spec (knowledge-images) already made a base.
+    await page.getByRole('button', { name: /^New( knowledge base)?$/ }).first().click();
     const modal = page.locator('#overlay .modal');
     await modal.locator('[data-name]').fill('Treasury KB');
     await expect(modal.locator('[data-emb]')).toHaveValue('nomic-embed-text');
