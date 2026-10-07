@@ -140,7 +140,38 @@ export const BUILTIN_TOOLS: BuiltinSpec[] = [
       additionalProperties: false
     },
     outputSchema: { type: 'object', properties: { hits: { type: 'array', items: { type: 'object' } }, ceiling: { type: 'string' } }, required: ['hits'] }
-  }
+  },
+  // Sprint 37b (B-7101), seeded by migration 039b: the records of low-code apps, as NocoDB's MCP server offers its
+  // tables (list, query, count, aggregate, create, update, delete). Each acts as the caller through the apps service.
+  ...recordTools()
 ];
 
 export const BUILTIN_NAMES = BUILTIN_TOOLS.map((t) => t.name);
+
+function recordTools(): BuiltinSpec[] {
+  const ref = (what: string) => ({ type: 'string', minLength: 1, maxLength: 63, description: what });
+  const where = { app: ref('The app, by name or id'), entity: ref('The entity (table), by name or id') };
+  const filter = { type: 'object', description: 'A filter: {field, op, value}, or {and: [...]}, {or: [...]}, {not: {...}}; op is eq, ne, gt, gte, lt, lte, in, contains, startsWith or exists' };
+  const q = str('Full-text search over the searchable fields', 200);
+  const values = { type: 'object', description: 'Field values by field name', maxProperties: 200 };
+  const record = { type: 'object', properties: { id: { type: 'string' }, values: { type: 'object' }, label: { type: 'string' }, version: { type: 'integer' } }, required: ['id'] };
+  const spec = (key: string, description: string, sideEffect: BuiltinSpec['sideEffect'], properties: Record<string, unknown>, required: string[], outputSchema: Record<string, unknown>): BuiltinSpec => ({
+    id: id26(`records${key}`),
+    name: `records.${key}`,
+    builtin: `records.${key}`,
+    description,
+    sideEffect,
+    label: 'restricted',
+    inputSchema: { type: 'object', properties, required, additionalProperties: false },
+    outputSchema
+  });
+  return [
+    spec('entities', 'Lists the apps the caller can see, with each entity (table), its fields and their types, and its states.', 'read', { app: ref('Only this app') }, [], { type: 'object', properties: { apps: { type: 'array', items: { type: 'object' } } }, required: ['apps'] }),
+    spec('query', 'Reads records of an entity the caller may read, at most at the label of the call: filter, sort, search and a page (with a cursor for the next one).', 'read', { ...where, filter, sort: { type: 'array', maxItems: 3, items: { type: 'object', properties: { field: { type: 'string' }, dir: { type: 'string', enum: ['asc', 'desc'] } }, required: ['field'] } }, q, limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str('The cursor of the next page', 16_000) }, ['app', 'entity'], { type: 'object', properties: { total: { type: ['integer', 'null'] }, nextCursor: { type: ['string', 'null'] }, records: { type: 'array', items: record } }, required: ['records'] }),
+    spec('count', 'Counts the records of an entity that match a filter or search, at most at the label of the call.', 'read', { ...where, filter, q }, ['app', 'entity'], { type: 'object', properties: { count: { type: 'integer' } }, required: ['count'] }),
+    spec('aggregate', 'Groups and summarises records: count, sum, avg, min and max, optionally grouped by a field or the state.', 'read', { ...where, filter, q, groupBy: ref('A field, or state'), metrics: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'object', properties: { op: { type: 'string', enum: ['count', 'sum', 'avg', 'min', 'max'] }, field: { type: 'string' } }, required: ['op'] } } }, ['app', 'entity', 'metrics'], { type: 'object', properties: { groups: { type: 'array', items: { type: 'object' } } } }),
+    spec('create', 'Creates a record as the caller, at the label of the call or the entity, whichever is higher. Values are validated against the entity.', 'write', { ...where, values }, ['app', 'entity', 'values'], record),
+    spec('update', 'Changes fields of a record the caller may read and write; give version to refuse a change made since it was read.', 'write', { ...where, id: { ...ULID, description: 'The record' }, values, version: { type: 'integer', minimum: 1 } }, ['app', 'entity', 'id', 'values'], record),
+    spec('delete', 'Deletes a record the caller may read and write.', 'destructive', { ...where, id: { ...ULID, description: 'The record' } }, ['app', 'entity', 'id'], { type: 'object', properties: { deleted: { type: 'string' } }, required: ['deleted'] })
+  ];
+}

@@ -22,6 +22,9 @@ export class FakeMcp {
   token: string | null = null;
   /** With a token: required on every request, or only on tools/call (servers that list tools openly). */
   tokenFor: 'all' | 'call' = 'all';
+  /** Sprint 37b: decides an Authorization header instead of `token` (an OAuth-protected server), and the 401 challenge. */
+  authorize: ((auth: string | null) => boolean) | null = null;
+  challenge = 'Bearer';
   protocolVersion = '2025-06-18';
   pageSize = 0;
   down = false;
@@ -77,8 +80,9 @@ export class FakeMcp {
     }
     const auth = req.headers.authorization ?? null;
     const msg = JSON.parse(raw) as { id?: number; method: string; params?: Record<string, unknown> };
-    if (this.token && auth !== `Bearer ${this.token}` && (this.tokenFor === 'all' || msg.method === 'tools/call')) {
-      res.writeHead(401, { 'www-authenticate': 'Bearer' }).end();
+    const allowed = this.authorize ? this.authorize(auth) : !this.token || auth === `Bearer ${this.token}`;
+    if (!allowed && (this.tokenFor === 'all' || msg.method === 'tools/call')) {
+      res.writeHead(401, { 'www-authenticate': this.challenge }).end();
       return;
     }
     const session = (req.headers['mcp-session-id'] as string | undefined) ?? null;
