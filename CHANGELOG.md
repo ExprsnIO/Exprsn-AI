@@ -2,6 +2,48 @@
 
 ## 1.6.0 (in progress)
 
+### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
+
+- Migration `039_tools_injection` (with the items below): `registry_http_calls`, the meter of HTTP tool calls.
+- Registry tools with `impl: http` (B-8901): a method (GET, POST, PUT, PATCH, DELETE), a URL template whose path and
+  query parameters come from the tool's input schema, query and header values, a body (none, the other arguments as
+  JSON, or a template), a response mapping (a JSON pointer, capped in size) and a timeout. GET tools are `read`, every
+  other method `write` unless the author raises it to `destructive`. Drafts go through the registry's checks (a new
+  one, HTTP request), review and publish lifecycle; a draft's request can be edited. Ported from exprsn-platform's
+  agent runtime (port decision D11c). `server/src/registry/http-tool.ts`.
+- The outbound address guard (B-8902): every call through `platform/egress.ts` (resolved once, every address checked,
+  the connection pinned, redirects not followed); cloud metadata addresses always refused, internal hosts only as
+  `SERVICE_ALLOWED_HOSTS` names them, public hosts only from the tenant's list of allowed hosts (the list workflow HTTP
+  steps and webhooks read). Credentials only as `vault:path#key` references, resolved at call time as the tool's
+  author; a literal credential in a header, query parameter or body field is refused when the tool is saved.
+- Guardrails, limits and audit (B-8903): arguments pass the `tool-call` guardrail before the request and the result
+  the `context` and `untrusted-content` checkpoints after it; the tool's rate limit applies; each call is metered and
+  audited `registry.http.called` with host, method, status, size and latency, never a secret. New settings
+  `HTTP_TOOL_TIMEOUT_MS` (30 s) and `HTTP_TOOL_MAX_RESPONSE_BYTES` (1 MiB).
+- Console (B-8904): the Registry screen's entry form has the kind Tool (HTTP request) with a vault reference picker;
+  the inspector shows the request and the last day's calls; the test harness calls a read-only HTTP tool through the
+  guard; Allowed hosts keeps the tenant's list. Prototype board first; `e2e/tests/registry-http.spec.ts` with axe-core
+  and the reflow checks. The e2e server names 127.0.0.1 in `SERVICE_ALLOWED_HOSTS`.
+
+### Prompt-injection defence for untrusted content (Sprint 37a, B-6901 to B-6903)
+
+- Trust marking (B-6901): knowledge chunks, crawled pages, tool results, MCP results and HTTP tool answers reach the
+  model inside `<untrusted-content>` delimiters naming the source, with their words datamarked, in chat, `/v1`, agent
+  runs and workflow model steps with skills. Per profile (`profiles.trust_marking`, `trustMarking` on the profiles
+  API and the Profiles screen), on by default. Calculate, delegated agents and workflows are not wrapped.
+- The `untrusted-content` checkpoint (B-6902), the twelfth, with the `injection` rule mechanism (a heuristic
+  classifier, or a guard model answering injection or benign). The platform baseline gains `injection-untrusted`
+  (annotate: the text goes on with a warning); migration `039` adds it to an existing baseline as a new published
+  version. A blocking rule in a tenant set leaves chunks out and withholds tool results. Detections are counted per
+  source (`injection_detections`), audited `guardrail.injection.detected` and shown on the Guardrails screen
+  (`GET /api/admin/guardrails/injection`), with Add a blocking rule.
+- The injection corpus (B-6903): `server/src/guardrails/injection-corpus.ts`, 57 attacks (direct; indirect in
+  documents, pages, tool, MCP and HTTP results) and 30 benign texts. CI (`server/test/sprint37a-injection.test.ts`)
+  fails below a 90% detection rate or above a 10% false-positive rate, for the heuristic classifier, the checkpoint
+  with the baseline rule and a guard-model rule on the fake guard model; canary cases check that a marked prompt is
+  not followed.
+- Tests that compared a tool result echoed by the fake model now expect it wrapped (`mcp.test.ts`, `agents.test.ts`).
+
 ### Pinned models stay pinned while they serve
 
 - Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned

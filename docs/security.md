@@ -152,6 +152,42 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
   clearance), so a result never carries data above the context it lands in.
 
+## HTTP tools and untrusted content (1.6.0, Sprint 37a)
+
+- **HTTP tools (B-89) reach only what an operator and a tenant admin allow.** Ported from exprsn-platform under the
+  port findings' constraints (decision D11c). The scheme and host of an `impl: http` tool are fixed by its author; only
+  the path and query take the model's arguments, percent-encoded. Every call goes through the outbound address guard
+  (`platform/egress.ts`, `guardedRequest`): the host is resolved once, every address is checked, the connection is
+  pinned to the checked address (a second DNS answer cannot point elsewhere) and redirects are not followed. Cloud
+  metadata addresses (169.254.169.254 and the other providers'), unspecified, multicast and broadcast addresses are
+  always refused, also when written as a literal at save time; link-local, private and loopback addresses only when
+  `SERVICE_ALLOWED_HOSTS` names the host or network; public addresses only when the tenant's list of allowed hosts
+  names them (kept by `tenant:manage` on the Registry screen and audited `tenant.hosts.updated`). A tenant's list never
+  admits an internal host. Answers are capped (`HTTP_TOOL_MAX_RESPONSE_BYTES`) and timed out (`HTTP_TOOL_TIMEOUT_MS`).
+- **Credentials only as vault references.** `Authorization`, `Proxy-Authorization`, `Cookie` and any header, query
+  parameter or body field named like a credential take `vault:path#key`, refused as a literal when the tool is saved
+  (and the secrets scan check runs over the whole definition). The references are resolved on every call as the tool's
+  author, under the vault policies and the author's `secrets:read` (a reference the author cannot read is refused at
+  save), and the value is placed in the request only. The audit entry `registry.http.called` and the meter
+  (`registry_http_calls`) keep the host, method, status, size, latency and outcome; never the path, query string,
+  headers or body. An HTTP tool goes through the registry's review and publish lifecycle; GET tools are `read`, every
+  other method `write` or `destructive`, so chat and `/v1` never offer a write HTTP tool and agents and workflows hold
+  it for approval. Arguments pass the `tool-call` guardrail before the request; the tool's rate limit applies.
+- **Untrusted content is marked (B-6901).** Retrieved knowledge chunks, crawled pages, tool results, MCP results and
+  HTTP tool answers reach the model inside `<untrusted-content>` delimiters that name the source and say the text is
+  data, with its words joined by a datamark (Spotlighting), and closing tags inside defused. Per profile
+  (`trust_marking`), on by default. A delegated agent's answer and a workflow's output are not wrapped again (their own
+  inputs were screened and marked inside their runs). Marking lowers the chance a model follows an instruction it
+  reads; it does not make it impossible.
+- **The untrusted-content checkpoint (B-6902)** screens each such text before the model reads it. The platform
+  baseline's `injection-untrusted` rule (heuristic classifier, threshold 0.6) annotates: the text goes in with a
+  warning. A tenant, workspace or agent rule set adds a blocking rule to leave chunks out and withhold tool results.
+  The `injection` mechanism's guard-model engine asks a profile's model instead and fails closed by default. Each
+  detection is counted per source without its text (`injection_detections`, 90 days) and audited
+  `guardrail.injection.detected`; the inspected text is in the sealed guard decision like any checkpoint's.
+- **The corpus (B-6903).** CI fails when the heuristic classifier, the checkpoint with the baseline rule, or a
+  guard-model rule detects fewer than 90% of the corpus's attacks or flags more than 10% of its benign texts.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -160,6 +196,22 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- HTTP tools and prompt-injection defence (1.6.0, Sprint 37a). The heuristic injection classifier is a set of
+  patterns tuned on the corpus it is measured against (detection 100%, false positives 3.3% on it); new phrasings,
+  other languages than English, Spanish, French, German and Dutch, and attacks split across chunks are missed, and a
+  benign text quoting an attack (security training) is flagged. A guard-model rule (any profile, through the
+  `injection` mechanism) is the stronger option; whether the platform should ship one by default is an open decision.
+  Annotate mode only warns the model, and trust marking lowers but does not remove the chance that a model follows an
+  instruction it reads; block mode drops whole chunks, including the rest of their text. Memories are not wrapped as
+  untrusted (they are proposed through the memory checkpoint and accepted by a curator), and neither are a delegated
+  agent's answer or a workflow's output (a workflow HTTP step's answer reaches a later model step unmarked). The
+  injection counts are per tenant and source, not per workspace on the Guardrails screen. HTTP tool answers are not
+  scanned for malware and must be JSON or text; a tool's vault references resolve as its author, so a tool keeps
+  working for its callers until the author loses `secrets:read` or the vault policy changes, and stops for everyone
+  then. Public hosts are allowed per tenant, not per tool (one list shared with workflow HTTP steps and webhooks, as the
+  open decision assumes); the guard re-resolves on every call, so a host whose DNS answer moves to a refused address
+  is refused at that call, not before. Only `read` HTTP tools run in the registry's test harness; a write tool is
+  tested through an agent run with its approval.
 - Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
   server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
   behind the model id the server lists, that the file is GGUF or safetensors, or that it stays the same between the

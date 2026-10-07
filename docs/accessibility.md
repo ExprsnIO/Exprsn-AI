@@ -218,6 +218,33 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
+- **Registry: HTTP tools and allowed hosts** (B-8904, Sprint 37a): the entry form's Kind select offers Tool (HTTP
+  request), which swaps the fields inside the same dialog so focus stays in it. Every HTTP field is labelled with a
+  hint (method, URL template, input schema, query parameters, headers, body, response mapping, cap and timeout); the
+  side-effect select is disabled for GET with the reason in its hint; the vault reference picker is a labelled select
+  of the paths the caller may read, a labelled key field and an Insert button that writes the reference into the
+  headers field, so nothing is picked by pointer alone. "Fill from the URL" fills the input schema from the URL's
+  placeholders. A refused save (a literal credential) is a problem panel with the server's words in the inspector, not
+  only a toast. The inspector's HTTP rows (request, parameters, headers, response, calls in the last day, the outbound
+  guard) are text in the key and value list. Allowed hosts is a drawer with a labelled host field, an Add button and a
+  Remove button per host whose accessible name names the host; changes are announced by toast and stay visible in the
+  list. `e2e/tests/registry-http.spec.ts` creates, tests and publishes an HTTP tool from the console and keeps the
+  allowed hosts; `y-accessibility.spec.ts`, `y-reflow.spec.ts` and `y-reflow-overlays.spec.ts` (with
+  `E2E_ONLY=registry,guardrails,profiles`) found nothing on the screen, its two new design states (HTTP host refused,
+  Literal credential refused), the form and the drawer, Standard and Enhanced, light and dark, at 320 and 640 px.
+- **Guardrails: the untrusted-content checkpoint** (B-6902, Sprint 37a): a twelfth checkpoint in the list. Its
+  Prompt-injection defence panel states the mode as a pill with its word (annotate, block, off) and a sentence saying
+  what it does; detections by source and the recent detections are tables with column headers, actions as pills with
+  words (annotated, blocked), scores as numbers; the CI corpus rates are a sentence. Add a blocking rule is a button
+  that is disabled with its reason (`title`) where it does not apply (the platform baseline, a set that already has
+  it) and goes through a confirm dialog. The rule editor's injection mechanism has a labelled engine select and a
+  threshold or guard profile field with hints. The review bar wraps at narrow widths (it scrolled sideways at 320 px
+  when a draft had all four buttons). The new design state (Poisoned page blocked) is in the sweeps.
+- **Profiles: trust marking** (B-6901, Sprint 37a): a labelled check box, "Mark retrieved and tool text as data",
+  under the field label Untrusted content with a hint saying what it does; the save dialog names the change in words
+  ("Untrusted content marking: on → off") and the saved YAML shows `trustMarking`. `e2e/tests/profiles.spec.ts`
+  switches it off as a new version.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every
