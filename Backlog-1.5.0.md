@@ -32,7 +32,7 @@ the same policy pipeline.
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections | B-3405, B-3409–B-3412, B-3414, B-3101–B-3104, B-3701–B-3703, B-3602 | 76 | `032_dav`, `032c_memory` | **Done** (B-3104 partial) |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures | B-2901–B-2906, B-3001–B-3004, B-3406, B-3801–B-3803, B-3603, B-3604 | 93 (over the guide; accepted by the owner) | `033_pds`, `033b_feeds`, `033c_imports` | **Done** |
 | 32 | Workflows 2: chaining, agent and skill steps, event and schedule triggers, domain steps, map and loop, failure handling; app passwords; the chain context | B-3901–B-3910, B-3415, B-4101 | 71 | `034_workflows2`, `034b_workflow_triggers`, `034c_workflow_steps` | **Done** |
-| 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
+| 33 | Moved to 1.7.0 on 2026-10-05 (Sprint 38 there, renumbered Sprint 40 on 2026-10-07): agents, tools and skills in chat; dataset import, knowledge sets and the Import screen | — | — | — | Moved to 1.7.0 |
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; user profiles and presence; IMAP in CI; release | B-4102–B-4109, B-3201–B-3203, B-5801, B-5802, B-3605, B-3501 | 64 (B-3606 dropped) | `036_chains`, `036b_profiles`, `036c_dav_files` | **Done** |
 
 The platform administration live screens (B-4202 to B-4207) open 1.6.0 in Sprint 35 ([Backlog-1.6.0.md](Backlog-1.6.0.md)); their boards (B-4201) are done.
