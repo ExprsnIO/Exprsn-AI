@@ -244,6 +244,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   counters, recent audit, capacity) and `ops/jobs-admin.ts` (`s.jobsAdmin`: job types, jobs, schedules, dead letters,
   the cache), behind `routes/admin/operations.ts`; `JobQueue` pauses by type (`pausesLoader`) and `requeue`s, and the
   `Scheduler` lists its schedules, runs one now and skips a paused one (`isPaused`).
+- 1.6.0 Sprint 36b: `files/dedup.ts` (`s.files.dedup`, B-4601: reference-counted `file_blobs` shared within one
+  tenant, adopted when a scan releases a version and released by the trash purge), `apps/forms-held.ts`
+  (`s.apps.forms.held`, B-4701: public submissions the `user-input` guardrail holds, decided from the moderation and
+  flag queues) and `vault/anomalies.ts` (`s.revealWatch`, B-4803: reveal history and flags for a secret's owner).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
