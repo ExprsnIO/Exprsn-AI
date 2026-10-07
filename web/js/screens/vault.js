@@ -44,7 +44,7 @@
   async function loadAll() {
     const canConn = App.can('connections:manage');
     const tid = App.me && App.me.tenant ? App.me.tenant.id : null;
-    const [list, keyList, pol, engines, leases, roles, users, ws, zones] = await Promise.all([
+    const [list, keyList, pol, engines, leases, roles, users, ws, zones, rflags] = await Promise.all([
       App.get('/api/vault/kv'),
       App.get('/api/vault/transit/keys'),
       App.get('/api/vault/policies'),
@@ -53,11 +53,13 @@
       App.can('secrets:read') ? App.get('/api/vault/database/roles') : Promise.resolve({ roles: [] }),
       App.can('users:manage') ? App.get('/api/admin/users?limit=500').catch(() => null) : Promise.resolve(null),
       App.can('tenant:manage') && tid ? App.get('/api/admin/tenants/' + enc(tid) + '/workspaces').catch(() => null) : Promise.resolve(null),
-      canConn && App.can('zones:manage') ? App.get('/api/admin/zones').catch(() => null) : Promise.resolve(null)
+      canConn && App.can('zones:manage') ? App.get('/api/admin/zones').catch(() => null) : Promise.resolve(null),
+      // 1.6.0 (B-4803): flags on unusual reveals of the caller's secrets (every flag with secrets:admin).
+      App.can('secrets:read') ? App.get('/api/vault/reveal-flags?state=all').catch(() => ({ flags: [] })) : Promise.resolve({ flags: [] })
     ]);
     const secrets = await Promise.all(list.secrets.slice(0, 200).map((x) => App.get('/api/vault/kv/metadata/' + apiPath(x.path)).catch(() => Object.assign({ versions: [], customMetadata: {} }, x))));
     const keys = await Promise.all(keyList.keys.map((k) => App.get('/api/vault/transit/keys/' + enc(k.name)).catch(() => Object.assign({ versions: [], supports: [] }, k))));
-    return { secrets, keys, grants: pol.policies, engines: engines ? engines.engines : null, leases: leases.leases, roles: roles.roles, users, workspaces: ws, zones: zones && zones.zones ? zones.zones.map((z) => z.id) : null };
+    return { secrets, keys, grants: pol.policies, engines: engines ? engines.engines : null, leases: leases.leases, roles: roles.roles, users, workspaces: ws, zones: zones && zones.zones ? zones.zones.map((z) => z.id) : null, rflags: rflags.flags || [] };
   }
 
   /** A design state applied before the data arrived is shown once it has. States never call an unsafe API. */
@@ -84,6 +86,14 @@
       const l = st.leases.find((x) => x.state === 'revoking');
       if (l) { st.leaseFilter = 'revoking'; st.leaseEngine = 'all'; st.selLease = l.id; }
       else st.flash = { kind: 'warn', html: '<b>No lease is waiting in revoking.</b> When the database refuses DROP USER, the lease waits in revoking with lastError and attempts; the sweeper retries with back-off (30 s doubling to an hour) and the connection admins are notified once.' };
+    } else if (k === 'burst') {
+      st.tab = 'flags';
+      const f = st.rflags.find((x) => x.state === 'open' && x.signals.some((g) => g.kind === 'burst')) || st.rflags.find((x) => x.state === 'open');
+      if (f) { st.rfFilter = 'open'; st.rfSel = f.id; }
+      else st.flash = { kind: 'info', html: '<b>No open reveal flag.</b> When someone reveals a secret of yours from an address it was never revealed from, at an unusual hour or in a burst, a flag appears here and you are notified. The reveal is still answered.' };
+    } else if (k === 'noflags') {
+      st.tab = 'flags'; st.rfFilter = 'open';
+      if (st.rflags.some((x) => x.state === 'open')) st.flash = { kind: 'warn', html: '<b>Some flags are open.</b> Resolve each as expected or suspicious; with none open, the list is empty.' };
     } else if (k === 'overdue') {
       st.tab = 'kv';
       const s = st.secrets.find(overdue);
@@ -92,6 +102,7 @@
     }
   }
 
+  const SIGNAL = { 'new-address': 'new address', 'odd-hour': 'odd hour', burst: 'burst' };
   const fresh = (st) => {
     if (st.init) return;
     Object.assign(st, { init: true, tab: 'kv', sel: null, query: '', selKey: null, subjectFilter: 'all', effectFilter: 'all', selEngine: null, leaseFilter: 'all', leaseEngine: 'all', selLease: null,
@@ -112,6 +123,8 @@
       { title: 'CAS conflict', tone: 'warn', text: 'A write naming an older cas than the current version is refused with 409 and currentVersion. A path that requires cas refuses every write that does not name the version it saw.', apply: pend('cas', 'kv') },
       { title: 'Version destroyed', tone: 'neutral', text: 'Reading a destroyed version answers 410 with state destroyed: the sealed values are gone for good, the version number stays in the metadata.', apply: pend('gone', 'kv') },
       { title: 'Lease revoke failed', tone: 'warn', text: 'The database refused DROP USER. The lease waits in revoking with lastError and attempts; the sweeper retries with back-off (30 s doubling to an hour) and the connection admins were notified once.', apply: pend('revoking', 'leases') },
+      { title: 'Burst from a new address', tone: 'danger', text: 'Someone revealed a secret from an address it was never revealed from, several times in a minute. The first reveal raised a flag for its owner; the reveals were answered.', apply: pend('burst', 'flags') },
+      { title: 'No flags', tone: 'ok', text: 'Nothing unusual: every reveal came from an address, an hour and a pace the secrets have seen before.', apply: pend('noflags', 'flags') },
       { title: 'Rotation overdue', tone: 'danger', text: 'A secret past its rotation period: the rotation check sent the due and overdue notices to its owner. Writing a new version starts the schedule again.', apply: pend('overdue', 'kv') }
     ],
     render(root, ctx) {
@@ -145,9 +158,10 @@
       if (ctx.params.path) { st.tab = 'kv'; const p = ctx.params.path.replace(/^kv\//, ''); if (st.secrets.some((s) => s.path === p)) st.sel = p; delete ctx.params.path; }
       if (ctx.params.key) { st.tab = 'transit'; if (st.keys.some((k) => k.name === ctx.params.key)) st.selKey = ctx.params.key; delete ctx.params.key; }
       if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
+      if (ctx.params.flag) { st.tab = 'flags'; if (st.rflags.some((f) => f.id === ctx.params.flag)) { st.rfSel = ctx.params.flag; st.rfFilter = 'all'; } delete ctx.params.flag; }
 
       const nOverdue = st.secrets.filter(overdue).length;
-      const tabs = UI.tabs([{ id: 'kv', label: 'KV secrets', count: st.secrets.length }, { id: 'transit', label: 'Transit keys', count: st.keys.length }, { id: 'policies', label: 'Policies', count: st.grants.length }, { id: 'leases', label: 'Database leases', count: st.leases.filter((l) => l.state === 'active').length }], st.tab);
+      const tabs = UI.tabs([{ id: 'kv', label: 'KV secrets', count: st.secrets.length }, { id: 'transit', label: 'Transit keys', count: st.keys.length }, { id: 'policies', label: 'Policies', count: st.grants.length }, { id: 'leases', label: 'Database leases', count: st.leases.filter((l) => l.state === 'active').length }, { id: 'flags', label: 'Reveal flags', count: (st.rflags || []).filter((f) => f.state === 'open').length }], st.tab);
       const flash = st.flash ? UI.notice(st.flash.html, st.flash.kind, UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-clearflash' })) : '';
       let left = '', body = '', insp = '';
 
@@ -244,6 +258,31 @@
         }
       }
 
+      // ---------------- Reveal flags (B-4803) ----------------
+      if (st.tab === 'flags') {
+        st.rfFilter = st.rfFilter || 'open'; st.rfDetail = st.rfDetail || {};
+        const all = st.rflags || [];
+        const rows = all.filter((f) => st.rfFilter === 'all' || f.state === st.rfFilter);
+        if (!rows.some((f) => f.id === st.rfSel)) st.rfSel = rows.length ? rows[0].id : null;
+        const f = rows.find((x) => x.id === st.rfSel) || null;
+        const statePill = (x) => UI.pill(x, x === 'open' ? 'warn' : x === 'suspicious' ? 'danger' : 'ok');
+        const byName = (x) => esc(x.principalName || x.principal);
+        body = flash + UI.notice('<b>Unusual reveals raise a flag for the secret\'s owner.</b> Each reveal over the API is compared with the secret\'s recent history: an address it was never revealed from, an hour of the day it was never revealed in, or a burst of reveals by one caller. The reveal is still answered; the owner is notified and decides whether it was expected.', 'info')
+          + '<div class="toolbar">' + UI.seg([{ id: 'open', label: 'Open' }, { id: 'expected', label: 'Expected' }, { id: 'suspicious', label: 'Suspicious' }, { id: 'all', label: 'All' }], st.rfFilter, 'data-rfseg') + '<span class="muted right" style="font-size:12px">' + (App.can('secrets:admin') ? 'Every flag in the tenant (secrets:admin)' : 'Flags on secrets you own') + '</span></div>'
+          + UI.table(['Secret', 'Revealed by', 'Address', 'Signals', { label: 'Reveals', right: true }, 'State', 'Raised'], rows.map((x) => ({ cells: ['<span class="mono">' + esc(kvp(x.path)) + '</span> ' + UI.label(x.label, { sm: true }), byName(x), '<span class="mono">' + esc(x.ip || '') + '</span>', x.signals.map((g) => UI.pill(SIGNAL[g.kind] || g.kind, g.kind === 'burst' ? 'danger' : 'warn')).join(' '), '<span class="num">' + x.reveals + '</span>', statePill(x.state), esc(when(x.createdAt))], attrs: 'data-rflag="' + esc(x.id) + '"', selected: x.id === st.rfSel })), { minWidth: '820px', emptyTitle: 'No flags', emptyText: st.rfFilter === 'open' ? 'Nothing unusual: every reveal came from an address, an hour and a pace these secrets have seen before.' : 'No flags in this state.' });
+        if (f) {
+          const d = st.rfDetail[f.id];
+          if (!d && st.rfLoading !== f.id) { st.rfLoading = f.id; App.get('/api/vault/reveal-flags/' + enc(f.id)).then((r) => { st.rfDetail[f.id] = r; }).catch(() => { st.rfDetail[f.id] = { recent: [] }; }).finally(() => { st.rfLoading = null; refresh(); }); }
+          const known = st.secrets.some((x) => x.path === f.path);
+          insp = '<div class="hstack"><div class="eyebrow grow">Reveal flag</div>' + UI.label(f.label, { sm: true }) + '</div><div style="font-size:15px;font-weight:600;overflow-wrap:anywhere" class="mono">' + esc(kvp(f.path)) + '</div>'
+            + UI.kv([['Revealed by', byName(f)], ['Address', '<span class="mono">' + esc(f.ip || '') + '</span>'], ['Owner', who(st, f.ownerId)], ['Reveals counted', String(f.reveals)], ['State', statePill(f.state) + (f.resolvedBy ? ' <span class="muted" style="font-size:12px">by ' + who(st, f.resolvedBy) + '</span>' : '')]].concat(f.note ? [['Note', esc(f.note)]] : []), 1)
+            + '<div class="eyebrow">Signals</div>' + UI.timeline(f.signals.map((g) => ({ title: esc(SIGNAL[g.kind] || g.kind), text: esc(g.detail), meta: esc(when(g.at)), tone: g.kind === 'burst' ? 'danger' : 'warn' })))
+            + (d ? (d.recent && d.recent.length ? '<div class="eyebrow">Recent reveals of the secret</div>' + UI.table(['By', 'Address', 'At', { label: 'v', right: true }], d.recent.slice(0, 20).map((r) => [esc(r.principal === f.principal ? (f.principalName || r.principal) : r.principal) + (r.flagged ? ' ' + UI.pill('flagged', 'warn') : ''), '<span class="mono">' + esc(r.ip || '') + '</span>', esc(when(r.at)), '<span class="num">' + r.version + '</span>']), { clickable: false, minWidth: '0', cls: 'bare' }) : '') : small('Loading the reveals behind the flag'))
+            + (f.state === 'suspicious' ? UI.notice('Marked suspicious. Rotate the secret: write a new version and update what uses it, then destroy the old versions.', 'danger', known ? UI.btn('Open the secret', { size: 'xs', attrs: 'data-gopath="' + esc(f.path) + '"' }) : '') : '')
+            + (f.state === 'open' ? '<div class="hstack wrap gap6">' + UI.btn('Expected', { kind: 'primary', size: 'sm', attrs: 'data-rfresolve="expected"' }) + UI.btn('Suspicious', { kind: 'danger', size: 'sm', attrs: 'data-rfresolve="suspicious"' }) + (known ? UI.btn('Open the secret', { size: 'sm', attrs: 'data-gopath="' + esc(f.path) + '"' }) : '') + '</div>' : '');
+        }
+      }
+
       root.innerHTML = style + left
         + '<div class="page">' + (st.tab === 'kv' ? '' : head(nOverdue ? UI.pill(nOverdue + ' rotation overdue', 'danger') : ''))
         + tabs + body
@@ -254,6 +293,24 @@
       const ok = (msg, kind) => { ctx.toast(msg, kind || 'ok', 5000); };
       const act = async (fn, msg, kind) => { try { const out = await fn(); if (msg) ok(typeof msg === 'function' ? msg(out) : msg, kind); await reload(); return out; } catch (err) { App.fail(err); await reload(); return null; } };
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; st.flash = null; ctx.rerender(); });
+      ctx.on('click', '[data-rfseg]', (e) => { const b = e.target.closest('[data-seg]'); if (b) { st.rfFilter = b.dataset.seg; ctx.rerender(); } });
+      ctx.on('click', 'tr[data-rflag]', (e, t) => { st.rfSel = t.dataset.rflag; ctx.rerender(); });
+      ctx.on('click', '[data-rfresolve]', (e, t) => {
+        const f = (st.rflags || []).find((x) => x.id === st.rfSel); if (!f) return; const dcs = t.dataset.rfresolve;
+        ctx.modal({ title: dcs === 'expected' ? 'Mark as expected' : 'Mark as suspicious',
+          body: '<p class="fg2" style="margin:0">' + (dcs === 'expected' ? 'Closes the flag: you recognise who revealed ' + esc(kvp(f.path)) + ' and from where.' : 'Closes the flag as suspicious. Rotate the secret next: write a new version, update what uses it and destroy the old versions.') + ' Audited as vault.reveal.flag.resolved.</p>' + UI.kv([['Revealed by', esc(f.principalName || f.principal)], ['Address', esc(f.ip || '')]], 2) + UI.field('Note (optional)', UI.textarea('', { rows: 2, attrs: 'data-rfnote' })),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(dcs === 'expected' ? 'Expected' : 'Suspicious', { kind: dcs === 'expected' ? 'primary' : 'danger', attrs: 'data-rfok' }),
+          onMount(m) {
+            m.querySelector('[data-rfok]').addEventListener('click', async () => {
+              const note = m.querySelector('[data-rfnote]').value.trim();
+              try {
+                const r = await App.post('/api/vault/reveal-flags/' + enc(f.id) + '/resolve', { decision: dcs, note: note || null });
+                App.closeOverlay(); Object.assign(f, r); st.rfFilter = 'all'; ctx.rerender();
+                ctx.toast('Flag on ' + esc(kvp(f.path)) + ' marked ' + dcs + '.' + (dcs === 'suspicious' ? ' Rotate the secret next.' : ''), dcs === 'suspicious' ? 'warn' : 'ok', 5000);
+              } catch (err) { App.fail(err, 'Not resolved'); }
+            });
+          } });
+      });
       ctx.on('click', '[data-clearflash]', () => { st.flash = null; ctx.rerender(); });
       ctx.on('click', '[data-path]', (e, t) => { st.sel = t.dataset.path; st.cas = null; st.gone = null; ctx.rerender(); });
       ctx.on('click', '[data-gopath]', (e, t) => { e.preventDefault(); st.tab = 'kv'; st.sel = t.dataset.gopath; ctx.rerender(); });

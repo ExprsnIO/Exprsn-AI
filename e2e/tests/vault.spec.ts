@@ -1,4 +1,5 @@
 import { test, expect, open, expectLive, toast, confirmDialog, apiAs } from './support/fixtures';
+import { reflowProblems } from './support/reflow';
 
 // B-3403: the Vault screen against the real vault API. The vault is default deny, so each test first gives root a grant
 // on its own unique prefix (through the console in the policy test, through the API where the grant is only setup).
@@ -232,5 +233,40 @@ test.describe('Vault', () => {
     await confirmDialog(page, 'Delete engine');
     await toast(page, 'Engine removed.');
     await expect(row).toHaveCount(0);
+  });
+
+  // 1.6.0 (B-4803): a burst of reveals from a new address raises a flag for the secret's owner, resolved on the screen.
+  test('a burst of reveals from a new address raises a flag the owner resolves', async ({ page }) => {
+    const pre = `e2e-rf-${uid()}`;
+    await grantRoot(`kv/${pre}`, ['*']);
+    const api = await apiAs('root');
+    await api.put(`/api/vault/kv/data/${pre}/token`, { data: { token: 'not-for-the-chain' } });
+    const reveal = async (ip: string) => expect((await api.ctx.get(`/api/vault/kv/data/${pre}/token`, { headers: { 'x-forwarded-for': ip } })).status()).toBe(200);
+    await reveal('198.51.100.7');
+    for (let i = 0; i < 5; i++) await reveal('203.0.113.77');
+    const flags = (await api.get('/api/vault/reveal-flags')).flags as { id: string; path: string; signals: { kind: string }[] }[];
+    const f = flags.find((x) => x.path === `${pre}/token`)!;
+    expect(f.signals.map((x) => x.kind)).toEqual(['new-address', 'burst']);
+
+    await open(page, `vault?tab=flags&flag=${f.id}`);
+    await expectLive(page);
+    await expect(page.locator(`tr[data-rflag="${f.id}"]`)).toContainText('203.0.113.77');
+    const insp = page.locator('aside.inspector');
+    await expect(insp).toContainText(`kv/${pre}/token`);
+    await expect(insp).toContainText('new address');
+    await expect(insp).toContainText('Recent reveals of the secret');
+    await insp.locator('[data-rfresolve="suspicious"]').click();
+    const modal = page.locator('#overlay .modal');
+    await modal.locator('[data-rfnote]').fill('Not a known address');
+    await modal.locator('[data-rfok]').click();
+    await toast(page, `Flag on kv/${pre}/token marked suspicious.`);
+    await expect(page.locator(`tr[data-rflag="${f.id}"]`)).toContainText('suspicious');
+    await expect(insp).toContainText('Rotate the secret');
+    for (const width of [320, 640]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(250);
+      expect(await reflowProblems(page)).toEqual([]);
+    }
+    await api.close();
   });
 });

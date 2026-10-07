@@ -167,6 +167,26 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   axe-core and the in-page checker on the register form, the drawer and the picker and checks each at 320 px; the
   new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
   `y-reflow-overlays.spec.ts`.
+- **Storage: deduplication** (B-4601, Sprint 36b): Usage gains a fourth button in its pressed-state segmented group,
+  Deduplication. It shows four stat tiles (saved, stored, held by versions, shared objects), each a number with its
+  word, and a table of tenants whose meter carries its percentage as text; an empty table names why ("Nothing shared
+  yet"). A sentence under the table says in words that content is never shared across tenants and that quotas count
+  every version. `storage-configuration.spec.ts` checks the view, its new design state ("Nothing shared yet") in
+  light and dark with axe-core and the in-page checker, and its reflow at 320 and 640 px.
+- **Moderation: held form submissions** (B-4701, Sprint 36b): selecting a hold flag on a public form submission shows
+  the submitted values in the inspector as a key and value list, the held fields marked with a "held" pill (a word,
+  not a colour), the rule and reason in text, and two named buttons, Accept into a record and Reject, each through a
+  confirm dialog with a labelled optional reason. A refusal by the entity is a danger notice in the inspector naming
+  the reason, so it is read without the toast. The two new design states are in the `y-accessibility.spec.ts` sweep;
+  `moderation.spec.ts` accepts a held submission from the queue.
+- **Vault: reveal flags** (B-4803, Sprint 36b): a fifth tab, Reveal flags, in the same tab list. A pressed-state
+  segmented group filters by state; each row's signals are pills with words (new address, odd hour, burst) and the
+  state a pill with its word. The inspector lists the signals as a timeline with their details in text and the recent
+  reveals as a table; Expected and Suspicious open a dialog with a labelled note field. A suspicious flag keeps a
+  notice that says to rotate the secret, with a button to open it. A notification about an unusual reveal links
+  straight to the flag (`#/vault?tab=flags&flag=<id>`). The two new design states are in the `y-accessibility.spec.ts`
+  sweep; `vault.spec.ts` resolves a flag raised by a burst from a new address and checks the tab's reflow at 320 and
+  640 px.
 
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 

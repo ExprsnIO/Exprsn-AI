@@ -1,6 +1,7 @@
 import { test, expect, open, ready, expectLive, confirmDialog, toast, apiAs, settle } from './support/fixtures';
 import { expectAccessible } from './support/a11y';
 import { expectAxeClean } from './support/axe';
+import { serverState } from './support/state';
 
 // B-3405: Moderation is live. A queue made on the screen routes a member's report; the reviewer hides the reported
 // message from the queue; the member appeals; the reviewer who hid it is refused (independence) and a second reviewer
@@ -75,6 +76,42 @@ test.describe('Moderation', () => {
     await other.locator('[data-tab="actions"]').click();
     await expect(other.locator('tr[data-action]', { hasText: sent.userMessageId })).toContainText('reversed');
     await member.close();
+  });
+
+  // 1.6.0 (B-4701): a public form value the user-input guardrail holds waits in the moderation queue and is accepted
+  // into a record from there.
+  test('a held public form submission is accepted into a record from the queue', async ({ page }) => {
+    test.setTimeout(120_000);
+    const id = Date.now().toString(36);
+    const api = await apiAs('root');
+    const app = `held_${id}`;
+    await api.post('/api/apps', { name: app, title: `Held ${id}`, workspaceId: serverState().workspace.id });
+    await api.post(`/api/apps/${app}/entities`, { name: 'lead', label: 'internal', definition: { fields: [{ name: 'email', type: 'string', required: true, maxLength: 200 }, { name: 'note', type: 'string' }] } });
+    await api.post(`/api/apps/${app}/forms`, { name: 'contact', title: `Contact ${id}`, entity: 'lead', definition: { fields: [{ field: 'email' }, { field: 'note' }] }, ratePerMinute: 100 });
+    const pub = await api.post(`/api/apps/${app}/forms/contact/public`, { enabled: true });
+    const set = await api.post('/api/admin/guardrails/sets', { name: `Held forms ${id}`, scope: 'tenant' });
+    await api.put(`/api/admin/guardrails/sets/${set.id}/draft`, { rules: [{ id: `hold-${id}`, name: `Hold ${id}`, checkpoint: 'user-input', type: 'pattern', mechanism: { kind: 'pattern', pattern: `(?i)hold-me-${id}` }, action: 'require-approval', stage: 'enforce' }] });
+    await api.post(`/api/admin/guardrails/sets/${set.id}/draft/publish`);
+    const queue = await api.post('/api/moderation/queues', { name: `Held forms ${id}`, kinds: ['app-form-submission'], priority: 1, slaMinutes: 60, escalateTo: 'tenant' });
+    const res = await api.ctx.post('/api/public/forms/submit', { data: { token: pub.token, values: { email: `x-${id}@example.test`, note: `Please hold-me-${id} for review` } } });
+    expect(res.status()).toBe(202);
+
+    await open(page, 'moderation');
+    await page.locator('tr[data-queue]', { hasText: `Held forms ${id}` }).click();
+    await page.locator('tr[data-flag]').first().click();
+    const insp = page.locator('aside.inspector');
+    await expect(insp).toContainText('Held submission');
+    await expect(insp).toContainText(`Please hold-me-${id} for review`);
+    await expect(insp).toContainText(`Contact ${id}`);
+    await page.locator('[data-heldaccept]').click();
+    await confirmDialog(page, 'Accept');
+    await toast(page, /Accepted: record/);
+    const accepted = (await api.get('/api/apps/held?state=accepted')).items as { form: { title: string }; recordId: string }[];
+    const mine = accepted.find((h) => h.form.title === `Contact ${id}`)!;
+    expect(mine.recordId).toBeTruthy();
+    await expect(page.locator('tr[data-flag]')).toHaveCount(0);
+    await api.del(`/api/moderation/queues/${queue.id}`);
+    await api.close();
   });
 
   // The design states cover the queue and appeal views; the other tabs are checked here, with the data made above.
