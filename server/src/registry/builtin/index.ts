@@ -1,4 +1,4 @@
-import { highest, labelRank, type Label } from '../../authz/labels.js';
+import { clears, highest, labelRank, type Label } from '../../authz/labels.js';
 import { authorize, type Principal } from '../../authz/policy.js';
 import type { Permission } from '../../authz/permissions.js';
 import type { Services } from '../../services.js';
@@ -107,6 +107,22 @@ export class BuiltinTools {
         if (sess) this.fits(ctx.label, sess.label, 'the session');
         const m = await s.channels.agentReply(dctx, String(args.channel), String(args.session), String(args.text ?? ''));
         return { message: m.id, seq: Number(m.seq) };
+      }
+      case 'knowledge_search': {
+        // Sprint 36c (B-8803): the agent and workflow knowledge step. Published bases the caller may read, searched
+        // at most at the label of the conversation or run the result lands in (and never above the caller).
+        this.need(p, 'knowledge:read');
+        const visible = new Map((await s.knowledge.visible(p)).map((x) => [x.kb.id, x.kb]));
+        const ids = Array.isArray(args.kbIds) ? (args.kbIds as unknown[]).map(String) : [];
+        const kbs = ids.map((id) => visible.get(id)).filter((kb) => kb && kb.status === 'published');
+        if (kbs.length !== ids.length) throw new BuiltinRefused('A knowledge base in kbIds does not exist, is not published, or is not shared with the caller.');
+        const f = (args.labels ?? undefined) as { any?: string[]; all?: string[]; minScore?: number } | undefined;
+        const ceiling: Label = clears(p.clearance, ctx.label) ? ctx.label : p.clearance;
+        const out = await s.knowledge.search(p, kbs as NonNullable<(typeof kbs)[number]>[], String(args.query ?? ''), { k: typeof args.k === 'number' ? args.k : 8, ceiling, queryLabel: ceiling, rerank: true, withText: true, lenient: true, ...(ctx.signal ? { signal: ctx.signal } : {}), ...(f ? { labels: f } : {}) });
+        return {
+          ceiling: out.ceiling,
+          hits: out.hits.map((h) => ({ kb: h.kb, document: h.document, documentId: h.documentId, section: h.heading, label: h.label, score: h.rerank ?? h.fused, ...(h.withheld ? { withheld: h.withheld } : { text: h.text ?? '' }), ...(h.image ? { image: h.image } : {}) }))
+        };
       }
       default:
         throw new Error(`Unknown built-in ${String(entry.definition.builtin)}.`);

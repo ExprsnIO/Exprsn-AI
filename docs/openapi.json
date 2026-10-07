@@ -11445,7 +11445,7 @@
         "tags": [
           "admin/classifiers"
         ],
-        "summary": "none, label?}]} | Adds labelled cases (sealed): 201 {added, samples}",
+        "summary": "Adds labelled cases (sealed): 201 {added, samples}. Since 1.6.0 a vision classifier's cases are images: items: [{image (base64), expected, label?}] instead of text",
         "parameters": [
           {
             "name": "id",
@@ -11456,6 +11456,65 @@
             }
           }
         ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/classifiers/{id}/samples/image": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/classifiers"
+        ],
+        "summary": "201 {added, samples}: one image case of a vision classifier's dataset as a raw upload (the body is a PNG, JPEG, WebP, GIF or HEIC image, sealed in the blob store); 409 for a text classifier. Audited classifier.samples.added",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The classifier id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expected",
+            "in": "query",
+            "required": true,
+            "description": "The label the image carries, or none",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "description": "The data's label (internal when left out)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -23604,7 +23663,7 @@
         "tags": [
           "classify"
         ],
-        "summary": "Synchronous: {classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}; 503 when the model is unavailable",
+        "summary": "Synchronous: {classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}; 503 when the model is unavailable. Since 1.6.0 a vision classifier takes image (base64) instead of text",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -25367,7 +25426,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "published, chunking?} | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat",
+        "summary": "published, chunking?} | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat. Since 1.6.0 also visionProfile (a profile whose model reads images, cleared for the base's label; null for none) and imageClassifiers (published vision classifiers, ids or slugs; a new one labels the images in the background, a dropped one's labels are deleted)",
         "parameters": [
           {
             "name": "id",
@@ -25488,12 +25547,94 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "[document] at or below the caller's clearance",
+        "summary": "[document] at or below the caller's clearance. Since 1.6.0: media=image, labels (comma-separated, any of them), labelsAll (every one), minScore; an image document carries thumbnail, safetyScore and labels, a part of a PDF or Word document its parentId",
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Name contains",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (200)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "media",
+            "in": "query",
+            "required": false,
+            "description": "image: only image documents",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Image labels, comma-separated: at least one",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labelsAll",
+            "in": "query",
+            "required": false,
+            "description": "Image labels, comma-separated: every one",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "minScore",
+            "in": "query",
+            "required": false,
+            "description": "The lowest score that counts",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/bases/{id}/labels": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "[{label, documents}]: the labels the base's image documents carry at or above their classifier's threshold, counted over documents at or below the caller's clearance (the filter chips)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The knowledge base id",
             "schema": {
               "type": "string"
             }
@@ -25517,6 +25658,31 @@
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/bases/{id}/reclassify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "202 {jobId, images}: labels every indexed image of the base again with the vision classifiers it names (job knowledge.reclassify); needs manage access; 409 when the base names no image classifier. Audited knowledge.reclassify.started",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The knowledge base id",
             "schema": {
               "type": "string"
             }
@@ -25557,7 +25723,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "202 document in sealed quarantine; knowledge.scan detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX) and runs ClamAV when configured, then indexing classifies and chunks it",
+        "summary": "202 document in sealed quarantine; knowledge.scan detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX and, since 1.6.0, PNG, JPEG, WebP, GIF and HEIC) and runs ClamAV when configured, then indexing classifies and chunks it. An image passes the image safety check and is described by the base's vision profile; a PDF or Word document's images become its parts",
         "parameters": [
           {
             "name": "id",
@@ -25614,7 +25780,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "document with kb: {id, name}",
+        "summary": "document with kb: {id, name, imageClassifiers}; since 1.6.0 also caption, text and visionModel (an image's description), labels, and parts (the images taken out of a PDF or Word document)",
         "parameters": [
           {
             "name": "id",
@@ -25676,12 +25842,71 @@
         }
       }
     },
+    "/api/knowledge/documents/{id}/thumbnail": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "The picture of an image document (PNG, JPEG, WebP or GIF) once its safety check passed, for readers cleared for its label and allowed by its row access; served as is with nosniff and a sandbox CSP; 404 for HEIC, quarantined, rejected or failed images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The document id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/png": {},
+              "image/jpeg": {},
+              "image/webp": {},
+              "image/gif": {}
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/documents/{id}/reclassify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "202 {jobId, images: 1}: labels one indexed image again (job knowledge.classify); needs manage access. Audited knowledge.document.reclassify.started",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The document id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/knowledge/models": {
       "get": {
         "tags": [
           "knowledge"
         ],
-        "summary": "{embedding: [{name, label, state}], rerankers: [...]}: approved models for the forms",
+        "summary": "{embedding: [{name, label, state}], rerankers: [...], visionProfiles: [{name, displayName, model, label}], imageClassifiers: [{id, slug, name, status, version, labels}]}: approved models, the profiles that read images and the vision classifiers, for the forms",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -25707,10 +25932,72 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "Test search as the caller: {hits: [hit], ceiling, vectorSkipped, vectorStore}",
+        "summary": "Test search as the caller: {hits: [hit], ceiling, vectorSkipped, vectorStore}. Since 1.6.0 the body takes labels: {any, all, minScore} (only image documents carrying the labels), and an image hit carries image: {caption, ocr (an excerpt), labels: [{label, score, hit, classifierId, classifier, version}], thumbnail}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kbIds",
+                  "query"
+                ],
+                "properties": {
+                  "kbIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "query": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "rerank": {
+                    "type": "boolean"
+                  },
+                  "labels": {
+                    "type": "object",
+                    "description": "Image labels a hit must carry (B-8803)",
+                    "properties": {
+                      "any": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "all": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "minScore": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }

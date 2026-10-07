@@ -39,7 +39,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
+| `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
 | `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
@@ -50,7 +50,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
-| `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
@@ -301,6 +301,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/knowledge/search`
 - `POST /api/knowledge/sources/{id}/sync`
 - `PUT /api/knowledge/bases/{id}/uploads`
+- `GET /api/knowledge/bases/{id}/labels`
+- `GET /api/knowledge/documents/{id}/thumbnail`
+- `POST /api/knowledge/bases/{id}/reclassify`
+- `POST /api/knowledge/documents/{id}/reclassify`
 
 ### `models:read`
 
@@ -484,6 +488,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/classifiers/{id}/samples`
 - `POST /api/admin/classifiers/{id}/train`
 - `PUT /api/admin/label-names`
+- `PUT /api/admin/classifiers/{id}/samples/image`
 - `GET /api/eval-sets` (or another permission)
 - `POST /api/classify` (or another permission)
 

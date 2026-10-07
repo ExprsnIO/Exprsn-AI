@@ -1243,6 +1243,11 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/admin/storage/orphans/dry-run', 'platform:manage'],
   ['POST /api/admin/storage/quarantine/{kind}/{id}/delete', 'platform:manage'],
   ['POST /api/admin/storage/quarantine/{kind}/{id}/rescan', 'platform:manage'],
+  ['GET /api/knowledge/bases/{id}/labels', 'knowledge:read'],
+  ['GET /api/knowledge/documents/{id}/thumbnail', 'knowledge:read'],
+  ['POST /api/knowledge/bases/{id}/reclassify', 'knowledge:read'],
+  ['POST /api/knowledge/documents/{id}/reclassify', 'knowledge:read'],
+  ['PUT /api/admin/classifiers/{id}/samples/image', 'classifiers:manage'],
   // ---- end of routes ----
 ];
 

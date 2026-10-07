@@ -72,12 +72,12 @@ export async function drain(h: Harness): Promise<void> {
 // ---------- document builders ----------
 
 /** A minimal zip (deflated entries) with a central directory. */
-export function zip(files: Record<string, string>): Buffer {
+export function zip(files: Record<string, string | Buffer>): Buffer {
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
   let offset = 0;
   for (const [name, text] of Object.entries(files)) {
-    const data = Buffer.from(text, 'utf8');
+    const data = Buffer.isBuffer(text) ? text : Buffer.from(text, 'utf8');
     const comp = deflateRawSync(data);
     const nameBuf = Buffer.from(name, 'utf8');
     const local = Buffer.alloc(30);
