@@ -14,7 +14,7 @@ tool kind (the rest of the port decided on 2026-10-06 is in `Backlog-1.7.0.md`).
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 74 items, 363 points (1 point ≈ half a day for one engineer, tests included): P1 245, P2 118. Reconciled on
+**Size.** 75 items, 365 points (1 point ≈ half a day for one engineer, tests included): P1 247, P2 118 (B-11707, 2 points, pulled forward from 1.7.0 into Sprint 36b on 2026-10-08). Reconciled on
 2026-10-07 from main (32 items, 158 points in Sprints 35 to 37) and `docs/backlog-1.6-gaps`: the industry gaps (B-69
 to B-80, 23 items, 121 points), the low-code gaps (B-81 to B-85, 11 items, 59 points) and their second pass (B-86,
 B-87 and two points on B-7101, 5 items, 23 points), groomed on 2026-10-05, now fill Sprints 37 to 39; B-50 capability
@@ -32,6 +32,7 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | **Done** |
+| 36b | Model thinking templates and a tool-calling evaluation that sends a system prompt (B-11707, pulled forward from 1.7.0 on 2026-10-08: the owner's Magistral profiles) | B-11707 | 2 | Next |
 | 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | Next |
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Planned |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Planned |
