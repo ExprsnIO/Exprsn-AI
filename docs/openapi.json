@@ -3887,6 +3887,7 @@
             "enum": [
               "active",
               "hidden",
+              "archived",
               "deleted"
             ]
           },
@@ -3938,6 +3939,88 @@
           },
           "members": {
             "type": "integer"
+          },
+          "parentId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4401): the group a channel belongs to; null for a group"
+          },
+          "categoryId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4405): the tenant category, or null (uncategorised)"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403): the place, shown to readers of the content only"
+          },
+          "channels": {
+            "type": "integer",
+            "description": "1.6.0: channels of a group the caller may know of (not on a channel)"
+          },
+          "distanceKm": {
+            "type": "number",
+            "description": "1.6.0: with near, the great-circle distance"
+          },
+          "parentName": {
+            "type": "string",
+            "description": "1.6.0: on a channel's own view, its group's name"
+          },
+          "parentLabel": {
+            "$ref": "#/components/schemas/Label"
           }
         },
         "required": [
@@ -4338,6 +4421,32 @@
           },
           "notified": {
             "type": "integer"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403): the point of the place"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1.6.0 (B-4403)"
+          },
+          "distanceKm": {
+            "type": "number",
+            "description": "1.6.0: with near on GET /api/calendar/events"
           }
         },
         "required": [
@@ -10555,6 +10664,46 @@
             ]
           }
         }
+      },
+      "GroupCategory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "integer",
+            "description": "On the admin view: groups (not channels) at labels the caller is cleared for"
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "position"
+        ]
       }
     },
     "responses": {
@@ -11445,7 +11594,7 @@
         "tags": [
           "admin/classifiers"
         ],
-        "summary": "none, label?}]} | Adds labelled cases (sealed): 201 {added, samples}",
+        "summary": "Adds labelled cases (sealed): 201 {added, samples}. Since 1.6.0 a vision classifier's cases are images: items: [{image (base64), expected, label?}] instead of text",
         "parameters": [
           {
             "name": "id",
@@ -11456,6 +11605,65 @@
             }
           }
         ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/classifiers/{id}/samples/image": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/classifiers"
+        ],
+        "summary": "201 {added, samples}: one image case of a vision classifier's dataset as a raw upload (the body is a PNG, JPEG, WebP, GIF or HEIC image, sealed in the blob store); 409 for a text classifier. Audited classifier.samples.added",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The classifier id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expected",
+            "in": "query",
+            "required": true,
+            "description": "The label the image carries, or none",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "description": "The data's label (internal when left out)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "public",
+                "internal",
+                "confidential",
+                "restricted"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -16647,7 +16855,7 @@
         "tags": [
           "admin/social"
         ],
-        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds",
+        "summary": "The Groups and events tab: defaults by workspace, groups across workspaces with counts, and calendar feeds. 1.6.0: also the tenant's group categories with their counts (categories, uncategorised) and the trending groups; each group row names its parentId (a channel) and categoryId",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -16738,6 +16946,209 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/group-categories": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. B-4405: adds a group category (names unique in the tenant whatever the case, 409). Audited group.category.created",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupCategory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/group-categories/{id}": {
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Renames, describes or moves a category. Audited group.category.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupCategory"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Removes a category; its groups stay, uncategorised (one transaction). Audited group.category.removed with the count",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "removed": {
+                      "type": "boolean"
+                    },
+                    "uncategorised": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/social/groups/trending/run": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/social"
+        ],
+        "summary": "social:manage. Queues the groups.trending job for the tenant now (B-4404). Audited group.trending.requested",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -19033,7 +19444,7 @@
         "tags": [
           "admin/storage"
         ],
-        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind",
+        "summary": "platform:manage. Bytes by workspace (files, versions, trash, media, knowledge uploads, attachments, the file quota and what it counts), by user and by kind, and (B-4601) what blob deduplication within each tenant saves",
         "responses": {
           "200": {
             "description": "OK",
@@ -19064,6 +19475,35 @@
                       "type": "array",
                       "items": {
                         "type": "string"
+                      }
+                    },
+                    "dedup": {
+                      "type": "object",
+                      "properties": {
+                        "blobs": {
+                          "type": "integer"
+                        },
+                        "shared": {
+                          "type": "integer"
+                        },
+                        "references": {
+                          "type": "integer"
+                        },
+                        "logicalBytes": {
+                          "type": "integer"
+                        },
+                        "storedBytes": {
+                          "type": "integer"
+                        },
+                        "savedBytes": {
+                          "type": "integer"
+                        },
+                        "tenants": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
                       }
                     }
                   }
@@ -23604,7 +24044,7 @@
         "tags": [
           "classify"
         ],
-        "summary": "Synchronous: {classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}; 503 when the model is unavailable",
+        "summary": "Synchronous: {classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}; 503 when the model is unavailable. Since 1.6.0 a vision classifier takes image (base64) instead of text",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -25367,7 +25807,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "published, chunking?} | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat",
+        "summary": "published, chunking?} | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat. Since 1.6.0 also visionProfile (a profile whose model reads images, cleared for the base's label; null for none) and imageClassifiers (published vision classifiers, ids or slugs; a new one labels the images in the background, a dropped one's labels are deleted)",
         "parameters": [
           {
             "name": "id",
@@ -25488,12 +25928,94 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "[document] at or below the caller's clearance",
+        "summary": "[document] at or below the caller's clearance. Since 1.6.0: media=image, labels (comma-separated, any of them), labelsAll (every one), minScore; an image document carries thumbnail, safetyScore and labels, a part of a PDF or Word document its parentId",
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Name contains",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (200)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "media",
+            "in": "query",
+            "required": false,
+            "description": "image: only image documents",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            }
+          },
+          {
+            "name": "labels",
+            "in": "query",
+            "required": false,
+            "description": "Image labels, comma-separated: at least one",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labelsAll",
+            "in": "query",
+            "required": false,
+            "description": "Image labels, comma-separated: every one",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "minScore",
+            "in": "query",
+            "required": false,
+            "description": "The lowest score that counts",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/bases/{id}/labels": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "[{label, documents}]: the labels the base's image documents carry at or above their classifier's threshold, counted over documents at or below the caller's clearance (the filter chips)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The knowledge base id",
             "schema": {
               "type": "string"
             }
@@ -25517,6 +26039,31 @@
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/bases/{id}/reclassify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "202 {jobId, images}: labels every indexed image of the base again with the vision classifiers it names (job knowledge.reclassify); needs manage access; 409 when the base names no image classifier. Audited knowledge.reclassify.started",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The knowledge base id",
             "schema": {
               "type": "string"
             }
@@ -25557,7 +26104,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "202 document in sealed quarantine; knowledge.scan detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX) and runs ClamAV when configured, then indexing classifies and chunks it",
+        "summary": "202 document in sealed quarantine; knowledge.scan detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX and, since 1.6.0, PNG, JPEG, WebP, GIF and HEIC) and runs ClamAV when configured, then indexing classifies and chunks it. An image passes the image safety check and is described by the base's vision profile; a PDF or Word document's images become its parts",
         "parameters": [
           {
             "name": "id",
@@ -25614,7 +26161,7 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "document with kb: {id, name}",
+        "summary": "document with kb: {id, name, imageClassifiers}; since 1.6.0 also caption, text and visionModel (an image's description), labels, and parts (the images taken out of a PDF or Word document)",
         "parameters": [
           {
             "name": "id",
@@ -25676,12 +26223,71 @@
         }
       }
     },
+    "/api/knowledge/documents/{id}/thumbnail": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "The picture of an image document (PNG, JPEG, WebP or GIF) once its safety check passed, for readers cleared for its label and allowed by its row access; served as is with nosniff and a sandbox CSP; 404 for HEIC, quarantined, rejected or failed images",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The document id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/png": {},
+              "image/jpeg": {},
+              "image/webp": {},
+              "image/gif": {}
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/knowledge/documents/{id}/reclassify": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "202 {jobId, images: 1}: labels one indexed image again (job knowledge.classify); needs manage access. Audited knowledge.document.reclassify.started",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The document id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/knowledge/models": {
       "get": {
         "tags": [
           "knowledge"
         ],
-        "summary": "{embedding: [{name, label, state}], rerankers: [...]}: approved models for the forms",
+        "summary": "{embedding: [{name, label, state}], rerankers: [...], visionProfiles: [{name, displayName, model, label}], imageClassifiers: [{id, slug, name, status, version, labels}]}: approved models, the profiles that read images and the vision classifiers, for the forms",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -25707,10 +26313,72 @@
         "tags": [
           "knowledge"
         ],
-        "summary": "Test search as the caller: {hits: [hit], ceiling, vectorSkipped, vectorStore}",
+        "summary": "Test search as the caller: {hits: [hit], ceiling, vectorSkipped, vectorStore}. Since 1.6.0 the body takes labels: {any, all, minScore} (only image documents carrying the labels), and an image hit carries image: {caption, ocr (an excerpt), labels: [{label, score, hit, classifierId, classifier, version}], thumbnail}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kbIds",
+                  "query"
+                ],
+                "properties": {
+                  "kbIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "query": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  },
+                  "rerank": {
+                    "type": "boolean"
+                  },
+                  "labels": {
+                    "type": "object",
+                    "description": "Image labels a hit must carry (B-8803)",
+                    "properties": {
+                      "any": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "all": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "minScore": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }
@@ -32189,6 +32857,458 @@
         }
       }
     },
+    "/api/vault/reveal-flags": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read. B-4803: flags on unusual reveals (new address, odd hour, burst) of secrets the caller owns, or every flag for secrets:admin",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "expected",
+                "suspicious",
+                "all"
+              ],
+              "default": "open"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "flags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "ownerId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "principal": {
+                            "type": "string"
+                          },
+                          "principalName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ip": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "signals": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "new-address",
+                                    "odd-hour",
+                                    "burst"
+                                  ]
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "integer"
+                                }
+                              }
+                            }
+                          },
+                          "reveals": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "expected",
+                              "suspicious"
+                            ]
+                          },
+                          "resolvedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "resolvedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          },
+                          "updatedAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/reveal-flags/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read (the owner or secrets:admin). B-4803: a reveal flag with the secret's recent reveals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "ownerId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "principal": {
+                          "type": "string"
+                        },
+                        "principalName": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "ip": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "signals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "new-address",
+                                  "odd-hour",
+                                  "burst"
+                                ]
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        },
+                        "reveals": {
+                          "type": "integer"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "expected",
+                            "suspicious"
+                          ]
+                        },
+                        "resolvedBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolvedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "note": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        },
+                        "updatedAt": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "recent": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "principal": {
+                                "type": "string"
+                              },
+                              "ip": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "hour": {
+                                "type": "integer"
+                              },
+                              "at": {
+                                "type": "integer"
+                              },
+                              "version": {
+                                "type": "integer"
+                              },
+                              "flagged": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/reveal-flags/{id}/resolve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read (the owner or secrets:admin). B-4803: resolve a reveal flag as expected or suspicious. Audited vault.reveal.flag.resolved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "expected",
+                      "suspicious"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "ownerId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "principal": {
+                      "type": "string"
+                    },
+                    "principalName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ip": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "signals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "new-address",
+                              "odd-hour",
+                              "burst"
+                            ]
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "reveals": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "expected",
+                        "suspicious"
+                      ]
+                    },
+                    "resolvedBy": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "resolvedAt": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "integer"
+                    },
+                    "updatedAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/vault/policies": {
       "get": {
         "tags": [
@@ -36901,6 +38021,463 @@
         }
       }
     },
+    "/api/apps/held": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: public form submissions held by the user-input guardrail, in the caller's workspaces and clearance",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "held",
+                "accepted",
+                "rejected",
+                "all"
+              ],
+              "default": "held"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "held",
+                              "accepted",
+                              "rejected"
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "workspaceId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "app": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "title": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "form": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "title": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "held": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string"
+                                },
+                                "rule": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          "dropped": {
+                            "type": "integer"
+                          },
+                          "flag": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string"
+                              },
+                              "queueId": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "recordId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decidedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "decidedAt": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/held/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: a held submission with its screened values (null once decided)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "held",
+                            "accepted",
+                            "rejected"
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "workspaceId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "app": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "form": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "title": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "held": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "rule": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "dropped": {
+                          "type": "integer"
+                        },
+                        "flag": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "ref": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            },
+                            "queueId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        },
+                        "recordId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "decidedAt": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "values": {
+                          "type": [
+                            "object",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/held/{id}/decide": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "apps"
+        ],
+        "summary": "flags:review or moderation:review. B-4701: accept a held submission into a record (written by no one, source form) or reject it; the hold flag records the decision. Audited app.form.held.accepted or app.form.held.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "accept",
+                      "reject"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recordId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "flag": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/apps/transfers/{id}": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -38447,7 +40024,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "Public, no session. B-2205: a submission, rate-limited per address and per form; only listed, visible fields are written, every text value passes the user-input guardrail. Audited app.form.submitted",
+        "summary": "Public, no session. B-2205: a submission, rate-limited per address and per form; only listed, visible fields are written, every text value passes the user-input guardrail. Audited app.form.submitted. Since 1.6.0 (B-4701) a value the guardrail holds makes the submission wait for review: 202 with held true",
         "security": [],
         "requestBody": {
           "required": true,
@@ -38488,6 +40065,9 @@
                     },
                     "dropped": {
                       "type": "integer"
+                    },
+                    "held": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -38502,6 +40082,36 @@
           },
           "default": {
             "$ref": "#/components/responses/Default"
+          },
+          "202": {
+            "description": "Accepted: held for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "submitted": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "dropped": {
+                      "type": "integer"
+                    },
+                    "held": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "submitted",
+                    "message",
+                    "dropped"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -38512,12 +40122,13 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. The groups the caller may know of in their workspaces",
+        "summary": "groups:read. The groups (not channels) the caller may know of in their workspaces. 1.6.0: category and distance filters; with near only groups whose place the caller may read match, nearest first, with distanceKm",
         "parameters": [
           {
             "name": "workspace",
             "in": "query",
             "required": false,
+            "description": "Only this workspace",
             "schema": {
               "type": "string"
             }
@@ -38526,8 +40137,36 @@
             "name": "mine",
             "in": "query",
             "required": false,
+            "description": "true: only groups the caller is a member of",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -38607,6 +40246,66 @@
                       "confidential",
                       "restricted"
                     ]
+                  },
+                  "categoryId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "location": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "description": "The group's place (1.6.0, B-4403): a name, a point, or both; null clears it",
+                        "properties": {
+                          "name": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 200
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lat": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -90,
+                                "maximum": 90
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lon": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -180,
+                                "maximum": 180
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -38624,6 +40323,230 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/groups/discover": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 × shared members + 2 × joins + posts in the last 30 days; nearest first with near",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "Only this workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (default 50, at most 200)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Group"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "sharedMembers": {
+                                "type": "integer"
+                              },
+                              "activity": {
+                                "type": "object",
+                                "properties": {
+                                  "posts": {
+                                    "type": "integer"
+                                  },
+                                  "joins": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "score": {
+                                "type": "integer"
+                              },
+                              "invited": {
+                                "type": "boolean"
+                              },
+                              "requested": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "windowDays": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/groups/trending": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4404: the trending groups of the caller’s workspaces as the groups.trending job last counted them (3 × joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "Only this workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "A category id, or none for uncategorised groups (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many (default 20, at most 100)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Group"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "trend": {
+                                "type": "object",
+                                "properties": {
+                                  "joins": {
+                                    "type": "integer"
+                                  },
+                                  "posts": {
+                                    "type": "integer"
+                                  },
+                                  "score": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "computedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "windowStart": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "hours": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
@@ -38672,7 +40595,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes name, description, visibility, join mode or label",
+        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel’s label is never below its group’s (422 step label-floor); raising a group’s label raises its channels below it",
         "parameters": [
           {
             "name": "id",
@@ -38729,6 +40652,66 @@
                       "internal",
                       "confidential",
                       "restricted"
+                    ]
+                  },
+                  "categoryId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "location": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "description": "The group's place (1.6.0, B-4403): a name, a point, or both; null clears it",
+                        "properties": {
+                          "name": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 200
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lat": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -90,
+                                "maximum": 90
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lon": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": -180,
+                                "maximum": 180
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   }
                 },
@@ -39378,6 +41361,134 @@
         }
       }
     },
+    "/api/groups/{id}/channels": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group’s readers, a private one by its members, a hidden one is known only to them)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Group"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group’s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 5000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "private",
+                      "hidden"
+                    ],
+                    "default": "public"
+                  },
+                  "joinMode": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "request",
+                      "invite"
+                    ],
+                    "default": "open"
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/groups/{id}/events": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -39529,6 +41640,30 @@
                       "maximum": 40320
                     },
                     "maxItems": 5
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -90,
+                        "maximum": 90
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -180,
+                        "maximum": 180
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -39711,6 +41846,33 @@
         }
       }
     },
+    "/api/group-categories": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "groups"
+        ],
+        "summary": "groups:read. B-4405: the tenant’s group categories in their order (managed under /api/admin/social/group-categories)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GroupCategory"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/group-posts/{id}": {
       "delete": {
         "x-exprsn-since": "1.4.0",
@@ -39780,6 +41942,24 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "near",
+            "in": "query",
+            "required": false,
+            "description": "A distance filter: latitude,longitude in WGS 84 degrees (1.6.0)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "km",
+            "in": "query",
+            "required": false,
+            "description": "The radius of near in km (default 25, at most 20016)",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -39927,6 +42107,30 @@
                       "maximum": 40320
                     },
                     "maxItems": 5
+                  },
+                  "lat": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -90,
+                        "maximum": 90
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lon": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": -180,
+                        "maximum": 180
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [],

@@ -43,6 +43,24 @@
     setTimeout(() => document.addEventListener('click', function off(ev) { if (!d.contains(ev.target)) { d.remove(); document.removeEventListener('click', off); } }), 0);
   }
 
+  // 1.6.0 (B-4701): a public form submission the user-input guardrail held waits as a hold flag; its values come from
+  // GET /api/apps/held/:id and Accept or Reject goes through POST /api/apps/held/:id/decide.
+  const HELD = 'app-form-submission';
+  const isHeld = (f) => !!(f && f.kind === 'hold' && f.object && f.object.type === HELD);
+  function heldBlock(sel, st) {
+    const id = sel.object.id; const h = st.held && st.held[id];
+    if (!h) return '<div class="eyebrow" style="margin-top:10px">Held submission</div>' + small(st.heldError && st.heldError[id] ? esc(st.heldError[id]) : 'Loading the submitted values');
+    const heldFields = h.held.map((x) => x.field);
+    const vals = h.values ? Object.keys(h.values).map((k) => [esc(k) + (heldFields.indexOf(k) >= 0 ? ' ' + UI.pill('held', 'warn') : ''), '<span class="serif" style="overflow-wrap:anywhere">' + esc(typeof h.values[k] === 'string' ? h.values[k] : JSON.stringify(h.values[k])) + '</span>']) : [];
+    const refused = st.heldRefused && st.heldRefused.id === id ? st.heldRefused.message : null;
+    return '<div class="eyebrow" style="margin-top:10px">Held submission</div>'
+      + small('A public submission to <b>' + esc(h.form.title || h.form.name || 'a form') + '</b> in ' + esc(h.app.title || h.app.name || 'an app') + ' was held by the user-input guardrail instead of refused. Nothing is recorded until a reviewer accepts it.')
+      + (h.state === 'held' ? UI.kv(vals, 1) : UI.kv([['State', UI.pill(h.state, h.state === 'accepted' ? 'ok' : 'danger')]].concat(h.recordId ? [['Record', '<span class="mono">' + esc(h.recordId) + '</span>']] : []), 1))
+      + small(h.held.map((x) => esc(x.field) + ': ' + esc(x.rule) + (x.reason ? ', ' + esc(x.reason) : '')).join('; ') + (h.dropped ? '. ' + h.dropped + (h.dropped === 1 ? ' field' : ' fields') + ' not on the form dropped.' : '.'))
+      + (refused ? UI.notice('<b>The entity refused the record.</b> ' + esc(refused) + ' The submission is still held; reject it, or accept it once the cause is resolved.', 'danger') : '')
+      + (h.state === 'held' ? '<div class="vstack gap6" style="margin-top:8px">' + UI.btn('Accept into a record', { kind: 'primary', attrs: 'data-heldaccept' }) + UI.btn('Reject', { kind: 'danger', attrs: 'data-heldreject' }) + (App.can('flags:review') ? UI.btn('Open in Flags', { attrs: 'data-openflag="' + esc(sel.ref) + '"' }) : '') + '</div>' : '');
+  }
+
   /** A confirm dialog whose form fields ([data-v="name"]) are read when the primary button is pressed. */
   function ask(ctx, o) {
     return new Promise((resolve) => {
@@ -139,6 +157,17 @@
         const f = (st.allFlags || []).find((x) => x.escalatedTo);
         if (f) { st.queueSel = f.queueId || UNROUTED; st.flagSel = f.ref; st.escalatedNote = f.ref; }
         else st.demoNote = 'No routed flag has passed its queue SLA. When one does, the sweep moves it to the queue\'s escalation level with a fresh timer and notifies that level (event flag.escalated).';
+        ctx.rerender(); } },
+      { title: 'Held submission waiting', tone: 'warn', text: 'A public form value the user-input guardrail holds is queued for review instead of refused. The reviewer reads the values and accepts it into a record or rejects it.', apply(ctx) {
+        const st = ctx.state; st.tab = 'queues'; st.flagKind = 'all'; st.flagType = 'all';
+        const f = (st.allFlags || []).find(isHeld);
+        if (f) { st.queueSel = f.queueId || UNROUTED; st.flagSel = f.ref; }
+        else st.demoNote = 'No public form submission is waiting. When the user-input guardrail holds a value on a public form, the submission waits here as a hold flag with its values, to be accepted into a record or rejected.';
+        ctx.rerender(); } },
+      { title: 'Accept refused by the entity', tone: 'danger', text: 'Accepting writes the record through the entity\'s own checks. A refusal (a unique value taken meanwhile, a field removed) leaves the submission held and names the reason.', apply(ctx) {
+        const st = ctx.state; st.tab = 'queues';
+        if (st.heldRefused) { const f = (st.allFlags || []).find((x) => isHeld(x) && x.object.id === st.heldRefused.id); if (f) { st.queueSel = f.queueId || UNROUTED; st.flagSel = f.ref; } }
+        else st.demoNote = 'No acceptance has been refused. If the entity refuses the record (a unique value taken meanwhile, a field removed), the submission stays held and the reason shows beside it.';
         ctx.rerender(); } },
       { title: 'Providers disabled', tone: 'info', text: 'Without MODERATION_EXTERNAL_PROVIDERS every provider route answers 403 with step disabled. The list is read-only and nothing is queued.', apply(ctx) {
         const st = ctx.state;
@@ -244,8 +273,16 @@
         const hideable = !!(sel && sel.object && sel.object.hideable && App.can('moderation:review'));
         aside = '<aside class="inspector w360" aria-label="Selected flag">' + (sel ? '<div class="hstack"><div class="eyebrow grow">Selected flag</div>' + UI.label(sel.label, { sm: true }) + '</div><div class="mod-title mono">' + esc(sel.ref) + '</div><div class="fg2">' + esc(sel.restricted ? 'Restricted item' : sel.rule || '') + '</div>'
           + UI.kv([['Kind', esc(sel.kind) + ' at ' + esc(String(sel.checkpoint || '').replace(/-/g, ' '))], ['Object', sel.object ? '<span class="mono">' + esc(sel.object.type) + '</span><br>' + small(esc(sel.object.id)) : small(sel.restricted ? '(redacted)' : 'not named in the flag queue')], ['Raised by', esc(sel.actor ? sel.actor.name || '' : '(redacted)')], ['Severity', sevPill(sel.severity)], ['Timer', leftOf(sel) < 0 ? '<span style="color:var(--danger-fg)">overdue by ' + -leftOf(sel) + ' min</span>' : leftOf(sel) + ' of ' + sel.slaMinutes + ' min'], ['Escalation', sel.escalatedTo ? esc(sel.escalatedTo) + ' level, ' + esc(timeText(leftOf(sel))) : selQueue ? 'none, escalates to ' + esc(selQueue.escalateTo) + ' after ' + selQueue.slaMinutes + ' min' : 'none (not routed)'], ['Created', esc(when(sel.createdAt))]], 1)
-          + '<div class="vstack gap6" style="margin-top:8px">' + UI.btn('Hide object', { kind: 'primary', attrs: 'data-hide', disabled: !hideable, title: hideable ? '' : 'Only a flag that points at a registered object can hide it' }) + (App.can('flags:review') ? UI.btn('Open in Flags', { attrs: 'data-openflag="' + esc(sel.ref) + '"' }) : '') + (sel.ruleId && App.can('guardrails:manage') ? UI.btn('Rule in Guardrails', { kind: 'ghost', attrs: 'data-gorule="' + esc(sel.ruleId) + '"' }) : '') + '</div>'
-          + (hideable ? '' : small(sel.kind === 'hold' ? 'This flag holds an answer or a question. Approve or reject it in Flags.' : sel.queueId === UNROUTED ? 'Flags outside a queue are decided in Flags. Route them with a queue to act on their object here.' : 'This flag points at no object that can be hidden. Decide it in Flags.')) : UI.empty('No flag selected', 'Pick a row to see its timer and actions.')) + '</aside>';
+          + (isHeld(sel) ? heldBlock(sel, st) : '<div class="vstack gap6" style="margin-top:8px">' + UI.btn('Hide object', { kind: 'primary', attrs: 'data-hide', disabled: !hideable, title: hideable ? '' : 'Only a flag that points at a registered object can hide it' }) + (App.can('flags:review') ? UI.btn('Open in Flags', { attrs: 'data-openflag="' + esc(sel.ref) + '"' }) : '') + (sel.ruleId && App.can('guardrails:manage') ? UI.btn('Rule in Guardrails', { kind: 'ghost', attrs: 'data-gorule="' + esc(sel.ruleId) + '"' }) : '') + '</div>'
+          + (hideable ? '' : small(sel.kind === 'hold' ? 'This flag holds an answer or a question. Approve or reject it in Flags.' : sel.queueId === UNROUTED ? 'Flags outside a queue are decided in Flags. Route them with a queue to act on their object here.' : 'This flag points at no object that can be hidden. Decide it in Flags.'))) : UI.empty('No flag selected', 'Pick a row to see its timer and actions.')) + '</aside>';
+        if (isHeld(sel)) {
+          const hid = sel.object.id; st.held = st.held || {}; st.heldError = st.heldError || {};
+          if (!st.held[hid] && !st.heldError[hid] && st.heldLoading !== hid) {
+            st.heldLoading = hid;
+            App.get('/api/apps/held/' + enc(hid)).then((h) => { st.held[hid] = h; }).catch((err) => { st.heldError[hid] = 'The submission could not be loaded: ' + (err.message || 'error') + '.'; })
+              .finally(() => { st.heldLoading = null; if (App.state.route === 'moderation' && !overlayOpen()) ctx.rerender(); });
+          }
+        }
       }
 
       // ---------------- Reports ----------------
@@ -376,6 +413,21 @@
         if (!ok) return;
         try { await App.del('/api/moderation/queues/' + enc(q.id)); st.queueSel = null; ctx.toast(esc(q.name) + ' deleted. ' + n + ' flag' + (n === 1 ? ' is' : 's are') + ' unrouted.', 'warn'); st.quiet = true; ctx.rerender(); }
         catch (err) { App.fail(err, 'Queue not deleted'); }
+      });
+      ctx.on('click', '[data-heldaccept], [data-heldreject]', async (e, t) => {
+        const f = st.allFlags.find((x) => x.ref === st.flagSel); if (!isHeld(f)) return; const id = f.object.id; const h = st.held && st.held[id]; if (!h) return;
+        const accept = t.hasAttribute('data-heldaccept');
+        const v = await ask(ctx, { title: accept ? 'Accept the submission' : 'Reject the submission', tag: accept ? 'writes a record' : 'nothing is recorded', tone: accept ? 'info' : 'danger', body: '<p style="margin:0" class="fg2">' + (accept ? 'Writes a record in ' + esc(h.app.title || h.app.name || 'the app') + ' with these values, as the public form would have, through the entity\'s own checks. The flag is approved.' : 'Drops the submitted values; no record is written. The flag is rejected.') + ' Audited as app.form.held.' + (accept ? 'accepted' : 'rejected') + '.</p>' + UI.field('Reason (optional)', UI.textarea('', { rows: 2, attrs: 'data-v="reason"' })), kv: [['Flag', esc(f.ref)], ['Form', esc(h.form.title || h.form.name || '')]], ok: accept ? 'Accept' : 'Reject' });
+        if (!v) return;
+        try {
+          const r = await App.post('/api/apps/held/' + enc(id) + '/decide', { decision: accept ? 'accept' : 'reject', reason: (v.reason || '').trim() || null });
+          st.heldRefused = null; delete st.held[id]; st.flagSel = null;
+          ctx.toast(accept ? 'Accepted: record …' + esc(String(r.recordId || '').slice(-6)) + ' written. ' + esc(f.ref) + ' approved.' : 'Rejected: nothing was recorded. ' + esc(f.ref) + ' rejected.', 'ok', 5000);
+          st.quiet = true; ctx.rerender();
+        } catch (err) {
+          if (accept && err && (err.status === 400 || err.status === 409)) { st.heldRefused = { id, message: err.message || 'The record was refused.' }; ctx.rerender(); }
+          App.fail(err, accept ? 'Not accepted' : 'Not rejected');
+        }
       });
       ctx.on('click', '[data-hide]', async () => {
         const f = st.allFlags.find((x) => x.ref === st.flagSel); if (!f || !f.object) return;

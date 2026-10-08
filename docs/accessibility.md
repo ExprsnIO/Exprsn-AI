@@ -167,6 +167,56 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   axe-core and the in-page checker on the register form, the drawer and the picker and checks each at 320 px; the
   new design state ("Server model unavailable") is in the sweeps of `y-accessibility.spec.ts` and
   `y-reflow-overlays.spec.ts`.
+- **Storage: deduplication** (B-4601, Sprint 36b): Usage gains a fourth button in its pressed-state segmented group,
+  Deduplication. It shows four stat tiles (saved, stored, held by versions, shared objects), each a number with its
+  word, and a table of tenants whose meter carries its percentage as text; an empty table names why ("Nothing shared
+  yet"). A sentence under the table says in words that content is never shared across tenants and that quotas count
+  every version. `storage-configuration.spec.ts` checks the view, its new design state ("Nothing shared yet") in
+  light and dark with axe-core and the in-page checker, and its reflow at 320 and 640 px.
+- **Moderation: held form submissions** (B-4701, Sprint 36b): selecting a hold flag on a public form submission shows
+  the submitted values in the inspector as a key and value list, the held fields marked with a "held" pill (a word,
+  not a colour), the rule and reason in text, and two named buttons, Accept into a record and Reject, each through a
+  confirm dialog with a labelled optional reason. A refusal by the entity is a danger notice in the inspector naming
+  the reason, so it is read without the toast. The two new design states are in the `y-accessibility.spec.ts` sweep;
+  `moderation.spec.ts` accepts a held submission from the queue.
+- **Vault: reveal flags** (B-4803, Sprint 36b): a fifth tab, Reveal flags, in the same tab list. A pressed-state
+  segmented group filters by state; each row's signals are pills with words (new address, odd hour, burst) and the
+  state a pill with its word. The inspector lists the signals as a timeline with their details in text and the recent
+  reveals as a table; Expected and Suspicious open a dialog with a labelled note field. A suspicious flag keeps a
+  notice that says to rotate the secret, with a button to open it. A notification about an unusual reveal links
+  straight to the flag (`#/vault?tab=flags&flag=<id>`). The two new design states are in the `y-accessibility.spec.ts`
+  sweep; `vault.spec.ts` resolves a flag raised by a burst from a new address and checks the tab's reflow at 320 and
+  640 px.
+
+- **Knowledge: image documents; Classifiers: the vision engine** (B-8804, Sprint 36c): an image document's thumbnail
+  carries its caption as alt text, or "Image: <document name>" until it has one; the alt is never empty, even where
+  the caption is shown beside it. The label filter chips are buttons with `aria-pressed` and their document counts in
+  text. Label scores are numbers with the threshold state in words ("above threshold", "below threshold"), never by
+  colour alone. The image document drawer keeps the description in text: the caption, and the image's text as a
+  labelled block, so nothing is only in the picture. The vision profile and the image classifiers are
+  labelled controls in the base's Image settings dialog (the classifiers in a fieldset with a legend), and a disabled
+  classifier says why in its label (a draft); Re-classify is a labelled button beside the chips and in the image
+  drawer. The Classifiers screen offers `vision` in the engine select of New classifier, and a vision
+  classifier's test dialog takes an image file through a labelled file input. `e2e/tests/knowledge-images.spec.ts` runs
+  axe-core and the in-page checker on the image documents, the drawer, the filter chips and the settings dialog, and
+  checks each for sideways scrolling at 320 and 640 px.
+
+- **Groups and Social and messaging: groups depth** (B-4401 to B-4405, Sprint 36a): the Groups list's mode switch
+  (My groups, Discover, Trending) is a named segmented group of pressed-state buttons; Category is a menu button like
+  the other filters, and Distance opens a labelled dialog (a select of known places, the point and the radius, each a
+  labelled field with a hint). An active filter says so in its button text ("Within 50 km") and its accessible name
+  names the centre. Discover and Trending say what ranks the list in text above it; each row's second line says why
+  (shared members and activity, or joins and posts) and the distance in km, in words, never by colour. The Channels
+  tab is a table whose rows open the channel with a click or Enter (`tabindex="0"`, an accessible name "Open the
+  channel …"); a channel's page names its group with a link back. New channel is a labelled form whose label select
+  offers the labels up to the caller's clearance, preset to the group's, with a hint naming the floor; a label below it
+  is refused by the server and shown as a problem panel with the server's words. Group settings add Category, Place and "Latitude, longitude" fields with hints. On
+  Social and messaging, Group categories and Trending groups are tables with column headers; Rename and Remove carry
+  the category's name in their accessible names, and New category is a labelled dialog whose errors land in a
+  `role="alert"` region. `e2e/tests/groups-depth.spec.ts` runs axe-core (Standard and Enhanced) and the in-page
+  checker in light and dark on Discover, Trending, the Channels tab, a channel, the Social and messaging Groups tab,
+  the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
+  and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 

@@ -32,7 +32,7 @@ test.describe('Models', () => {
   test('requests an import, pulls and evaluates it, and a second admin approves it', async ({ page, as }) => {
     await open(page, 'models');
     await expectLive(page);
-    await expect(page.locator('#main')).toContainText('4 of 4 models');
+    await expect(page.locator('#main')).toContainText('5 of 5 models'); // 1.6.0: the e2e server also seeds llava:7b (knowledge images)
 
     await page.getByRole('button', { name: 'Request import' }).click();
     const modal = page.locator('#overlay .modal');

@@ -239,12 +239,24 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   relations read, the tenant's digest and summary settings, trending exclusions, legal-hold conversation exports under
   dual control as the job `messaging.conversation.export`, realtime counts from `RoomStats` in `realtime/rooms.ts`)
   with `routes/admin/social.ts`; `tenancy/templates.ts` (B-4501: tenant provisioning templates).
+- 1.6.0 Sprint 36a: `groups/depth.ts` (`s.groups.depth`: tenant group categories, discovery, the `groups.trending`
+  job, B-4402, B-4404, B-4405) and `groups/geo.ts` (distance filters: PostGIS `ST_DWithin` or a bounding box, one
+  haversine deciding, B-4403); channels are groups with a `parent_id` (B-4401) in `groups/service.ts`.
 
 - 1.6.0 Sprint 35b: `ops/instances.ts` (`s.instances`: every server process's heartbeat row in `platform_instances`, the
   `readiness` checks `/readyz` shares, drain), `ops/overview.ts` (`s.overview`: computed alerts, acknowledgements,
   counters, recent audit, capacity) and `ops/jobs-admin.ts` (`s.jobsAdmin`: job types, jobs, schedules, dead letters,
   the cache), behind `routes/admin/operations.ts`; `JobQueue` pauses by type (`pausesLoader`) and `requeue`s, and the
   `Scheduler` lists its schedules, runs one now and skips a paused one (`isPaused`).
+- 1.6.0 Sprint 36b: `files/dedup.ts` (`s.files.dedup`, B-4601: reference-counted `file_blobs` shared within one
+  tenant, adopted when a scan releases a version and released by the trash purge), `apps/forms-held.ts`
+  (`s.apps.forms.held`, B-4701: public submissions the `user-input` guardrail holds, decided from the moderation and
+  flag queues) and `vault/anomalies.ts` (`s.revealWatch`, B-4803: reveal history and flags for a secret's owner).
+- 1.6.0 Sprint 36c: `knowledge/images.ts` (B-8801: image types from the bytes, the images inside PDF and Word
+  documents as a document's parts, the vision profile's prompt and validated answer); image documents, their labels
+  (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the
+  `vision` classifier engine and image eval cases in `guardrails/classifiers.ts`; the built-in tool `knowledge_search`.
+  The fake Ollama answers image prompts from a picture's text chunks (`markedPng` in `server/test/fake-ollama.ts`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

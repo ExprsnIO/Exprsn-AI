@@ -58,6 +58,9 @@ import * as m037 from './037_model_servers.js';
 import * as m037b from './037b_platform_ops.js';
 import * as m037c from './037c_platform_storage.js';
 import * as m037d from './037d_platform_social.js';
+import * as m038 from './038_groups2.js';
+import * as m038b from './038b_dedup_held_vault.js';
+import * as m038c from './038c_knowledge_images.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -124,7 +127,10 @@ const MIGRATIONS: Record<string, Migration> = {
   '037_model_servers': m037,
   '037b_platform_ops': m037b,
   '037c_platform_storage': m037c,
-  '037d_platform_social': m037d
+  '037d_platform_social': m037d,
+  '038_groups2': m038,
+  '038b_dedup_held_vault': m038b,
+  '038c_knowledge_images': m038c
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

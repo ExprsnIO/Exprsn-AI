@@ -198,7 +198,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(noStore);
   const json = express.json({ limit: '256kb', strict: true });
   // Attachment uploads carry the raw file (of any type, JSON included) and are parsed by their route.
-  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path) || req.path === '/people/me/avatar') ? next() : json(req, res, next)));
+  api.use((req, res, next) => (req.method === 'PUT' && (req.path === '/attachments' || req.path === '/media/assets' || /^\/knowledge\/bases\/[^/]+\/uploads$/.test(req.path) || /^\/admin\/platform\/bundles\/[^/]+\/transfer$/.test(req.path) || /^\/files\/(uploads|[^/]+\/content)$/.test(req.path) || req.path === '/people/me/avatar' || /^\/admin\/classifiers\/[^/]+\/samples\/image$/.test(req.path)) ? next() : json(req, res, next)));
   api.use(authenticate(s));
   api.use(csrfProtection(s));
 

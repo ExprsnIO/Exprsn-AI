@@ -33,7 +33,9 @@ export function publicAppRoutes(s: Services): Router {
   r.post('/forms/submit', noStore, robots, json, async (req, res) => {
     // Values are checked against the form afterwards; anything the form does not list is dropped there.
     const { token, values } = parseBody(z.object({ token: TOKEN, values: z.record(z.string().max(100), z.unknown()).refine((v) => Object.keys(v).length <= 200, 'at most 200 fields') }).strict(), req.body);
-    res.status(201).json(await s.apps.forms.submitPublic(token, values, ip(req), req.traceId, perAddress));
+    // 1.6.0 (B-4701): 202 when a held value makes the submission wait for review.
+    const out = await s.apps.forms.submitPublic(token, values, ip(req), req.traceId, perAddress);
+    res.status(out.held ? 202 : 201).json(out);
   });
 
   return r;

@@ -73,6 +73,22 @@ export function vaultRoutes(s: Services): Router {
     res.status(204).end();
   });
 
+  // ---- reveal flags (1.6.0, B-4803): the owner's (or, for secrets:admin, every) flag on unusual reveals ----
+
+  r.get('/vault/reveal-flags', read, async (req, res) => {
+    const q = parseBody(z.object({ state: z.enum(['open', 'expected', 'suspicious', 'all']).default('open') }).strict(), req.query);
+    res.json({ flags: await s.revealWatch.list(principalOf(req), q.state) });
+  });
+
+  r.get('/vault/reveal-flags/:id', read, async (req, res) => {
+    res.json(await s.revealWatch.detail(principalOf(req), parseBody(z.string().length(26), req.params.id)));
+  });
+
+  r.post('/vault/reveal-flags/:id/resolve', read, async (req, res) => {
+    const b = parseBody(z.object({ decision: z.enum(['expected', 'suspicious']), note: z.string().trim().max(500).nullable().optional() }).strict(), req.body);
+    res.json(await s.revealWatch.resolve(principalOf(req), parseBody(z.string().length(26), req.params.id), b.decision, b.note || null, { ip: ip(req), traceId: req.traceId ?? null }));
+  });
+
   r.get('/vault/kv/data/*path', read, async (req, res) => {
     const q = parseBody(z.object({ version: z.coerce.number().int().min(1).max(1_000_000_000).optional() }).strict(), req.query);
     res.json(await v.read(await caller(req), wildPath(req), q.version));

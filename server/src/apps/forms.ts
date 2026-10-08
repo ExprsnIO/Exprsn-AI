@@ -8,6 +8,7 @@ import { conflict, HttpProblem, notFound, tooManyRequests } from '../http/proble
 import { Limiter } from '../platform/ratelimit.js';
 import type { Services } from '../services.js';
 import { isComputed, nameSchema, normText, type Field, type Values } from './schema.js';
+import { HeldSubmissions, type HeldField } from './forms-held.js';
 import type { Actor, AppRow, AppService, EntityRow } from './service.js';
 
 /*
@@ -17,8 +18,10 @@ import type { Actor, AppRow, AppService, EntityRow } from './service.js';
  *
  * A form can be made public: a link token (shown once, stored as an HMAC) opens it without signing in at
  * `/api/public/forms`. Public submissions are rate-limited per address and per form in the shared counters, every
- * text value passes the `user-input` guardrail checkpoint (a block or hold refuses the submission, a redaction is
- * kept), and the record is written by no one (`source: form`). Public forms cannot ask for files, references or
+ * text value passes the `user-input` guardrail checkpoint (a block refuses the submission, a redaction is kept), and
+ * the record is written by no one (`source: form`). Since 1.6.0 (B-4701) a value the guardrail holds for review no
+ * longer refuses a public submission: the submission waits, sealed, as a held submission with a hold flag in the review
+ * queue (the Moderation and Flags screens), and a reviewer accepts it into a record or rejects it (forms-held.ts). Public forms cannot ask for files, references or
  * lookups of users, workspaces or records: an anonymous visitor must not learn which ids exist.
  */
 
@@ -112,10 +115,15 @@ export function pickFormValues(def: FormDefinition, input: Values): { values: Va
 }
 
 export class AppForms {
+  /** 1.6.0 (B-4701): public submissions held for review. */
+  readonly held: HeldSubmissions;
+
   constructor(
     private readonly s: () => Services,
     private readonly apps: AppService
-  ) {}
+  ) {
+    this.held = new HeldSubmissions(s, apps);
+  }
 
   private get db() {
     return this.s().db;
@@ -235,9 +243,13 @@ export class AppForms {
    * A submission: the form's visible fields only (the rest dropped), required ones checked, text screened at the
    * `user-input` checkpoint, then written as a record of the form's entity.
    */
-  private async submit(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor): Promise<{ id: string; dropped: string[] }> {
+  private async submit(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor, holdable = false): Promise<{ id: string; dropped: string[]; held?: boolean }> {
     const s = this.s();
-    const { values, dropped } = await this.screen(app, entity, form, input, actor);
+    const { values, dropped, held } = await this.screen(app, entity, form, input, actor, holdable);
+    if (held.length) {
+      const h = await this.held.hold({ app, entity, form, values, dropped: dropped.length, held, ip: actor.ip ?? null, traceId: actor.traceId ?? null });
+      return { id: h.id, dropped, held: true };
+    }
     const rec = await this.apps.createRecord(actor, app, entity, { values });
     await s.audit.append({
       tenantId: app.tenant_id,
@@ -274,18 +286,26 @@ export class AppForms {
   }
 
   /** What a submission may write: the visible fields, required ones present, text screened at `user-input`. */
-  private async screen(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor): Promise<{ values: Values; dropped: string[] }> {
+  private async screen(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor, holdable = false): Promise<{ values: Values; dropped: string[]; held: HeldField[] }> {
     const s = this.s();
     const { values, dropped, visible } = pickFormValues(form.definition, input);
     const required = form.definition.fields.filter((f) => f.required && visible.includes(f.field) && (values[f.field] == null || values[f.field] === ''));
     if (required.length) throw new HttpProblem(400, 'Invalid record', `${required.map((f) => f.field).join(', ')} ${required.length === 1 ? 'is' : 'are'} required.`, { extensions: { problems: required.map((f) => ({ field: f.field, message: 'is required' })) } });
+    const held: HeldField[] = [];
     for (const [k, v] of Object.entries(values)) {
       if (typeof v !== 'string' || !v) continue;
       const d = await s.guardrails.check({ tenantId: app.tenant_id, workspaceId: app.workspace_id, checkpoint: 'user-input', text: v, label: entity.label, ...(actor.principal ? { principal: actor.principal } : {}), source: { kind: 'app-form', id: form.id }, meta: { app: app.id, entity: entity.name, field: k, public: !actor.principal } });
+      // B-4701: a hold on a public submission waits for review; a hold from a check that could not run stays a refusal.
+      const hold = holdable && d.action === 'require-approval' ? d.findings.find((f) => f.stage === 'enforce' && f.action === 'require-approval' && !f.detail?.startsWith('unavailable:')) : undefined;
+      if (hold) {
+        held.push({ field: k, ruleId: hold.ruleId, ruleName: hold.ruleName, setId: hold.setId ?? null, reason: d.reason ?? null });
+        values[k] = d.text;
+        continue;
+      }
       if (d.action === 'block' || d.action === 'require-approval') throw new HttpProblem(422, 'Submission refused', `The submission was refused by the content rules${d.reason ? `: ${d.reason}` : '.'}`, { extensions: { field: k } });
       if (d.action === 'redact') values[k] = d.text;
     }
-    return { values, dropped };
+    return { values, dropped, held };
   }
 
   async submitSignedIn(actor: Actor & { principal: Principal }, appRef: string, formRef: string, input: Values) {
@@ -310,13 +330,14 @@ export class AppForms {
   }
 
   /** A public submission: per-address and per-form limits first, then the same path as a signed-in one. */
-  async submitPublic(token: string, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; message: string; dropped: number }> {
+  async submitPublic(token: string, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; held: boolean; message: string; dropped: number }> {
     const { app, entity, form } = await this.byToken(token);
     const addr = await perAddress.consume(ip ?? 'unknown');
     if (!addr.allowed) throw tooManyRequests('Too many form submissions from this address; try again in a minute.', addr.resetMs / 1000);
     const perForm = await new Limiter(this.s().counters, 'app-form', form.rate_per_minute, 60_000).consume(form.id);
     if (!perForm.allowed) throw tooManyRequests('This form is receiving too many submissions; try again in a minute.', perForm.resetMs / 1000);
-    const out = await this.submit(app, entity, form, input, { principal: null, source: 'form', service: 'apps.forms', ip, ...(traceId ? { traceId } : {}) });
-    return { submitted: true, message: form.definition.successMessage ?? 'Thank you. Your submission was received.', dropped: out.dropped.length };
+    const out = await this.submit(app, entity, form, input, { principal: null, source: 'form', service: 'apps.forms', ip, ...(traceId ? { traceId } : {}) }, true);
+    if (out.held) return { submitted: true, held: true, message: 'Thank you. Your submission was received and will be reviewed before it is recorded.', dropped: out.dropped.length };
+    return { submitted: true, held: false, message: form.definition.successMessage ?? 'Thank you. Your submission was received.', dropped: out.dropped.length };
   }
 }

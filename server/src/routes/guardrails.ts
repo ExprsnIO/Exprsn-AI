@@ -1,4 +1,4 @@
-import { Router, type Request, type RequestHandler, type Response } from 'express';
+import express, { Router, type Request, type RequestHandler, type Response } from 'express';
 import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { LABELS, type Label } from '../authz/labels.js';
@@ -8,12 +8,14 @@ import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth,
 import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { classifierView, newClassifierSchema, type ClassifierRow } from '../guardrails/classifiers.js';
 import { POST_OBJECT as FEED_POST } from '../feed/service.js';
+import { HELD_OBJECT } from '../apps/forms-held.js';
 import { flagRef } from '../guardrails/flags.js';
 import { escapeLiteral } from '../guardrails/regex.js';
 import { checkRule, diffRules, ruleSchema, rulesFromYaml, rulesToYaml, type Rule } from '../guardrails/rules.js';
 import type { RuleSetRow, VersionRow } from '../guardrails/sets.js';
 import { CHECKPOINTS, GUARD_ACTIONS, type Checkpoint } from '../guardrails/types.js';
 import type { Services } from '../services.js';
+import { imageType } from '../knowledge/images.js';
 
 const FP_PROMOTION_LIMIT = 0.1;
 const ruleIdParam = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
@@ -402,27 +404,60 @@ export function guardrailRoutes(s: Services): Router {
   r.post('/admin/classifiers/:id/evaluate', classify, startJob('classifier.evaluate'));
   r.post('/admin/classifiers/:id/train', classify, startJob('classifier.train'));
 
-  /** Adds labelled cases to the classifier's dataset (sealed). */
+  /**
+   * Adds labelled cases to the classifier's dataset (sealed). A vision classifier's cases are images (Sprint 36c,
+   * B-8805): `image` (base64) instead of `text`, in the same eval-set format.
+   */
   r.post('/admin/classifiers/:id/samples', classify, async (req, res) => {
     const p = principalOf(req);
     const c = await loadClassifier(req);
     const labels = c.config.labels.map((l) => l.label);
-    const body = parseBody(z.object({ items: z.array(z.object({ text: z.string().min(1).max(50_000), expected: z.string().min(1).max(100), label: z.enum(LABELS).optional() })).min(1).max(1000) }), req.body);
+    const body = parseBody(z.object({ items: z.array(z.object({ text: z.string().min(1).max(50_000).optional(), image: z.string().min(1).max(200_000).regex(/^[A-Za-z0-9+/=\s]+$/, 'base64').optional(), expected: z.string().min(1).max(100), label: z.enum(LABELS).optional() }).strict()).min(1).max(1000) }), req.body);
     const bad = body.items.find((x) => x.expected !== 'none' && !labels.includes(x.expected));
     if (bad) throw new HttpProblem(422, 'Invalid sample', `${c.name} has no label ${bad.expected}; use one of ${labels.join(', ')} or none.`);
-    const added = await classifiers.addCases(p.tenantId, c.dataset ?? `${c.slug}-eval`, body.items.map((x) => ({ ...x, label: x.label ?? 'internal' })), p.userId);
-    await audit(req, 'classifier.samples.added', { classifier: c.id, dataset: c.dataset }, { added });
+    const vision = c.engine === 'vision';
+    if (body.items.some((x) => (vision ? !x.image || x.text : !x.text || x.image))) throw new HttpProblem(422, 'Invalid sample', vision ? `${c.name} classifies images: give each case an image (base64), not text.` : `${c.name} classifies text: give each case its text.`);
+    let added: number;
+    if (vision) {
+      const items = body.items.map((x) => {
+        const data = Buffer.from(x.image!, 'base64');
+        const type = imageType(data);
+        if (!type) throw new HttpProblem(422, 'Invalid sample', 'An image case must be a PNG, JPEG, WebP, GIF or HEIC image.');
+        return { data, type, expected: x.expected, label: x.label ?? 'internal' };
+      });
+      added = await classifiers.addImageCases(p.tenantId, c.dataset ?? `${c.slug}-eval`, items, p.userId);
+    } else added = await classifiers.addCases(p.tenantId, c.dataset ?? `${c.slug}-eval`, body.items.map((x) => ({ text: x.text!, expected: x.expected, label: x.label ?? 'internal' })), p.userId);
+    await audit(req, 'classifier.samples.added', { classifier: c.id, dataset: c.dataset }, { added, ...(vision ? { images: true } : {}) });
+    res.status(201).json({ added, samples: await classifiers.sampleCounts(p.tenantId, c) });
+  });
+
+  /** B-8805: one image case as a raw upload (the body is the image), for images larger than a JSON request allows. */
+  r.put('/admin/classifiers/:id/samples/image', classify, express.raw({ type: () => true, limit: s.cfg.ATTACHMENT_MAX_BYTES }), async (req, res) => {
+    const p = principalOf(req);
+    const c = await loadClassifier(req);
+    if (c.engine !== 'vision') throw conflict(`${c.name} classifies text; add its cases as text.`);
+    const q = parseBody(z.object({ expected: z.string().trim().min(1).max(100), label: z.enum(LABELS).default('internal') }), req.query);
+    if (q.expected !== 'none' && !c.config.labels.some((l) => l.label === q.expected)) throw new HttpProblem(422, 'Invalid sample', `${c.name} has no label ${q.expected}.`);
+    const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const type = imageType(data);
+    if (!type) throw new HttpProblem(422, 'Invalid sample', 'The body must be a PNG, JPEG, WebP, GIF or HEIC image.');
+    const added = await classifiers.addImageCases(p.tenantId, c.dataset ?? `${c.slug}-eval`, [{ data, type, expected: q.expected, label: q.label }], p.userId);
+    await audit(req, 'classifier.samples.added', { classifier: c.id, dataset: c.dataset }, { added, images: true });
     res.status(201).json({ added, samples: await classifiers.sampleCounts(p.tenantId, c) });
   });
 
   /** Synchronous classification of short text; nothing is stored. */
   r.post('/classify', anyOf('inference:invoke', 'classifiers:manage'), async (req, res) => {
     const p = principalOf(req);
-    const body = parseBody(z.object({ classifier: z.string().min(1).max(63), text: z.string().min(1).max(20_000), label: z.enum(LABELS).optional() }), req.body);
+    const body = parseBody(z.object({ classifier: z.string().min(1).max(63), text: z.string().min(1).max(20_000).optional(), image: z.string().min(1).max(200_000).regex(/^[A-Za-z0-9+/=\s]+$/, 'base64').optional(), label: z.enum(LABELS).optional() }), req.body);
     const c = await classifiers.get(p.tenantId, body.classifier);
     if (!c) throw notFound('Classifier');
+    // Sprint 36c: a vision classifier takes an image (base64), the others text.
+    if (c.engine === 'vision' ? !body.image : !body.text) throw new HttpProblem(422, 'Invalid request', c.engine === 'vision' ? `${c.name} classifies images: send image (base64).` : 'Send the text to classify.');
+    const img = body.image ? Buffer.from(body.image, 'base64') : null;
+    if (img && !imageType(img)) throw new HttpProblem(422, 'Invalid request', 'The image must be a PNG, JPEG, WebP, GIF or HEIC image.');
     try {
-      const out = await classifiers.score(p.tenantId, c, body.text, body.label ?? 'internal');
+      const { usage: _usage, ...out } = img ? await classifiers.scoreImage(p.tenantId, c, img, body.label ?? 'internal') : await classifiers.score(p.tenantId, c, body.text!, body.label ?? 'internal');
       res.json({ classifier: c.slug, version: c.version, labels: c.config.labels, ...out, spans: out.spans.map((d) => ({ kind: d.kind, start: d.span[0], end: d.span[1], score: d.score })) });
     } catch (err) {
       const why = err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message;
@@ -519,12 +554,19 @@ export function guardrailRoutes(s: Services): Router {
           await s.feed.resolveHold(p, flag.source_id, decision);
           return;
         }
+        // 1.6.0 (B-4701): a held public form submission is accepted into a record, or rejected (audited by the service).
+        if (flag.source_kind === HELD_OBJECT && flag.source_id) {
+          await s.apps.forms.held.resolve(p, flag.source_id, decision, body.reason ?? null, { ip: ip(req), traceId: req.traceId ?? null });
+          return;
+        }
         if (flag.source_kind !== 'message' || !flag.source_id) throw conflict(`${flagRef(flag)} has no answer attached.`);
         conversationId = (await s.chat.resolveHold(p, flag.source_id, decision)).conversationId;
       });
       if (f.source_kind === 'api-request') await audit(req, `api.hold.${decision}`, { flag: flagRef(f), request: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       else if (f.source_kind === 'channel-message') await audit(req, `channel.hold.${decision}`, { flag: flagRef(f), message: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
-      else if (f.source_kind === FEED_POST) await audit(req, `feed.post.${decision}`, { flag: flagRef(f), post: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      else if (f.source_kind === HELD_OBJECT) {
+        /* audited by the held submissions service as app.form.held.accepted or app.form.held.rejected */
+      } else if (f.source_kind === FEED_POST) await audit(req, `feed.post.${decision}`, { flag: flagRef(f), post: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       else await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       res.json(flags.view(f, p));
       return;

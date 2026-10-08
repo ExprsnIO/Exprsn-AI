@@ -97,6 +97,10 @@ test.describe('Storage', () => {
     await expect(page.locator('#main')).toContainText(serverState().workspace.name);
     await page.locator('[data-usageby] [data-seg="kind"]').click();
     await expect(page.locator('#main table')).toContainText('Knowledge uploads');
+    // 1.6.0 (B-4601): what sharing identical content within a tenant saves.
+    await page.locator('[data-usageby] [data-seg="dedup"]').click();
+    await expect(page.locator('#main .stats')).toContainText('Saved');
+    await expect(page.locator('#main')).toContainText('never shared across tenants');
     await page.locator('[data-tab="quarantine"]').click();
     await expect(page.locator('#main .panel', { hasText: 'Scanner' })).toContainText('CLAMD_HOST is unset');
     await page.locator('[data-tab="purges"]').click();
@@ -186,7 +190,7 @@ test.describe('Storage and Configuration, accessibility and reflow (B-4207)', ()
       for (const route of ['storage', 'configuration']) {
         await open(page, route);
         const n = await page.evaluate((r) => ((window as unknown as AppGlobal).App.screens[r]?.states ?? []).length, route);
-        expect(n).toBe(5);
+        expect(n).toBe(route === 'storage' ? 6 : 5);
         for (let i = 0; i < n; i++) {
           await page.evaluate((k) => (window as unknown as AppGlobal).App.applyState(k), i);
           await page.waitForTimeout(250);
@@ -209,6 +213,11 @@ test.describe('Storage and Configuration, accessibility and reflow (B-4207)', ()
         await page.waitForTimeout(250);
         for (const p of await reflowProblems(page)) failures.push(`storage ${tab}: ${p}`);
       }
+      await open(page, 'storage?tab=usage');
+      await page.locator('[data-usageby] [data-seg="dedup"]').click();
+      await page.waitForTimeout(250);
+      for (const p of await reflowProblems(page)) failures.push(`storage deduplication: ${p}`);
+      await page.locator('[data-usageby] [data-seg="workspace"]').click();
       await open(page, 'configuration');
       await page.waitForTimeout(250);
       for (const p of await reflowProblems(page)) failures.push(`configuration: ${p}`);

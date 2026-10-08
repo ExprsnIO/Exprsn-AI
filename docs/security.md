@@ -116,6 +116,42 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   from its `/v1/models` listing with `format: server` and no digest; the licence, the conformance run, the label
   ceiling and dual-control approval apply as to a pulled model.
 
+## Images in Knowledge (1.6.0, Sprint 36c)
+
+- **Before any model sees an image.** An image upload (PNG, JPEG, WebP, GIF, HEIC) goes through the same sealed
+  quarantine as other uploads: its type is sniffed from the bytes and ClamAV scans it when configured. Indexing then
+  runs the image safety check (`IMAGE_SAFETY_URL`, `IMAGE_SAFETY_THRESHOLD`); with `IMAGE_SAFETY_REQUIRED` an image no
+  classifier checked is refused as well. A flagged image is `rejected`: its stored content is deleted, nothing of it
+  reaches an index, and the system audit entry `knowledge.image.withheld` records the score, classifier and
+  categories. Images taken out of a PDF or Word document (its parts) are documents of their own and pass quarantine
+  and the safety check themselves.
+- **What a caption or OCR text may leak.** The vision profile writes text about anything visible in the image: names,
+  account and card numbers, addresses, people described, a screenshot of a password or an API key. That text is sealed
+  at rest with the document (associated data `kdoc-vision:<id>`), then chunked, embedded and indexed like any document
+  text. The PII classifier runs over it and can raise the document's label (an IBAN read from a screenshot makes the
+  image confidential), and the `context` checkpoint screens both the chunk and an image hit's caption and text excerpt
+  (withheld by a blocking rule, rewritten by a redacting one). The image itself is sent to the vision profile's pool at
+  the label known before it is described: the base's label, the source floor, the parent document's label and a
+  manual label. A label the OCR text raises afterwards does not change which pool already saw the image, so a base's
+  label must reflect what its images may show. The vision profile must route to a model that reads images and both
+  must be cleared for the base's label; this is checked when the profile is set.
+- **Labels are metadata at the image's label.** Each label a vision classifier gives an image (`knowledge_doc_labels`)
+  carries the image's own label rank and follows a relabel. The label filters on search and on the documents list,
+  and the label counts behind the filter chips, read only labels of documents within the caller's clearance (the
+  documents list and search also apply row access), so a label name or a count never reveals an image above the
+  reader. Vision classifiers publish only after an evaluation with at least 200 image cases per label, and only
+  published ones label documents.
+- **Thumbnails.** The thumbnail URL serves the image itself, only after the safety check passed and the document was
+  indexed, to readers cleared for its label and allowed by its row access, with `X-Content-Type-Options: nosniff`, a
+  `default-src 'none'; sandbox` content security policy and `Cache-Control: private, no-store`. HEIC images have none.
+- **Parts of PDF and Word documents** take the document's label as a floor (a part cannot be relabelled below it, and
+  a relabel of the document raises its parts) and its row access; removing the document removes them.
+- **Eval image cases** are sealed in the blob store (`eval-images/<tenant>/<case id>`, associated data
+  `eval-image:<case id>`) and deleted with the tenant at offboarding.
+- **`knowledge_search`**, the built-in tool agents and workflows search with, searches only published bases shared
+  with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
+  clearance), so a result never carries data above the context it lands in.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -160,6 +196,21 @@ filter, private `/tmp`, only the state directory writable.
   workspace contact rule of `admins` lets holders of `social:manage` or `tenant:manage` start conversations with
   anyone in the workspace (each person's own contact rule and blocks still apply).
 
+- Groups depth (1.6.0, Sprint 36a, B-4401 to B-4405). Coordinates of groups and events are kept in the clear (the
+  place name is sealed) so the database can filter on them; anyone with database access reads where a group meets.
+  A group's place is shown to readers of its content (for a public group, everyone in the workspace); whether it
+  should be for members only is an open decision in `Backlog-1.6.0.md`. A distance filter only matches places the
+  caller may read, but the answer's order and `distanceKm` tell a reader roughly where a public group is, by design.
+  Discovery's `sharedMembers` counts members of a group the caller shares another group with, including private
+  groups the caller may see listed: it is a count, never names, but it says that some of the caller's co-members
+  belong. Trending counts joins and posts of private groups too (their names are listed to the workspace anyway);
+  hidden groups never trend. Channels follow their group: a `groups:manage` holder or an owner of the group acts as
+  owner of every channel, including hidden ones. A channel's members are not removed when a later label change
+  leaves them below the channel's label; they lose read access by the clearance check, as with groups. The
+  `groups.trending` job shares `FEED_TRENDING_MINUTES` and `FEED_TRENDING_HOURS` with hashtags; there is no separate
+  setting. Over DAV, a member's calendars include their channels (`includeChannels`). PostGIS is created by the
+  migration only when the role is a superuser or it is installed already; otherwise the bounding box is used, with the
+  same results.
 - Tenant provisioning templates (1.6.0, Sprint 35d, B-4501). Only a system admin provisions a tenant from a
   template (`POST /api/admin/tenants/from-template`, or `exprsn-ai tenant:create` on the host), and only a template
   whose highest workspace ceiling the caller's clearance reaches. Templates are code, not data: their custom roles
@@ -220,6 +271,46 @@ filter, private `/tmp`, only the state directory writable.
   command line follows the shared mode too, but a restore into an empty database has no mode to follow and uses the
   store the environment names, so after a migration update `BLOB_STORE` and its settings in the environment. The quarantine's Rescan re-queues the existing scan jobs and Delete removes held
   bytes; neither releases anything without a clean scan.
+
+- Blob deduplication (1.6.0, Sprint 36b, B-4601). Identical content is shared only within one tenant: the lookup is
+  keyed by tenant and SHA-256, and each tenant's content is sealed with its own key, so deduplication across tenants
+  is deliberately not done (it would need content encrypted under a key derived from the content, which lets anyone
+  who can guess a file confirm that a tenant holds it, and would tie one tenant's deletion to another's object).
+  Within a tenant the usual side channels of deduplication are closed as far as they reach a user: every upload
+  stores and scans its full bytes (no faster or smaller upload for known content), the shared object is chosen only
+  by the scan job afterwards, the quota counts each version's own size, and nothing a member sees says that a version
+  is shared; only platform admins see the savings on Storage, per tenant, and `file.version.ready` names the blob in
+  the audit chain. A tenant's database rows reveal which of its versions have the same content (they did before, by
+  `sha256`). A shared object keeps the content key and associated data of the version that first stored it; deleting
+  that version leaves the object to the others, and the object goes with its last reader. An object whose last
+  reference is being released is never adopted (the count is only raised while above zero), but a version could
+  adopt an object an operator deleted by hand outside the server; the integrity check reports that object missing for
+  every version reading it, and one restore brings them all back. Versions stored before 1.6.0 share only from the
+  first ready copy of each content onwards; older duplicates keep their own objects until they are deleted.
+
+- Held form values (1.6.0, Sprint 36b, B-4701). A public submission with a held value waits, its screened values
+  sealed with the tenant key and AD `app-form-hold:<id>`, until a reviewer (`flags:review` or `moderation:review`, in
+  the app's workspace and cleared for the entity's label) accepts or rejects it; the values are dropped at the
+  decision and the row is deleted `APPS_HELD_KEEP_DAYS` later. The submitter learns that the submission was held
+  (`202`), which tells an anonymous visitor that some rule matched, as a refusal did before. At most
+  `APPS_HELD_MAX_PER_FORM` wait per form, so the queue cannot be flooded past the per-address and per-form limits; past
+  it a held value is refused. The submitter's address is kept only as an HMAC (with `SESSION_SECRET`), and in the
+  `app.form.held` audit entry as every public submission's is. Accepting writes the record exactly as an unheld
+  submission would (by no one), so the reviewer's decision, not their permissions, is what lets it in; the entity's
+  validation runs at that moment. Signed-in submissions are still refused on a hold (the person can edit and resend).
+
+- Reveal anomalies (1.6.0, Sprint 36b, B-4803). Detection informs, it never refuses: a stolen session revealing a
+  secret still gets the value, and the owner learns about it afterwards (by notification and email) to rotate it.
+  Only reveals over the API carry an address and are watched; values the server resolves for `vault:` references
+  (workflows, connections, user stores) are not, and neither are transit decryptions or dynamic database credentials.
+  The address is the one the server sees after `TRUST_PROXY`, so behind a proxy that is not trusted every reveal
+  comes from the proxy and new-address detection is blind. Odd hours are hours of the day in UTC, learnt from the
+  secret's own reveals once it has `VAULT_ANOMALY_MIN_HISTORY` of them; a secret revealed rarely never has odd hours.
+  A burst is counted per principal and secret, so a caller spreading reveals across many secrets, or under the
+  threshold, is not flagged; an attacker who first reveals from the owner's usual network is not new. The history
+  holds addresses for `VAULT_ANOMALY_HISTORY_DAYS`; it is readable by the owner and vault administrators through the
+  flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
+  vault administrators.
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
@@ -970,8 +1061,8 @@ filter, private `/tmp`, only the state directory writable.
   empty, recorded in `aiError` and audited) and are cleared when their inputs change until the job fills them again; a
   record written by a public form is filled with no person behind it (only the profile's label is checked). Public
   forms take only listed, visible fields, never files, references or user, workspace or record lookups, are limited per
-  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; a held value is
-  refused rather than held for review. A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
+  address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form, and screen every text value at `user-input`; since 1.6.0
+  (B-4701) a held value makes a public submission wait for review (see Sprint 36b below). A form's link token is shown once and stored as an HMAC with `SESSION_SECRET`,
   so rotating that secret ends every public form link. Triggers run as their owner with what the owner holds when they
   fire; chains stop at `APPS_TRIGGER_MAX_DEPTH`, and a workflow's own record steps never fire its own triggers, but two
   workflows that update each other's entities stop only at that depth. A trigger's run input holds the record's values,
@@ -1020,3 +1111,10 @@ filter, private `/tmp`, only the state directory writable.
   is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
   step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
   confidential data from reaching it).
+- Image classification in Knowledge (1.6.0, Sprint 36c, B-8801 to B-8805). The thumbnail is the stored image served as
+  is: nothing is resized on the server, so a large image is sent whole (the console scales it). HEIC images have no
+  thumbnail, since browsers do not show them. Only JPEG and 8-bit RGB or grey Flate images are taken out of PDFs
+  (JPEG 2000, CCITT, indexed colour and masked images are not); at most 20 images per document, and images under 1 KB
+  are skipped as icons. A guardrail rule that names a vision classifier on text fails, and its `onError` decides. The
+  vision profile's description and classification calls are metered as `embed` usage (knowledge indexing), with no
+  user, not under a usage kind of their own.

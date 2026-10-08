@@ -10,6 +10,36 @@
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
 
+### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
+
+- Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
+  `media`, the sealed description, the safety score), `knowledge_doc_labels`, image eval cases (`eval_cases.media_key`,
+  `media_type`) and the `knowledge_search` built-in tool.
+- Images as knowledge documents (B-8801): PNG, JPEG, WebP, GIF and HEIC uploads pass quarantine and the image safety
+  check (a flagged image is rejected and deleted, audited `knowledge.image.withheld`); the base's vision profile
+  writes a caption and the text in the image, which become the indexed text, so a screenshot is found by a phrase from
+  it. The images inside PDF and Word documents become the document's parts, at least its label; a scanned PDF is
+  indexed through its images. `server/src/knowledge/images.ts`.
+- The `vision` classifier engine (B-8802): labels with thresholds like `llm`, scored by a vision profile from the
+  image, JSON answers validated against the labels. A knowledge base names its published vision classifiers; the
+  labels are stored on each image with their scores and the classifier version (`knowledge.classify`), and a new
+  version of a published classifier re-labels the base's images in the background (`knowledge.reclassify`, audited
+  `knowledge.reclassified`) without re-uploading them.
+- Label search (B-8803): `labels: {any, all, minScore}` on `POST /api/knowledge/search` and on the documents list
+  (`labels`, `labelsAll`, `minScore`, `media=image`); `GET /api/knowledge/bases/:id/labels` for the filter chips; image
+  hits carry the caption, a text excerpt, the labels and a thumbnail URL (`GET /api/knowledge/documents/:id/thumbnail`,
+  at the caller's clearance). The built-in tool `knowledge_search` is the knowledge step of agents and workflows, with
+  the same filters, at the label of the call.
+- Console (B-8804): the Knowledge screen shows image documents with their thumbnail, caption, labels and scores, label
+  filter chips, re-classify for a base and an image, and the vision profile and image classifiers in a base's settings;
+  the Classifiers screen offers the `vision` engine. Prototype boards first; axe-core and reflow checks in
+  `e2e/tests/knowledge-images.spec.ts`.
+- Evaluation (B-8805): image cases in the eval-set format (`image` as base64 on the samples route, or
+  `PUT /api/admin/classifiers/:id/samples/image`), sealed in the blob store; a vision classifier publishes only after
+  an evaluation with at least 200 image cases per label. `POST /api/classify` takes an image for a vision classifier.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/security.md` (what a caption or OCR text may leak, labels as
+  metadata at the image's label, known gaps) and `docs/accessibility.md`.
+
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
 
 - The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
@@ -79,6 +109,30 @@
 - Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
   `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
   refused signals instead of a backlog, as the server reports them.
+
+### Groups depth (Sprint 36a, B-4401 to B-4405)
+
+- Channels inside a group (B-4401): groups one level down with their own members, roles, posts and events, created by
+  the group's owners and moderators (`POST /api/groups/:id/channels`). The group is a channel's outer boundary: only
+  its readers see its channels, only its members join them, leaving the group leaves them, and archiving or deleting
+  the group takes them along. The group's owners act as owners of its channels. A channel's label is never below its
+  group's; raising the group's label raises the channels below it. The feed's group scope and fan-out follow the same
+  rule. Migration `038_groups2`.
+- Discovery (B-4402): `GET /api/groups/discover` lists the groups the caller may join, ranked by shared members and
+  activity of the last 30 days, and never one labelled above the caller's clearance.
+- Places (B-4403): an optional place on groups (a sealed name and a point) and a point on events, with distance
+  filters (`near`, `km`) on the group list, discovery and the calendar. PostGIS narrows on PostgreSQL when the
+  extension is there (the migration creates it and a GiST index when the role may), a bounding box elsewhere; one
+  great-circle distance decides, so the three databases return the same groups.
+- Trending groups (B-4404): the `groups.trending` job counts joins and posts per group like trending hashtags;
+  `GET /api/groups/trending` and Recount now on Social and messaging.
+- Group categories (B-4405, decision Q6): a tenant-managed list on Social and messaging
+  (`/api/admin/social/group-categories`), a category per group, and category filters on Groups and Discover; removing
+  a category leaves its groups uncategorised, never hidden.
+- Screens: Groups gains Discover (ranked), Trending, category and distance filters, a group's category and place, a
+  Channels tab and channel pages, and points on events; Social and messaging gains Group categories and Trending
+  groups. Boards first in `design/prototype/`, then live; `e2e/tests/groups-depth.spec.ts` checks them with axe-core,
+  the in-page checker and reflow.
 
 ### Tenant provisioning templates (Sprint 35d, B-4501)
 
@@ -164,6 +218,36 @@
 - Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
   `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
   and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
+
+### Blob deduplication, held form values and reveal anomalies (Sprint 36b, B-4601, B-4701, B-4803)
+
+- Reference-counted blobs in the file store, within one tenant only (B-4601): migration `038b_dedup_held_vault`
+  (`file_blobs`, `file_versions.blob_id`). When a version passes its scan and the tenant already stores the same
+  content (SHA-256 of the plaintext), the version reads the existing sealed object and the quarantined copy is
+  deleted; otherwise its object becomes a blob later uploads share. The trash purge releases references and deletes
+  an object with its last reader; offboarding deletes the tenant's blob rows. Every upload still stores and scans its
+  full bytes, and quotas still count each version's own size. The migration registers the first ready copy of each
+  content per tenant. `GET /api/admin/storage/usage` adds `dedup` (objects, shared objects, references, bytes held,
+  bytes stored, bytes saved, per tenant), shown on Storage, Usage. The integrity check, orphan deletion, purges and
+  blob store migration see shared objects through `file_blobs.blob_key`. `file.version.ready` names the shared blob.
+- Held form values (B-4701, closing the B-2205 known gap): a public form value the `user-input` guardrail holds no
+  longer refuses the submission. It waits as a held submission (values sealed, `app_form_holds`) with a hold flag of
+  source kind `app-form-submission`, routed to moderation queues like any flag; the submitter gets `202 {held: true}`.
+  `GET /api/apps/held`, `GET /api/apps/held/:id` and `POST /api/apps/held/:id/decide` (`flags:review` or
+  `moderation:review`) list, read and accept (into a record, written by no one, `source: form`) or reject it; the
+  Flags decide route does the same for these flags and shows the values. Moderation shows the held submission in the
+  queue inspector with Accept and Reject. At most `APPS_HELD_MAX_PER_FORM` (200) wait per form; decided ones go
+  `APPS_HELD_KEEP_DAYS` (30) after the decision (`apps.held.purge`). Audited `app.form.held`,
+  `app.form.held.accepted`, `app.form.held.rejected`.
+- Anomaly detection on vault reveals (B-4803): reveals of KV secrets over the API are kept (`vault_reveals`,
+  `VAULT_ANOMALY_HISTORY_DAYS`) and each is compared with the secret's history before it is answered: a new address,
+  an odd hour of the day (once it has `VAULT_ANOMALY_MIN_HISTORY` reveals) or a burst (`VAULT_ANOMALY_BURST` reveals by
+  one caller within `VAULT_ANOMALY_BURST_SECONDS`) opens a flag for the secret's owner (`vault_reveal_flags`), with a
+  notification and email. `GET /api/vault/reveal-flags`, `GET /api/vault/reveal-flags/:id` and `POST
+  /api/vault/reveal-flags/:id/resolve` (`secrets:read`; the owner or `secrets:admin`) list and resolve them as expected
+  or suspicious; Vault has a Reveal flags tab. Detection never refuses a reveal; `VAULT_ANOMALY_BURST=0` turns it off.
+  Audited `vault.reveal.flagged`, `vault.reveal.flag.updated`, `vault.reveal.flag.resolved`; `vault.reveals.prune`
+  drops old reveals hourly.
 
 ## 1.5.0
 

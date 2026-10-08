@@ -18,7 +18,7 @@ import type { VectorStore } from '../platform/vectors.js';
 import { decodeVector, encodeVector } from '../platform/vectors.js';
 import type { QuotaService } from '../tenancy/quotas.js';
 import { chunkText, DEFAULT_CHUNKING, type ChunkOptions, type TextChunk } from './chunk.js';
-import { detectType, ExtractionError, extractText } from './extract.js';
+import { detectType, DOCX as DOCX_TYPE, ExtractionError, extractText } from './extract.js';
 import { gitItems, globRegex, parseS3, S3Reader, type GitFetcher, type S3Settings, type SourceItem } from './sources.js';
 import { crawl } from './crawl.js';
 import { checkHost, guardedAgent, HostRefused, parseAllowList, type AllowList } from '../mcp/hosts.js';
@@ -27,6 +27,10 @@ import { aclAllows, readAcl, readerEntries, rowAcl, type AccessKind } from './ac
 import { ReplicationManager } from './replication.js';
 import type { MaskedChange } from '../connections/service.js';
 import type { FolderSourceProvider } from '../files/service.js';
+import type { ClassifierRow, ClassifierService } from '../guardrails/classifiers.js';
+import { complete } from '../guardrails/model.js';
+import type { ImageSafety } from '../images/safety.js';
+import { DESCRIBE_PROMPT, imageParts, indexedText, isImageType, parseDescription, VIEWABLE, type ImageDescription } from './images.js';
 
 export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web', 'folder'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
@@ -48,6 +52,10 @@ export interface KbRow {
   status: 'draft' | 'published';
   chunking: ChunkOptions;
   serving_index_id: string | null;
+  /** Sprint 36c (B-8801): the profile whose vision model captions and reads image documents. */
+  vision_profile: string | null;
+  /** B-8802: the published vision classifiers (ids) that label the base's images. */
+  image_classifiers: string[];
   created_by: string | null;
   created_at: number;
   updated_at: number;
@@ -189,6 +197,40 @@ export interface DocRow {
   indexed_at: number | null;
   /** Row-level access entries (B-1002), or null when the row carries none. */
   acl: string[] | null;
+  /** Sprint 36c: the document an image was taken out of (a PDF or Word document), or null. */
+  parent_id: string | null;
+  /** `image` for image documents. */
+  media: 'image' | null;
+  /** Sealed JSON: the caption and recognised text the vision profile wrote, and its model. */
+  vision: string | null;
+  /** The image safety check's score, when a classifier is configured. */
+  safety_score: number | null;
+}
+
+/** B-8802: one label a vision classifier gave an image document. */
+export interface DocLabel {
+  label: string;
+  score: number;
+  hit: boolean;
+  classifierId: string;
+  classifier: string;
+  version: number;
+}
+
+/** B-8803: label filters on a search (image documents only). */
+export interface LabelFilter {
+  any?: string[];
+  all?: string[];
+  /** The lowest score that counts; without it, each classifier's own threshold decides. */
+  minScore?: number;
+}
+
+/** B-8803: what an image hit carries besides its chunk. */
+export interface ImageHit {
+  caption: string | null;
+  ocr: string | null;
+  labels: DocLabel[];
+  thumbnail: string | null;
 }
 
 export interface SearchHit {
@@ -206,6 +248,8 @@ export interface SearchHit {
   rerank: number | null;
   text?: string;
   withheld?: string;
+  /** Sprint 36c (B-8803): an image document's caption, text excerpt, labels and thumbnail. */
+  image?: ImageHit;
 }
 
 export interface KnowledgeOptions {
@@ -238,13 +282,27 @@ export interface KnowledgeDeps {
   log: Logger;
   /** The workspaces a principal may act in (ids). */
   workspaces: (p: Principal) => Promise<string[]>;
+  /** Sprint 36c: the image safety check (read when used, so a later replacement applies). */
+  safety?: () => ImageSafety;
+  safetyThreshold?: number;
+  /** IMAGE_SAFETY_REQUIRED: without a safety classifier, images are rejected rather than indexed unchecked. */
+  safetyRequired?: boolean;
+  /** B-8802: the classifier registry, for the bases' vision classifiers. */
+  classifiers?: ClassifierService;
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
-const kbFrom = (r: Record<string, unknown>): KbRow => ({ ...(r as unknown as KbRow), chunking: json<ChunkOptions>(r.chunking, DEFAULT_CHUNKING), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const kbFrom = (r: Record<string, unknown>): KbRow => ({ ...(r as unknown as KbRow), chunking: json<ChunkOptions>(r.chunking, DEFAULT_CHUNKING), vision_profile: (r.vision_profile as string | null | undefined) ?? null, image_classifiers: json<string[]>(r.image_classifiers, []), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
 const indexFrom = (r: Record<string, unknown>): IndexRow => ({ ...(r as unknown as IndexRow), version: Number(r.version), dims: num(r.dims), progress: Number(r.progress), chunks: Number(r.chunks), created_at: Number(r.created_at), built_at: num(r.built_at) });
 const sourceFrom = (r: Record<string, unknown>): SourceRow => ({ ...(r as unknown as SourceRow), secret_sealed: (r.secret_sealed as string | null | undefined) ?? null, config: json<SourceRow['config']>(r.config, {}), last_sync_at: num(r.last_sync_at), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
-const docFrom = (r: Record<string, unknown>): DocRow => ({ ...(r as unknown as DocRow), size: Number(r.size), chunks: Number(r.chunks), detections: json<Record<string, number> | null>(r.detections, null), created_at: Number(r.created_at), updated_at: Number(r.updated_at), indexed_at: num(r.indexed_at), acl: readAcl(r.acl) });
+const docFrom = (r: Record<string, unknown>): DocRow => ({ ...(r as unknown as DocRow), size: Number(r.size), chunks: Number(r.chunks), detections: json<Record<string, number> | null>(r.detections, null), created_at: Number(r.created_at), updated_at: Number(r.updated_at), indexed_at: num(r.indexed_at), acl: readAcl(r.acl), parent_id: (r.parent_id as string | null | undefined) ?? null, media: r.media === 'image' ? 'image' : null, vision: (r.vision as string | null | undefined) ?? null, safety_score: num(r.safety_score) });
+/** An image whose safety check passed and which was described: its picture may be shown. */
+const SHOWN = ['indexed', 'unchanged', 'queued', 'indexing'];
+export const thumbnailUrl = (d: Pick<DocRow, 'id' | 'media' | 'type' | 'state' | 'indexed_at'>): string | null => (d.media === 'image' && VIEWABLE.includes(d.type ?? '') && SHOWN.includes(d.state) && d.indexed_at ? `/api/knowledge/documents/${d.id}/thumbnail` : null);
+/** How long the vision profile may take to describe or classify one image, queueing included. */
+const VISION_TIMEOUT_MS = 180_000;
+/** The OCR excerpt a search hit carries. */
+const OCR_EXCERPT = 300;
 const labelsUpTo = (l: Label): Label[] => LABELS.filter((x) => labelRank(x) <= labelRank(l));
 const traceId = () => randomBytes(16).toString('hex');
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
@@ -266,6 +324,8 @@ export const kbView = (k: KbRow, extra: { documents?: number; chunks?: number; a
   sharing: k.sharing,
   status: k.status,
   chunking: k.chunking,
+  visionProfile: k.vision_profile,
+  imageClassifiers: k.image_classifiers,
   documents: extra.documents ?? 0,
   chunks: extra.chunks ?? 0,
   access: extra.access ?? null,
@@ -295,9 +355,14 @@ export const sourceView = (s: SourceRow, docs = 0) => ({
   createdAt: s.created_at
 });
 
-export const docView = (d: DocRow, source?: SourceRow) => ({
+export const docView = (d: DocRow, source?: SourceRow, labels?: DocLabel[]) => ({
   id: d.id,
   name: d.name,
+  parentId: d.parent_id,
+  media: d.media,
+  thumbnail: thumbnailUrl(d),
+  safetyScore: d.safety_score,
+  ...(labels ? { labels } : {}),
   sourceId: d.source_id,
   source: source ? (source.kind === 'upload' ? 'Uploads' : source.location) : null,
   type: d.type,
@@ -367,6 +432,9 @@ export class KnowledgeService {
     d.jobs.register('knowledge.sync', (p, ctx) => this.syncJob(String(p.sourceId), ctx), { timeoutMs: 2 * 60 * 60_000 });
     d.jobs.register('knowledge.reindex', (p, ctx) => this.reindexJob(String(p.indexId), ctx), { timeoutMs: 12 * 60 * 60_000 });
     d.jobs.register('knowledge.sync-due', (p, ctx) => this.syncDue(String(p.tenantId ?? ctx.job.tenant_id)));
+    // Sprint 36c (B-8802): an image document's labels, and the labels of a base's images again after a new version.
+    d.jobs.register('knowledge.classify', (p) => this.classifyJob(String(p.documentId), p.classifierId ? String(p.classifierId) : null), { timeoutMs: 30 * 60_000 });
+    d.jobs.register('knowledge.reclassify', (p, ctx) => this.reclassifyJob(String(p.kbId), p.classifierId ? String(p.classifierId) : null, ctx), { timeoutMs: 12 * 60 * 60_000 });
   }
 
   // ---------- sealing ----------
@@ -500,9 +568,11 @@ export class KnowledgeService {
     return this.kbRow(id);
   }
 
-  async update(p: Principal, id: string, patch: { name?: string; description?: string | null; label?: Label; reranker?: string | null; sharing?: 'members' | 'curators'; status?: 'draft' | 'published'; chunking?: ChunkOptions }): Promise<KbRow> {
+  async update(p: Principal, id: string, patch: { name?: string; description?: string | null; label?: Label; reranker?: string | null; sharing?: 'members' | 'curators'; status?: 'draft' | 'published'; chunking?: ChunkOptions; visionProfile?: string | null; imageClassifiers?: string[] }): Promise<KbRow> {
     const kb = await this.base(p, id, 'manage');
     if (patch.label && !clears(p.clearance, patch.label)) throw forbidden(`Your clearance is ${p.clearance}.`, { step: 'clearance' });
+    if (patch.visionProfile) await this.checkVisionProfile(p.tenantId, patch.visionProfile, patch.label ?? kb.label);
+    const classifierIds = patch.imageClassifiers ? await this.checkImageClassifiers(p.tenantId, patch.imageClassifiers) : null;
     if (patch.reranker && !(await this.d.gateway.repo.modelByName(patch.reranker))) throw conflict(`${patch.reranker} is not in the model catalogue.`);
     if (patch.label && labelRank(patch.label) > labelRank(kb.label)) await this.checkEmbedModel(kb.embed_model, patch.label);
     const upd: Record<string, unknown> = { updated_at: Date.now() };
@@ -513,7 +583,16 @@ export class KnowledgeService {
     if (patch.sharing !== undefined) upd.sharing = patch.sharing;
     if (patch.status !== undefined) upd.status = patch.status;
     if (patch.chunking !== undefined) upd.chunking = JSON.stringify(patch.chunking);
+    if (patch.visionProfile !== undefined) upd.vision_profile = patch.visionProfile;
+    if (classifierIds) upd.image_classifiers = JSON.stringify(classifierIds);
     await this.db('knowledge_bases').where({ id: kb.id }).update(upd);
+    if (classifierIds) {
+      // Labels of classifiers no longer named go at once; a newly named one labels the images in the background.
+      const gone = kb.image_classifiers.filter((c) => !classifierIds.includes(c));
+      if (gone.length) await this.db('knowledge_doc_labels').where({ kb_id: kb.id }).whereIn('classifier_id', gone).delete();
+      const added = classifierIds.filter((c) => !kb.image_classifiers.includes(c));
+      for (const c of added) await this.d.jobs.enqueue({ tenantId: kb.tenant_id, type: 'knowledge.reclassify', payload: { kbId: kb.id, classifierId: c }, createdBy: p.userId, maxAttempts: 2 });
+    }
     // A higher floor applies to documents already indexed: their chunks take it at once.
     if (patch.label && labelRank(patch.label) > labelRank(kb.label)) {
       for (const d of ((await this.db('knowledge_documents').where({ kb_id: kb.id })) as Record<string, unknown>[]).map(docFrom)) {
@@ -521,6 +600,36 @@ export class KnowledgeService {
       }
     }
     return this.kbRow(kb.id);
+  }
+
+  /**
+   * B-8801: a vision profile for image documents: a profile of the tenant whose model reads images, cleared for the
+   * base's label.
+   */
+  private async checkVisionProfile(tenantId: string, name: string, label: Label): Promise<void> {
+    let r;
+    try {
+      r = await this.d.gateway.resolve(tenantId, name);
+    } catch {
+      throw conflict(`There is no profile ${name} that routes to a model.`);
+    }
+    if (!r.model.capabilities.includes('vision')) throw conflict(`The profile ${name} routes to ${r.model.name}, which cannot read images. Pick a profile with a vision model.`);
+    if (labelRank(r.profile.label) < labelRank(label)) throw conflict(`The profile ${name} is cleared for data up to ${r.profile.label}; this knowledge base is ${label}.`);
+    if (labelRank(r.model.label) < labelRank(label)) throw conflict(`${r.model.name} is approved for data up to ${r.model.label}; this knowledge base is ${label}.`);
+  }
+
+  /** B-8802: the image classifiers a base may name: published `vision` classifiers of the tenant (ids or slugs). */
+  private async checkImageClassifiers(tenantId: string, refs: string[]): Promise<string[]> {
+    const ids: string[] = [];
+    if (refs.length && !this.d.classifiers) throw conflict('Classifiers are not available on this server.');
+    for (const ref of [...new Set(refs)]) {
+      const c = await this.d.classifiers!.get(tenantId, ref);
+      if (!c) throw notFound(`Classifier ${ref}`);
+      if (c.engine !== 'vision') throw conflict(`${c.name} is a ${c.engine} classifier; image documents are labelled by vision classifiers.`);
+      if (c.status !== 'published') throw conflict(`${c.name} is a draft. A classifier labels documents once it is published, after an evaluation with enough samples per label.`);
+      if (!ids.includes(c.id)) ids.push(c.id);
+    }
+    return ids;
   }
 
   async remove(p: Principal, id: string): Promise<{ documents: number }> {
@@ -531,6 +640,7 @@ export class KnowledgeService {
     for (const d of docs) if (d.blob_key) await this.d.blobs.delete(d.blob_key);
     await this.db('knowledge_terms').whereIn('index_id', this.db('knowledge_indexes').where({ kb_id: kb.id }).select('id')).delete();
     await this.db('knowledge_chunks').where({ kb_id: kb.id }).delete();
+    await this.db('knowledge_doc_labels').where({ kb_id: kb.id }).delete();
     await this.db('knowledge_bases').where({ id: kb.id }).delete();
     return { documents: docs.length };
   }
@@ -778,17 +888,95 @@ export class KnowledgeService {
 
   // ---------- documents ----------
 
-  async documents(p: Principal, kbId: string, opts: { q?: string; limit?: number } = {}) {
+  async documents(p: Principal, kbId: string, opts: { q?: string; limit?: number; media?: 'image'; labels?: LabelFilter } = {}) {
     const kb = await this.base(p, kbId);
     const q = this.db('knowledge_documents').where({ kb_id: kb.id }).whereIn('label', labelsUpTo(p.clearance));
     if (opts.q) q.andWhere('name', 'like', `%${opts.q.replace(/[%_\\]/g, (c) => '\\' + c)}%`);
+    if (opts.media) q.andWhere({ media: opts.media });
+    // B-8804: the label filter chips: image documents carrying the labels.
+    if (opts.labels && (opts.labels.any?.length || opts.labels.all?.length)) {
+      const ids = await this.docsWithLabels([kb.id], opts.labels, labelRank(p.clearance));
+      q.whereIn('id', ids.size ? [...ids] : ['']);
+    }
     let rows = ((await q.orderBy('updated_at', 'desc').limit(Math.min(opts.limit ?? 200, 1000))) as Record<string, unknown>[]).map(docFrom);
     if (!this.canCurate(p) && rows.some((d) => d.acl)) {
       const reader = await readerEntries(this.db, p);
       rows = rows.filter((d) => aclAllows(d.acl, reader));
     }
     const sources = new Map((await this.sources(kb.id)).map((s) => [s.id, s]));
-    return rows.map((d) => docView(d, sources.get(d.source_id)));
+    const labels = await this.labelsOf(rows.filter((d) => d.media === 'image').map((d) => d.id));
+    return rows.map((d) => docView(d, sources.get(d.source_id), d.media === 'image' ? (labels.get(d.id) ?? []) : undefined));
+  }
+
+  // ---------- image labels (B-8802, B-8803) ----------
+
+  /** The labels of image documents, by document: hits first, then by score. */
+  async labelsOf(docIds: string[]): Promise<Map<string, DocLabel[]>> {
+    const out = new Map<string, DocLabel[]>();
+    if (!docIds.length) return out;
+    const rows: Record<string, unknown>[] = [];
+    for (let i = 0; i < docIds.length; i += 500) rows.push(...((await this.db('knowledge_doc_labels').whereIn('document_id', docIds.slice(i, i + 500))) as Record<string, unknown>[]));
+    const names = new Map(((await this.db('classifiers').whereIn('id', [...new Set(rows.map((r) => String(r.classifier_id)))].concat([''])).select('id', 'name')) as { id: string; name: string }[]).map((c) => [c.id, c.name]));
+    for (const r of rows) {
+      const list = out.get(String(r.document_id)) ?? [];
+      list.push({ label: String(r.label), score: Math.round(Number(r.score) * 1000) / 1000, hit: !!r.hit, classifierId: String(r.classifier_id), classifier: names.get(String(r.classifier_id)) ?? String(r.classifier_id), version: Number(r.classifier_version) });
+      out.set(String(r.document_id), list);
+    }
+    for (const list of out.values()) list.sort((a, b) => Number(b.hit) - Number(a.hit) || b.score - a.score || a.label.localeCompare(b.label));
+    return out;
+  }
+
+  /**
+   * The image documents of these bases carrying the filter's labels at or above the minimum score (or, without one,
+   * at or above each classifier's threshold), among documents at or below `maxRank`.
+   */
+  async docsWithLabels(kbIds: string[], f: LabelFilter, maxRank: number): Promise<Set<string>> {
+    const any = [...new Set(f.any ?? [])];
+    const all = [...new Set(f.all ?? [])];
+    const q = this.db('knowledge_doc_labels').whereIn('kb_id', kbIds.length ? kbIds : ['']).whereIn('label', [...new Set([...any, ...all])]).andWhere('label_rank', '<=', maxRank);
+    if (f.minScore != null) q.andWhere('score', '>=', f.minScore);
+    else q.andWhere({ hit: true });
+    const rows = (await q.select('document_id', 'label')) as { document_id: string; label: string }[];
+    const carried = new Map<string, Set<string>>();
+    for (const r of rows) carried.set(r.document_id, (carried.get(r.document_id) ?? new Set()).add(r.label));
+    const out = new Set<string>();
+    for (const [doc, has] of carried) if ((!any.length || any.some((l) => has.has(l))) && all.every((l) => has.has(l))) out.add(doc);
+    return out;
+  }
+
+  /** The label names a base's image documents carry (for the filter chips), with how many documents carry each. */
+  async labelCounts(p: Principal, kbId: string): Promise<{ label: string; documents: number }[]> {
+    const kb = await this.base(p, kbId);
+    const rows = (await this.db('knowledge_doc_labels').where({ kb_id: kb.id, hit: true }).andWhere('label_rank', '<=', labelRank(p.clearance)).groupBy('label').select('label').countDistinct({ n: 'document_id' })) as { label: string; n: number | string }[];
+    return rows.map((r) => ({ label: r.label, documents: Number(r.n) })).sort((a, b) => b.documents - a.documents || a.label.localeCompare(b.label));
+  }
+
+  /** The vision profile's description of an image document, opened. */
+  private async describedAs(d: DocRow): Promise<(ImageDescription & { model?: string }) | null> {
+    if (!d.vision) return null;
+    return json<(ImageDescription & { model?: string }) | null>(await this.d.keys.open(d.tenant_id, d.vision, `kdoc-vision:${d.id}`), null);
+  }
+
+  /** An image document's caption, text, labels, safety score, thumbnail and (for a PDF or Word document) its image parts. */
+  async imageDetail(p: Principal, doc: DocRow) {
+    const parts = ((await this.db('knowledge_documents').where({ parent_id: doc.id }).whereIn('label', labelsUpTo(p.clearance)).orderBy('name')) as Record<string, unknown>[]).map(docFrom);
+    const described = doc.media === 'image' ? await this.describedAs(doc) : null;
+    const labels = doc.media === 'image' ? ((await this.labelsOf([doc.id])).get(doc.id) ?? []) : [];
+    const partLabels = await this.labelsOf(parts.map((x) => x.id));
+    return {
+      caption: described?.caption ?? null,
+      text: described?.text ?? null,
+      visionModel: described?.model ?? null,
+      labels,
+      parts: parts.map((x) => docView(x, undefined, partLabels.get(x.id) ?? []))
+    };
+  }
+
+  /** B-8803: the picture of an image document the principal may read (its label within their clearance), once checked. */
+  async thumbnail(p: Principal, id: string): Promise<{ data: Buffer; type: string }> {
+    const { doc } = await this.documentFor(p, id);
+    if (!thumbnailUrl(doc) || !doc.blob_key) throw notFound('Thumbnail');
+    return { data: await this.content(doc), type: doc.type! };
   }
 
   /** A document the principal may see (its label at or below their clearance). */
@@ -823,10 +1011,12 @@ export class KnowledgeService {
     if (!clears(p.clearance, label)) throw forbidden(`Your clearance is ${p.clearance}.`, { step: 'clearance' });
     const src = await this.source(p.tenantId, doc.source_id);
     const kb = await this.kbRow(doc.kb_id);
-    const floor = highest(kb.label, src.label_floor, doc.auto_label ?? 'public');
+    const parentLabel: Label = doc.parent_id ? ((((await this.db('knowledge_documents').where({ id: doc.parent_id }).first('label')) as { label?: Label } | undefined)?.label) ?? 'public') : 'public';
+    const floor = highest(kb.label, src.label_floor, doc.auto_label ?? 'public', parentLabel);
     if (labelRank(label) < labelRank(floor)) {
       const found = findingsFor(doc.detections, doc.auto_label ?? 'public').join(', ');
       if (doc.auto_label && labelRank(label) < labelRank(doc.auto_label)) throw conflict(`The auto-classifier found ${found || 'personal data'}, so the label cannot go below ${doc.auto_label}.`);
+      if (labelRank(label) < labelRank(parentLabel)) throw conflict(`This image is part of a ${parentLabel} document, so its label cannot go below ${parentLabel}.`);
       throw conflict(`The label cannot go below the floor of ${highest(kb.label, src.label_floor)}.`);
     }
     await this.db('knowledge_documents').where({ id: doc.id }).update({ manual_label: label });
@@ -838,11 +1028,17 @@ export class KnowledgeService {
   private async applyLabel(doc: DocRow, label: Label, origin: string): Promise<void> {
     await this.db('knowledge_documents').where({ id: doc.id }).update({ label, label_origin: origin, updated_at: Date.now() });
     const rank = labelRank(label);
+    // An image's labels are metadata at the image's own label (B-8805).
+    await this.db('knowledge_doc_labels').where({ document_id: doc.id }).update({ label_rank: rank });
     const chunks = (await this.db('knowledge_chunks').where({ document_id: doc.id }).select('id', 'index_id')) as { id: string; index_id: string }[];
     await this.db('knowledge_chunks').where({ document_id: doc.id }).update({ label, label_rank: rank });
     for (let i = 0; i < chunks.length; i += 500) await this.db('knowledge_terms').whereIn('chunk_id', chunks.slice(i, i + 500).map((c) => c.id)).update({ label_rank: rank });
     // Vectors carry the rank too: rewrite them from the embedding cache.
     if (chunks.length) await this.d.jobs.enqueue({ tenantId: doc.tenant_id, type: 'knowledge.index', payload: { documentId: doc.id }, maxAttempts: 3 });
+    // A document's image parts are never below it (Sprint 36c).
+    for (const part of ((await this.db('knowledge_documents').where({ parent_id: doc.id })) as Record<string, unknown>[]).map(docFrom)) {
+      if (labelRank(part.label) < rank) await this.applyLabel(part, label, 'inherited from the document');
+    }
   }
 
   async reindexDocument(p: Principal, id: string): Promise<{ jobId: string }> {
@@ -865,9 +1061,12 @@ export class KnowledgeService {
   }
 
   private async purgeDocument(doc: DocRow, keepTombstone = false): Promise<void> {
+    // A document's image parts go with it.
+    for (const part of ((await this.db('knowledge_documents').where({ parent_id: doc.id })) as Record<string, unknown>[]).map(docFrom)) await this.purgeDocument(part);
     for (const idx of await this.indexes(doc.kb_id)) await this.removeFromIndex(idx.id, doc.id);
+    await this.db('knowledge_doc_labels').where({ document_id: doc.id }).delete();
     if (doc.blob_key) await this.d.blobs.delete(doc.blob_key);
-    if (keepTombstone) await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'removed', blob_key: null, chunks: 0, updated_at: Date.now() });
+    if (keepTombstone) await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'removed', blob_key: null, chunks: 0, vision: null, updated_at: Date.now() });
     else await this.db('knowledge_documents').where({ id: doc.id }).delete();
   }
 
@@ -1002,8 +1201,14 @@ export class KnowledgeService {
     const kb = await this.kbRow(doc.kb_id);
     const src = await this.source(doc.tenant_id, doc.source_id);
     await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'indexing', updated_at: Date.now() });
+    // An image taken out of a document is at least that document's label.
+    const parentLabel: Label = doc.parent_id ? ((((await this.db('knowledge_documents').where({ id: doc.parent_id }).first('label')) as { label?: Label } | undefined)?.label) ?? 'public') : 'public';
+    const before = highest(kb.label, src.label_floor, parentLabel, doc.manual_label ?? 'public');
     let text: string;
     let type = doc.type;
+    let described: (ImageDescription & { model: string }) | null = null;
+    let safetyScore: number | null = null;
+    let parts: ReturnType<typeof imageParts> = [];
     try {
       const data = await this.content(doc);
       if (!type) {
@@ -1011,16 +1216,33 @@ export class KnowledgeService {
         if ('rejected' in t) throw new ExtractionError(t.rejected);
         type = t.type;
       }
-      text = extractText(data, type);
+      if (isImageType(type)) {
+        // B-8801: the image safety check, then the vision profile's caption and text become the indexed text.
+        const checked = await this.checkImage(doc, data, type, before, targets);
+        if ('rejected' in checked) return checked.rejected;
+        safetyScore = checked.score;
+        described = await this.describe(doc, kb, data, before);
+        text = indexedText(doc.name, described);
+      } else {
+        // A PDF or Word document's images become its parts when the base has a vision profile.
+        if (kb.vision_profile && !doc.parent_id && (type === 'application/pdf' || type === DOCX_TYPE)) parts = imageParts(data, type);
+        try {
+          text = extractText(data, type);
+        } catch (err) {
+          // A scan has no text layer, but its pages are images the vision profile reads.
+          if (!(err instanceof ExtractionError) || !parts.length) throw err;
+          text = '';
+        }
+      }
     } catch (err) {
       if (!(err instanceof ExtractionError)) throw err;
       for (const idx of targets) await this.removeFromIndex(idx.id, doc.id);
-      await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'failed', type, error: err.message.slice(0, 500), trace_id: traceId(), chunks: 0, updated_at: Date.now() });
+      await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'failed', type, ...(isImageType(type) ? { media: 'image' } : {}), error: err.message.slice(0, 500), trace_id: traceId(), chunks: 0, updated_at: Date.now() });
       return { state: 'failed', chunks: 0, error: err.message };
     }
     const c = classify(text);
     const auto: Label = c.label;
-    const label = highest(kb.label, src.label_floor, auto, doc.manual_label ?? 'public');
+    const label = highest(before, auto);
     const origin = doc.manual_label && labelRank(doc.manual_label) >= labelRank(label) ? 'manual' : labelRank(auto) >= labelRank(label) && auto !== 'public' ? `auto-classifier, ${findingsFor(c.detections, auto).join(', ')}` : 'inherited';
     if (kb.workspace_id) {
       const ws = (await this.db('workspaces').where({ id: kb.workspace_id }).first('label_ceiling')) as { label_ceiling: Label } | undefined;
@@ -1030,10 +1252,182 @@ export class KnowledgeService {
         return { state: 'rejected', chunks: 0, label };
       }
     }
-    const chunks = chunkText(text, kb.chunking);
+    const chunks = text ? chunkText(text, kb.chunking) : [];
     for (const idx of targets) await this.writeChunks(idx, doc, chunks, label);
-    await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'indexed', type, label, auto_label: auto, label_origin: origin, detections: JSON.stringify(c.detections), error: null, trace_id: null, chunks: chunks.length, indexed_at: Date.now(), updated_at: Date.now() });
+    const vision = described ? await this.d.keys.seal(doc.tenant_id, JSON.stringify(described), `kdoc-vision:${doc.id}`) : null;
+    await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'indexed', type, label, auto_label: auto, label_origin: origin, detections: JSON.stringify(c.detections), error: null, trace_id: null, chunks: chunks.length, indexed_at: Date.now(), updated_at: Date.now(), ...(described ? { media: 'image', vision, safety_score: safetyScore } : {}) });
+    await this.db('knowledge_doc_labels').where({ document_id: doc.id }).update({ label_rank: labelRank(label) });
+    // B-8802: the base's vision classifiers label the image in the background.
+    if (described && kb.image_classifiers.length) await this.d.jobs.enqueue({ tenantId: doc.tenant_id, type: 'knowledge.classify', payload: { documentId: doc.id }, maxAttempts: 2 });
+    if (!doc.parent_id && (type === 'application/pdf' || type === DOCX_TYPE)) await this.syncParts(doc, kb.vision_profile ? parts : [], label);
     return { state: 'indexed', chunks: chunks.length, label };
+  }
+
+  /**
+   * B-8801: the image safety check on an image document before anything else reads it. A flagged image (or, with
+   * IMAGE_SAFETY_REQUIRED, one no classifier looked at) is rejected: its content is deleted and it never reaches an
+   * index. The check failing to run fails the document, which a retry runs again.
+   */
+  private async checkImage(doc: DocRow, data: Buffer, type: string, label: Label, targets: IndexRow[]): Promise<{ score: number | null } | { rejected: { state: DocState; chunks: number; label: Label; error: string } }> {
+    const safety = this.d.safety?.();
+    let verdict;
+    try {
+      verdict = safety ? await safety.classify(data, type) : null;
+    } catch (err) {
+      throw new ExtractionError(`The image safety check could not run: ${(err as Error).message}`);
+    }
+    const flagged = verdict && verdict.score >= (this.d.safetyThreshold ?? 0.5);
+    const unchecked = !verdict && !!this.d.safetyRequired;
+    if (!flagged && !unchecked) return { score: verdict ? verdict.score : null };
+    const reason = flagged ? `Withheld by the image safety check (${verdict!.classifier} scored ${verdict!.score.toFixed(2)}).` : 'Withheld: no image safety classifier is configured, and this server requires one.';
+    for (const idx of targets) await this.removeFromIndex(idx.id, doc.id);
+    await this.db('knowledge_doc_labels').where({ document_id: doc.id }).delete();
+    if (doc.blob_key) await this.d.blobs.delete(doc.blob_key);
+    await this.db('knowledge_documents').where({ id: doc.id }).update({ state: 'rejected', type, media: 'image', error: reason, trace_id: traceId(), blob_key: null, vision: null, chunks: 0, safety_score: verdict?.score ?? null, label_origin: 'rejected', updated_at: Date.now() });
+    await this.d.audit.append({ tenantId: doc.tenant_id, action: 'knowledge.image.withheld', kind: 'system', actor: { service: 'knowledge' }, target: { kb: doc.kb_id, document: doc.id }, label, detail: verdict ? { score: verdict.score, classifier: verdict.classifier, categories: verdict.categories } : { reason: 'not classified', required: true } });
+    return { rejected: { state: 'rejected', chunks: 0, label, error: reason } };
+  }
+
+  /** B-8801: the vision profile's caption and the text it reads in the image, validated, metered as indexing. */
+  private async describe(doc: DocRow, kb: KbRow, data: Buffer, label: Label): Promise<ImageDescription & { model: string }> {
+    if (!kb.vision_profile) throw new ExtractionError('This knowledge base has no vision profile, so its images cannot be described. Name one in the knowledge base settings, then retry.');
+    let out;
+    try {
+      out = await complete(this.d.gateway, doc.tenant_id, kb.vision_profile, label, [{ role: 'system', content: DESCRIBE_PROMPT }, { role: 'user', content: 'Describe this image and read its text.', images: [data.toString('base64')] }], VISION_TIMEOUT_MS, 'vision');
+    } catch (err) {
+      throw new ExtractionError(`The vision profile ${kb.vision_profile} could not describe the image: ${err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message}`);
+    }
+    await this.d.quotas.record({ tenantId: doc.tenant_id, workspaceId: kb.workspace_id, userId: null, kind: 'embed', model: out.model, profileId: out.profileId, poolId: out.poolId, promptTokens: out.promptTokens, outputTokens: out.outputTokens });
+    try {
+      return { ...parseDescription(out.text), model: out.model };
+    } catch (err) {
+      throw new ExtractionError((err as Error).message);
+    }
+  }
+
+  /**
+   * B-8801: a PDF or Word document's images as its parts: each is a document of its own (a child of this one, from
+   * the same source, at least its label), through quarantine and the safety check like an upload. An unchanged
+   * image keeps its document; images no longer in the document are removed.
+   */
+  private async syncParts(doc: DocRow, parts: ReturnType<typeof imageParts>, label: Label): Promise<void> {
+    const existing = new Map(((await this.db('knowledge_documents').where({ parent_id: doc.id })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
+    const keep = new Set<string>();
+    const t = Date.now();
+    for (const [i, part] of parts.entries()) {
+      const key = sha(`${doc.id}#image-${i + 1}`);
+      const hash = sha(part.data);
+      keep.add(key);
+      const prev = existing.get(key);
+      if (prev && prev.sha256 === hash && prev.state !== 'failed' && prev.state !== 'rejected') {
+        if (labelRank(prev.label) < labelRank(label)) await this.applyLabel(prev, label, 'inherited from the document');
+        continue;
+      }
+      if (prev) await this.purgeDocument(prev);
+      const id = ulid();
+      const blobKey = await this.store({ id, tenant_id: doc.tenant_id }, part.data, 'knowledge-quarantine');
+      await this.db('knowledge_documents').insert({ id, tenant_id: doc.tenant_id, kb_id: doc.kb_id, source_id: doc.source_id, external_key: key, name: `${doc.name}, image ${i + 1}`.slice(0, 300), type: null, size: part.data.length, sha256: hash, version: null, label, auto_label: null, manual_label: null, label_origin: 'inherited from the document', detections: null, state: 'quarantined', blob_key: blobKey, chunks: 0, created_at: t, updated_at: t, acl: doc.acl == null ? null : JSON.stringify(doc.acl), parent_id: doc.id, media: 'image' });
+      await this.d.jobs.enqueue({ tenantId: doc.tenant_id, type: 'knowledge.scan', payload: { documentId: id }, maxAttempts: 2 });
+    }
+    for (const [key, d] of existing) if (!keep.has(key)) await this.purgeDocument(d);
+  }
+
+  // ---------- image classification (B-8802) ----------
+
+  /** The published vision classifiers a base names (optionally only one of them). */
+  private async imageClassifiers(kb: KbRow, only: string | null): Promise<ClassifierRow[]> {
+    const out: ClassifierRow[] = [];
+    if (!this.d.classifiers) return out;
+    for (const id of kb.image_classifiers) {
+      if (only && id !== only) continue;
+      const c = await this.d.classifiers.get(kb.tenant_id, id);
+      if (c && c.engine === 'vision' && c.status === 'published') out.push(c);
+    }
+    return out;
+  }
+
+  /**
+   * Scores one image document with the base's vision classifiers and stores the labels as tags on it, with their
+   * scores and the classifier's version. Without `force`, a classifier whose current version already labelled the
+   * document is skipped (a reclassify after a new version touches only what is stale).
+   */
+  private async classifyDocument(doc: DocRow, kb: KbRow, only: string | null, force: boolean): Promise<number> {
+    const list = await this.imageClassifiers(kb, only);
+    if (!list.length) return 0;
+    let data: Buffer | null = null;
+    let n = 0;
+    for (const c of list) {
+      const have = (await this.db('knowledge_doc_labels').where({ document_id: doc.id, classifier_id: c.id }).first('classifier_version')) as { classifier_version?: number } | undefined;
+      if (have && Number(have.classifier_version) === c.version && !force) continue;
+      data ??= await this.content(doc);
+      const r = await this.d.classifiers!.scoreImage(doc.tenant_id, c, data, doc.label, VISION_TIMEOUT_MS);
+      if (r.usage) await this.d.quotas.record({ tenantId: doc.tenant_id, workspaceId: kb.workspace_id, userId: null, kind: 'embed', model: r.usage.model, profileId: r.usage.profileId, poolId: r.usage.poolId, promptTokens: r.usage.promptTokens, outputTokens: r.usage.outputTokens });
+      const t = Date.now();
+      const rank = labelRank(doc.label);
+      await this.db.transaction(async (trx) => {
+        await trx('knowledge_doc_labels').where({ document_id: doc.id, classifier_id: c.id }).delete();
+        await trx('knowledge_doc_labels').insert(c.config.labels.map((l) => ({ id: ulid(), tenant_id: doc.tenant_id, kb_id: doc.kb_id, document_id: doc.id, classifier_id: c.id, classifier_version: c.version, label: l.label, score: r.scores[l.label] ?? 0, hit: r.hits.includes(l.label), label_rank: rank, created_at: t })));
+      });
+      n++;
+    }
+    return n;
+  }
+
+  private async classifyJob(documentId: string, only: string | null): Promise<unknown> {
+    const r = await this.db('knowledge_documents').where({ id: documentId }).first();
+    if (!r) return { skipped: 'gone' };
+    const doc = docFrom(r);
+    if (doc.media !== 'image' || !['indexed', 'unchanged'].includes(doc.state)) return { skipped: doc.state };
+    return { classified: await this.classifyDocument(doc, await this.kbRow(doc.kb_id), only, true) };
+  }
+
+  /** Labels a base's images again: after a new classifier version (stale ones only), or on request (all). */
+  private async reclassifyJob(kbId: string, only: string | null, ctx: JobContext): Promise<unknown> {
+    const kbRaw = await this.db('knowledge_bases').where({ id: kbId }).first();
+    if (!kbRaw) return { skipped: 'gone' };
+    const kb = kbFrom(kbRaw);
+    const force = !!ctx.job.payload?.force;
+    const docs = ((await this.db('knowledge_documents').where({ kb_id: kb.id, media: 'image' }).whereIn('state', ['indexed', 'unchanged']).orderBy('id')) as Record<string, unknown>[]).map(docFrom);
+    let classified = 0;
+    let failed = 0;
+    for (const [i, d] of docs.entries()) {
+      if (ctx.signal.aborted) throw ctx.signal.reason as Error;
+      try {
+        if (await this.classifyDocument(d, kb, only, force)) classified++;
+      } catch (err) {
+        failed++;
+        ctx.log.warn({ err: (err as Error).message, document: d.id }, 'classifying an image failed');
+      }
+      await ctx.progress(((i + 1) / docs.length) * 100, `Classified ${i + 1} of ${docs.length} images`);
+    }
+    await this.d.audit.append({ tenantId: kb.tenant_id, action: 'knowledge.reclassified', kind: 'system', actor: { service: 'knowledge' }, target: { kb: kb.id, ...(only ? { classifier: only } : {}) }, label: kb.label, detail: { images: docs.length, classified, failed, force } });
+    return { images: docs.length, classified, failed };
+  }
+
+  /** B-8802: a published classifier has a new version: every base naming it labels its images again. */
+  async classifierVersioned(c: ClassifierRow): Promise<number> {
+    if (c.engine !== 'vision') return 0;
+    const q = this.db('knowledge_bases').where('image_classifiers', 'like', `%${c.id}%`);
+    if (c.tenant_id) q.andWhere({ tenant_id: c.tenant_id });
+    const kbs = ((await q) as Record<string, unknown>[]).map(kbFrom).filter((k) => k.image_classifiers.includes(c.id));
+    for (const kb of kbs) await this.d.jobs.enqueue({ tenantId: kb.tenant_id, type: 'knowledge.reclassify', payload: { kbId: kb.id, classifierId: c.id }, maxAttempts: 2 });
+    return kbs.length;
+  }
+
+  /** Re-classifies a base's images (or one image) now, with every classifier it names. */
+  async reclassify(p: Principal, kbId: string, documentId?: string): Promise<{ jobId: string; images: number }> {
+    const kb = await this.base(p, kbId, 'manage');
+    if (!kb.image_classifiers.length) throw conflict(`${kb.name} names no image classifier. Pick one in its settings first.`);
+    if (documentId) {
+      const { doc } = await this.documentFor(p, documentId, 'manage');
+      if (doc.kb_id !== kb.id) throw notFound('Document');
+      if (doc.media !== 'image' || !['indexed', 'unchanged'].includes(doc.state)) throw conflict(`${doc.name} is not an indexed image.`);
+      const job = await this.d.jobs.enqueue({ tenantId: kb.tenant_id, type: 'knowledge.classify', payload: { documentId: doc.id }, createdBy: p.userId, maxAttempts: 1 });
+      return { jobId: job.id, images: 1 };
+    }
+    const images = Number(((await this.db('knowledge_documents').where({ kb_id: kb.id, media: 'image' }).whereIn('state', ['indexed', 'unchanged']).count({ n: '*' })) as { n: number }[])[0]?.n ?? 0);
+    const job = await this.d.jobs.enqueue({ tenantId: kb.tenant_id, type: 'knowledge.reclassify', payload: { kbId: kb.id, force: true }, createdBy: p.userId, maxAttempts: 1 });
+    return { jobId: job.id, images };
   }
 
   private async writeChunks(idx: IndexRow, doc: DocRow, chunks: TextChunk[], label: Label): Promise<void> {
@@ -1140,7 +1534,7 @@ export class KnowledgeService {
       const cfg = s.config;
       const agent = await this.fetchAgent(cfg.url!);
       try {
-        const prev = new Map(((await this.db('knowledge_documents').where({ source_id: s.id }).whereNot({ state: 'removed' })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
+        const prev = new Map(((await this.db('knowledge_documents').where({ source_id: s.id }).whereNull('parent_id').whereNot({ state: 'removed' })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
         const out = await crawl({
           start: cfg.url!,
           maxDepth: cfg.maxDepth ?? 2,
@@ -1254,7 +1648,8 @@ export class KnowledgeService {
    * present are removed. Removed tombstones stay removed.
    */
   private async apply(s: SourceRow, items: SourceItem[], full: boolean, ctx: Pick<JobContext, 'signal' | 'progress'>, forceType?: string): Promise<{ added: number; changed: number; unchanged: number; removed: number }> {
-    const existing = new Map(((await this.db('knowledge_documents').where({ source_id: s.id })) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
+    // A document's image parts (Sprint 36c) follow their document, not the listing.
+    const existing = new Map(((await this.db('knowledge_documents').where({ source_id: s.id }).whereNull('parent_id')) as Record<string, unknown>[]).map(docFrom).map((d) => [d.external_key, d]));
     const seen = new Set<string>();
     let added = 0;
     let changed = 0;
@@ -1372,10 +1767,19 @@ export class KnowledgeService {
    * Hybrid search over the serving indexes of the given bases. The label filter (`ceiling`) is part of every query:
    * vectors, keyword terms and chunk rows above it are never read, ranked or counted.
    */
-  async search(p: Principal, kbs: KbRow[], query: string, opts: { k?: number; ceiling?: Label; queryLabel?: Label; rerank?: boolean; withText?: boolean; signal?: AbortSignal; lenient?: boolean } = {}): Promise<{ hits: SearchHit[]; ceiling: Label; vectorSkipped: string | null }> {
+  async search(p: Principal, kbs: KbRow[], query: string, opts: { k?: number; ceiling?: Label; queryLabel?: Label; rerank?: boolean; withText?: boolean; signal?: AbortSignal; lenient?: boolean; labels?: LabelFilter } = {}): Promise<{ hits: SearchHit[]; ceiling: Label; vectorSkipped: string | null }> {
     const ceiling = opts.ceiling && labelRank(opts.ceiling) < labelRank(p.clearance) ? opts.ceiling : p.clearance;
     const maxRank = labelRank(ceiling);
     const k = opts.k ?? 8;
+    // B-8803: a label filter keeps only the chunks of image documents carrying the labels, inside the ranking.
+    let allowed: Set<string> | null = null;
+    if (opts.labels && (opts.labels.any?.length || opts.labels.all?.length)) {
+      const docIds = [...(await this.docsWithLabels(kbs.map((x) => x.id), opts.labels, maxRank))];
+      allowed = new Set();
+      for (let i = 0; i < docIds.length; i += 500) for (const r of (await this.db('knowledge_chunks').whereIn('document_id', docIds.slice(i, i + 500)).andWhere('label_rank', '<=', maxRank).select('id')) as { id: string }[]) allowed.add(r.id);
+      if (!allowed.size) return { hits: [], ceiling, vectorSkipped: null };
+    }
+    const keep = (id: string) => !allowed || allowed.has(id);
     const words = [...new Set(tokenize(query))];
     const vectorList: { id: string; score: number }[] = [];
     const keywordList: { id: string; score: number }[] = [];
@@ -1387,7 +1791,7 @@ export class KnowledgeService {
       // Vector ranking.
       try {
         const [vec] = await this.embed(p.tenantId, idx.embed_model, [query], opts.queryLabel ?? 'internal', p.userId, opts.signal);
-        for (const h of await this.d.vectors.search(idx.id, { tenantId: p.tenantId, vector: vec!, k: 40, maxLabelRank: maxRank })) vectorList.push(h);
+        for (const h of await this.d.vectors.search(idx.id, { tenantId: p.tenantId, vector: vec!, k: allowed ? Math.max(40, Math.min(1000, allowed.size)) : 40, maxLabelRank: maxRank })) if (keep(h.id)) vectorList.push(h);
       } catch (err) {
         if (!opts.lenient) throw err;
         vectorSkipped = (err as Error).message;
@@ -1395,7 +1799,7 @@ export class KnowledgeService {
       // Keyword ranking (BM25 over keyed-hash terms).
       if (words.length) {
         const hashed = await this.terms.terms(p.tenantId, words);
-        const rows = (await this.db('knowledge_terms').where({ index_id: idx.id }).whereIn('term', [...hashed.values()]).andWhere('label_rank', '<=', maxRank).select('chunk_id', 'term', 'tf')) as { chunk_id: string; term: string; tf: number }[];
+        const rows = ((await this.db('knowledge_terms').where({ index_id: idx.id }).whereIn('term', [...hashed.values()]).andWhere('label_rank', '<=', maxRank).select('chunk_id', 'term', 'tf')) as { chunk_id: string; term: string; tf: number }[]).filter((r) => keep(r.chunk_id));
         if (rows.length) {
           const stats = ((await this.db('knowledge_chunks').where({ index_id: idx.id }).andWhere('label_rank', '<=', maxRank).count({ n: '*' }).avg({ a: 'tokens' })) as { n: number; a: number }[])[0]!;
           const df = new Map<string, number>();
@@ -1445,15 +1849,42 @@ export class KnowledgeService {
     }
     if (reranking) hits = await this.rerank(p, hits, query, kbs, opts.queryLabel ?? 'internal', opts.signal);
     hits = hits.slice(0, k);
+    // B-8803: image hits carry the caption, an excerpt of the image's text, its labels and its thumbnail.
+    const imageDocs = [...new Set(hits.map((h) => h.documentId))].map((id) => docs.get(id)).filter((d): d is DocRow => d?.media === 'image');
+    if (imageDocs.length) {
+      const labels = await this.labelsOf(imageDocs.map((d) => d.id));
+      const described = new Map(await Promise.all(imageDocs.map(async (d) => [d.id, await this.describedAs(d)] as const)));
+      for (const h of hits) {
+        const d = docs.get(h.documentId);
+        if (d?.media !== 'image') continue;
+        const v = described.get(d.id);
+        h.image = { caption: v?.caption ?? null, ocr: v?.text ? (v.text.length > OCR_EXCERPT ? `${v.text.slice(0, OCR_EXCERPT)}…` : v.text) : null, labels: labels.get(d.id) ?? [], thumbnail: thumbnailUrl(d) };
+      }
+    }
     // The context checkpoint: each retrieved chunk before anyone sees it.
     for (const h of hits) {
       const g = await this.d.guard.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'context', text: h.text ?? '', label: h.label, principal: p, source: { kind: 'chunk', id: h.chunkId }, meta: { kb: h.kbId, document: h.documentId } });
       if (g.action === 'block' || g.action === 'require-approval') {
         h.withheld = g.reason ?? 'Withheld by a guardrail rule.';
         delete h.text;
+        // The caption and text of a withheld image are what the rule withheld.
+        if (h.image) h.image = { ...h.image, caption: null, ocr: null };
       } else if (g.action === 'redact') h.text = g.text;
+      // An image hit's caption and excerpt are checked as well: withheld, or redacted where a rule rewrites them.
+      if (h.image && (h.image.caption || h.image.ocr)) {
+        const both = `${h.image.caption ?? ''}\n\n${h.image.ocr ?? ''}`;
+        const gi = await this.d.guard.check({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, checkpoint: 'context', text: both, label: h.label, principal: p, source: { kind: 'chunk', id: h.chunkId }, meta: { kb: h.kbId, document: h.documentId, via: 'image' } });
+        if (gi.action === 'block' || gi.action === 'require-approval') h.image = { ...h.image, caption: null, ocr: null };
+        else if (gi.action === 'redact' && gi.text !== both) {
+          const [caption, ...rest] = gi.text.split('\n\n');
+          h.image = { ...h.image, caption: caption || null, ocr: rest.join('\n\n') || null };
+        }
+      }
     }
-    if (!opts.withText) for (const h of hits) delete h.text;
+    if (!opts.withText) for (const h of hits) {
+      delete h.text;
+      if (h.image) h.image = { ...h.image, caption: null, ocr: null };
+    }
     return { hits, ceiling, vectorSkipped };
   }
 

@@ -9,18 +9,26 @@ export const MODEL_TIMEOUT_MS = 20_000;
  * One non-streamed completion through the gateway (only the gateway talks to Ollama): the tenant profile names the
  * model and pool, and the pool must be cleared for the label of the text being inspected.
  */
-export async function complete(gateway: Gateway, tenantId: string, profile: string, label: Label, messages: ChatMessage[], timeoutMs = MODEL_TIMEOUT_MS): Promise<{ text: string; model: string }> {
+export async function complete(gateway: Gateway, tenantId: string, profile: string, label: Label, messages: ChatMessage[], timeoutMs = MODEL_TIMEOUT_MS, need?: 'vision'): Promise<{ text: string; model: string; promptTokens: number; outputTokens: number; poolId: string | null; profileId: string }> {
   const r = await gateway.resolve(tenantId, profile);
+  // Sprint 36c: an image goes only to a model recorded as reading images.
+  if (need === 'vision' && !r.model.capabilities.includes('vision')) throw new Error(`The profile ${profile} routes to ${r.model.name}, which cannot read images; pick a profile with a vision model.`);
   const signal = AbortSignal.timeout(timeoutMs);
   const lease = await gateway.acquire(r.profile, r.model, label, { signal, waitMs: Math.min(timeoutMs, 10_000) });
   try {
     let text = '';
+    let promptTokens = 0;
+    let outputTokens = 0;
     const options: Record<string, unknown> = { temperature: 0 };
     if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
     for await (const c of lease.client.chat({ model: r.model.name, messages, options, ...(r.model.capabilities.includes('thinking') ? { think: false } : {}) }, signal, timeoutMs)) {
       text += c.message?.content ?? '';
+      if (c.done) {
+        promptTokens = Number(c.prompt_eval_count ?? 0);
+        outputTokens = Number(c.eval_count ?? 0);
+      }
     }
-    return { text, model: r.model.name };
+    return { text, model: r.model.name, promptTokens, outputTokens, poolId: lease.pool.id, profileId: r.profile.id };
   } finally {
     lease.release();
   }

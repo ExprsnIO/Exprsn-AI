@@ -244,14 +244,15 @@ tenant, on the tenant's own labelled cases.
 | Method and path | What it does |
 | --- | --- |
 | `GET /admin/classifiers` | `[{id, slug, name, engine, description, status: draft\|published, version, owner, dataset, platform, labels: [{label, threshold}], family, profile, instructions, trained: {at, samples}\|null, metrics, samples: {<label>: n}, usage: [{set, setId, rule, ruleId, checkpoint}]}]` |
-| `POST /admin/classifiers` `{name, engine: linear\|guard\|llm, labels, profile?, instructions?, description?}` | A draft classifier with its own dataset |
+| `POST /admin/classifiers` `{name, engine: linear\|guard\|llm\|vision, labels, profile?, instructions?, description?}` | A draft classifier with its own dataset. Since 1.6.0 also `vision`, which needs a `profile` (Sprint 36c below) |
 | `GET /admin/classifiers/:id` | The classifier plus `versions` and `usage` |
 | `PATCH /admin/classifiers/:id` `{thresholds?, profile?, instructions?, dataset?, description?}` | A new version |
 | `POST /admin/classifiers/:id/publish` | `409 Eval set too small` below 200 labelled cases per label |
 | `POST /admin/classifiers/:id/evaluate` | `202 {jobId}`: a `classifier.evaluate` job (`classify.batch` on the console) computes precision and recall per label over the dataset |
 | `POST /admin/classifiers/:id/train` | `202 {jobId}`: trains a linear classifier on four fifths of the dataset and evaluates it on the rest |
-| `POST /admin/classifiers/:id/samples` `{items: [{text, expected: <label>\|none, label?}]}` | Adds labelled cases (sealed): `201 {added, samples}` |
-| `POST /classify` `{classifier, text, label?}` (`inference:invoke` or `classifiers:manage`) | Synchronous: `{classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}`; `503` when the model is unavailable |
+| `POST /admin/classifiers/:id/samples` `{items: [{text, expected: <label>\|none, label?}]}` | Adds labelled cases (sealed): `201 {added, samples}`. Since 1.6.0 a vision classifier's cases are images: `{image (base64), expected, label?}` (Sprint 36c) |
+| `PUT /admin/classifiers/:id/samples/image?expected=&label=` (body: the image) | 1.6.0, Sprint 36c: one image case of a vision classifier as a raw upload |
+| `POST /classify` `{classifier, text, label?}` (`inference:invoke` or `classifiers:manage`) | Synchronous: `{classifier, version, labels, scores, hits, top: {label, score}, engine, ms, spans: [{kind, start, end, score}]}`; `503` when the model is unavailable. Since 1.6.0 a vision classifier takes `image` (base64) instead of `text` |
 | `GET /admin/label-names` / `PUT /admin/label-names` `{names, order?}` | The tenant's names for the four levels; a different order fails with `409 Reorder refused` |
 | `GET /eval-sets` (`flags:review` or `classifiers:manage`) | `[{name, cases}]` |
 
@@ -545,7 +546,7 @@ above the caller's clearance are filtered inside every query: they are never lis
 | `GET /knowledge/bases` | `[base]` the caller may read |
 | `POST /knowledge/bases` `{name, description?, label, embedModel, reranker?, sharing: members\|curators, workspaceId?, chunking?: {tokens, overlap}}` | Curators: creates a draft base with an empty serving index v1. The embedding model must be approved, have the `embedding` capability and be cleared for the label |
 | `GET /knowledge/bases/:id` | The base with `sources: [source]`, `indexes: [index]` (newest ten), `quarantined` and `vectorStore: db\|pgvector` |
-| `PATCH /knowledge/bases/:id` `{name?, description?, label?, reranker?, sharing?, status?: draft\|published, chunking?}` | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat |
+| `PATCH /knowledge/bases/:id` `{name?, description?, label?, reranker?, sharing?, status?: draft\|published, chunking?}` | Updates; a higher label floor applies to indexed chunks at once. Only published bases are used in chat. Since 1.6.0 also `visionProfile` and `imageClassifiers` (Sprint 36c below) |
 | `DELETE /knowledge/bases/:id` | Deletes the base, its documents, chunks, vectors and stored files |
 | `POST /knowledge/bases/:id/reindex` `{embedModel?}` | `202 index`: builds the next version beside the serving one by job (`knowledge.reindex`); the switch is one transaction, then the old index is dropped. `409` while one is building |
 | `POST /knowledge/bases/:id/cancel-build` | Cancels the build and discards the partial index; the serving index is untouched |
@@ -555,14 +556,14 @@ above the caller's clearance are filtered inside every query: they are never lis
 | `POST /knowledge/bases/:id/sources` `{kind: upload\|s3\|git\|database, location, labelFloor?, schedule?: 15m\|hourly\|daily\|manual, ref?, path?, connectionId?, idColumn?, watermarkColumn?}` | Adds a source and queues its first sync. S3: `s3://bucket/prefix/`, read with the platform's S3 credentials. Git: an `https://` URL, cloned shallow by job. Database: `pg: schema.view` through a PostgreSQL connection, allow-listed, synced by watermark (`updated_at` by default); its floor is at least the connection's label |
 | `POST /knowledge/sources/:id/sync` | `202 {jobId}` (`knowledge.sync`); unchanged documents are skipped by version (ETag, commit) or content hash |
 | `DELETE /knowledge/sources/:id` | Removes the source and its documents from every index |
-| `GET /knowledge/bases/:id/documents?q=` | `[document]` at or below the caller's clearance |
-| `PUT /knowledge/bases/:id/uploads?name=<file>&label=<label>` (body: the file) | `202 document` in sealed quarantine; `knowledge.scan` detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX) and runs ClamAV when configured, then indexing classifies and chunks it |
-| `GET /knowledge/documents/:id` | `document` with `kb: {id, name}` |
+| `GET /knowledge/bases/:id/documents?q=` | `[document]` at or below the caller's clearance. Since 1.6.0 also `media`, `labels`, `labelsAll`, `minScore` (Sprint 36c) |
+| `PUT /knowledge/bases/:id/uploads?name=<file>&label=<label>` (body: the file) | `202 document` in sealed quarantine; `knowledge.scan` detects the type from the bytes (text, Markdown, CSV, JSON, HTML, PDF, DOCX and, since 1.6.0, PNG, JPEG, WebP, GIF and HEIC) and runs ClamAV when configured, then indexing classifies and chunks it |
+| `GET /knowledge/documents/:id` | `document` with `kb: {id, name}`; since 1.6.0 an image's description, labels and a document's image parts (Sprint 36c) |
 | `PATCH /knowledge/documents/:id` `{label, reason?}` | Relabels: never below the classifier's finding or the floor (`409` naming the finding); chunks take the label at once |
 | `POST /knowledge/documents/:id/reindex` | `202 {jobId}`: extraction and embedding again (retry after a failure); embeddings come from the cache where the text is unchanged |
 | `DELETE /knowledge/documents/:id` | Removes it from every index; a synced document stays `removed` so the next sync does not bring it back |
-| `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}` |
-| `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms |
+| `POST /knowledge/search` `{kbIds, query, k?, rerank?}` | Test search as the caller: `{hits: [hit], ceiling, vectorSkipped, vectorStore}`. Since 1.6.0 also `labels: {any?, all?, minScore?}` (Sprint 36c) |
+| `GET /knowledge/models` | `{embedding: [{name, label, state}], rerankers: [...]}`: approved models for the forms; since 1.6.0 also `visionProfiles` and `imageClassifiers` (Sprint 36c) |
 | `GET /knowledge/principals` | Curators: `{workspaces, users, profiles}` to share with |
 | `GET /knowledge/connections` | Curators: `[{id, name, label, objects, columns}]`, the PostgreSQL connections and allow-listed objects a database source can read (never credentials) |
 | `GET /conversations/:id/knowledge` (`context:read`) | Bases attached to one of the caller's conversations |
@@ -2717,7 +2718,7 @@ Public (no session, at `/api/public`, `X-Robots-Tag: noindex`; the token travels
 | Method and path | What it does |
 | --- | --- |
 | `POST /api/public/forms/open` `{token}` | What the form shows (`{title, submitLabel, fields}`), never other fields of the entity. `404` for an unknown or private link |
-| `POST /api/public/forms/submit` `{token, values}` | Limited per address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form (`ratePerMinute`), then `429` with `Retry-After`. The record is written by no one (`createdBy: null`, `source: form`). Audited `app.form.submitted` with `public: true`, the address and the dropped field names. `201 {submitted: true, message, dropped}` |
+| `POST /api/public/forms/submit` `{token, values}` | Limited per address (`APPS_PUBLIC_FORM_PER_MINUTE`) and per form (`ratePerMinute`), then `429` with `Retry-After`. The record is written by no one (`createdBy: null`, `source: form`). Audited `app.form.submitted` with `public: true`, the address and the dropped field names. `201 {submitted: true, held: false, message, dropped}`; since 1.6.0 (B-4701) `202 {submitted: true, held: true, message, dropped}` when a value the `user-input` guardrail holds makes the submission wait for review (Sprint 36b below) |
 
 ### Triggers and workflow record steps (B-2206)
 
@@ -4266,6 +4267,68 @@ messages, error, downloadedAt, createdAt, mine, canDecide}`. Platform admins see
 their own. The job writes the CSV sealed with the tenant key (`exports/<tenant>/messaging/<id>.sealed`) and audits
 `messaging.conversation.exported {reason, requestedBy, approvedBy, messages, truncated}`; the members are not told.
 
+## Sprint 36a (1.6.0): groups depth (B-4401 to B-4405)
+
+Channels inside groups, discovery, places with distance filters, trending groups and the tenant's group categories.
+Migration `038_groups2`; `server/src/groups/service.ts` (channels, places, the list filters), `groups/depth.ts`
+(`s.groups.depth`: categories, discovery, trending) and `groups/geo.ts` (the distance filter). Permissions are the
+groups' own (`groups:read`, `groups:write`; what a member may do inside a group is their group role) and
+`social:manage` for the categories (decision Q6).
+
+**Channels (B-4401)** are groups one level down (`parentId`), with their own members, roles, posts and events: every
+`/api/groups/:id/...` route works on a channel. The group is a channel's outer boundary as the workspace is a group's:
+someone who does not read the group gets `404` for its channels; only the group's members join a channel (`403 step
+parent` otherwise; the invitation picker offers them alone, and inviting anyone else is `422 step workspace`); leaving
+or being removed from the group leaves its channels (`channels` in the answer and the audit detail); archiving or
+deleting the group archives or deletes its channels. The group's owners (and `groups:manage`) act as owners of its
+channels. A channel's label is at least its group's (the floor, `422 step label-floor`) and at most the workspace
+ceiling; raising a group's label raises its channels below it with their posts and events (`channelsRaised` in the
+audit detail) and re-checks their rooms. Channels do not nest (`422 step parent`); categories and places belong to
+groups (`422 step parent` on a channel). `GET /api/groups` lists groups only; a group's view has `channels` (how many
+the caller may know of), a channel's has `parentName` and `parentLabel`. The feed's group scope and fan-out follow the
+same rule (a channel's post reaches readers of the channel and of its group).
+
+**Places (B-4403)**: a group may have `location: {name?, lat?, lon?}` (the name sealed; a point needs both coordinates,
+WGS 84 degrees, `422 step location` otherwise; `null` clears it) and an event `lat`, `lon` beside its `location` text
+(moving the point moves the event's `sequence`). A group's place is shown to readers of its content, like its
+description (an open decision in `Backlog-1.6.0.md` asks whether it should be members only); a distance filter only
+matches places the caller may read. `near=<lat>,<lon>&km=<radius>` (default 25 km, at most 20 016) on `GET
+/api/groups`, `GET /api/groups/discover` and `GET /api/calendar/events` keeps the rows within the radius, nearest
+first, each with `distanceKm`. PostgreSQL with PostGIS narrows with `ST_DWithin` on the point as a geography (the GiST
+index of `038_groups2`); without PostGIS (and on MySQL and SQLite) a bounding box on `lat` and `lon` does, across the
+antimeridian and over the poles; either way the great-circle distance on the PostGIS sphere (radius 6 371.0088 km)
+decides, so the three databases return the same rows. A malformed `near` is `400`.
+
+**Categories (B-4405)**: one list per tenant, managed from Social and messaging. `categoryId` on `POST /api/groups` and
+`PATCH /api/groups/:id` (an unknown id is `422 step category`; `null` uncategorises); `category=<id>` or
+`category=none` filters `GET /api/groups`, `/discover` and `/trending`. Removing a category sets its groups'
+`categoryId` to null in the same transaction: they stay listed.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/groups?workspace=&mine=&category=&near=&km=` | As before, groups only (not channels); 1.6.0 adds `parentId`, `categoryId`, `location` (readers only, else `null`), `channels`, and with `near` `distanceKm` |
+| `POST /api/groups` `{…, categoryId?, location?: {name?, lat?, lon?} \| null}` | 1.6.0 adds the category and the place. Audited `group.created` (`category`, `located` in the detail) |
+| `PATCH /api/groups/:id` `{…, categoryId?, location?}` | 1.6.0 adds both (groups only) and the label floor of a channel. Audited `group.updated` (`category` before and after, `channelsRaised`) |
+| `GET /api/groups/discover?workspace=&category=&near=&km=&limit=` | B-4402: `{groups: [group + {sharedMembers, activity: {posts, joins}, score, invited, requested}], windowDays: 30, total}`. The groups the caller may join now: groups (not channels) they see and are not a member of, active, open or by request, or invite-only with an invitation waiting for them; **never labelled above the caller's clearance**, even for a `groups:manage` holder who sees such a group in the list. Ranked by `3 × sharedMembers + 2 × joins + posts` (members of the group the caller shares another group or channel with; joins and published posts in the last 30 days), then members and name; with `near`, nearest first |
+| `GET /api/groups/trending?workspace=&category=&limit=` | B-4404: `{groups: [group + {trend: {joins, posts, score}}], computedAt, windowStart, hours}` as the `groups.trending` job last counted them, the caller's workspaces, groups they may see and are cleared for |
+| `GET /api/group-categories` | B-4405: `[{id, name, description, position, createdAt, updatedAt}]` in order |
+| `GET /api/groups/:id/channels` | B-4401: the group's channels the caller may know of (a public channel is read by everyone who reads the group, a private one by its members and listed to the group's readers, a hidden one known only to its members); `403` for someone who sees the group but does not read it |
+| `POST /api/groups/:id/channels` `{name, description?, visibility?: public, joinMode?: open, label?}` | `201` channel; the creator is its owner. Needs the `channels` group right (owners and moderators). The label defaults to the group's. Audited `group.channel.created {group, channel}`; the catalogue events `group.created` and `group.member.added` with the channel's id; `group.channel.created` in the group's room |
+| `DELETE /api/groups/:id` | On a group, its channels are deleted too (`channels` in the answer); on a channel, audited `group.channel.deleted` |
+| `DELETE /api/groups/:id/members/:userId` | On a group, also leaves its channels (`channels` in the answer) |
+| `GET /api/calendar/events?from=&to=&near=&km=` | 1.6.0 adds the distance filter; events carry `lat`, `lon` |
+| `POST /api/groups/:id/events`, `PATCH /api/calendar/events/:id` `{…, lat?, lon?}` | The event's point (both or neither, `422 step location`) |
+| `POST /api/admin/social/group-categories` `{name: 1 to 80, description?, position?}` | `social:manage`. `201` category with `groups: 0`. Names are unique in the tenant whatever the case (`409`). Audited `group.category.created` |
+| `PATCH /api/admin/social/group-categories/:id` `{name?, description?, position?}` | `social:manage`. Audited `group.category.updated {before, after}` |
+| `DELETE /api/admin/social/group-categories/:id` | `social:manage`. `{id, removed: true, uncategorised}`: its groups stay, uncategorised. Audited `group.category.removed {name, uncategorised}` |
+| `POST /api/admin/social/groups/trending/run` | `social:manage`. `202 {jobId}`: the `groups.trending` job for the tenant now (requests within the same minute share one job). Audited `group.trending.requested` |
+| `GET /api/admin/social/groups` | 1.6.0 adds `categories: {categories: [category + {groups}], uncategorised}` (groups, not channels, at labels the caller is cleared for) and `trending` (as `GET /api/groups/trending`, ten at most); each group row names `parentId` (a channel) and `categoryId` |
+
+**The `groups.trending` job** runs every `FEED_TRENDING_MINUTES` (with the hashtags' `feed.trending`; 0 turns both
+off) per active tenant and counts, over the last `FEED_TRENDING_HOURS`, the joins (`group_members.joined_at`) and
+published posts of each active, not hidden group (channels never trend): `score = 3 × joins + posts`, the top 50 per
+workspace with a score, kept in `group_trending` (replaced each run, so it is idempotent).
+
 ## Sprint 35b (1.6.0): the Overview and Jobs and queues (B-4202, B-4203)
 
 The two admin screens read and act on what already exists: the instances' readiness, the one `JobQueue`, the
@@ -4366,3 +4429,154 @@ next `restart`, whether it may be overridden, and the description from the comme
 New settings: `PLATFORM_SETTINGS_OVERRIDES` (default `true`), `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`
 (30), `BLOBS_VERIFY_MINUTES` (1440; 0 turns the schedule off), `BLOBS_ORPHAN_GRACE_HOURS` (24) and
 `BLOBS_DRY_RUN_MINUTES` (60).
+
+## Sprint 36b (1.6.0): blob deduplication, held form values and reveal anomalies (B-4601, B-4701, B-4803)
+
+Migration `038b_dedup_held_vault`. New settings: `APPS_HELD_MAX_PER_FORM` (200), `APPS_HELD_KEEP_DAYS` (30),
+`VAULT_ANOMALY_BURST` (5; 0 turns detection off), `VAULT_ANOMALY_BURST_SECONDS` (60), `VAULT_ANOMALY_HISTORY_DAYS`
+(30) and `VAULT_ANOMALY_MIN_HISTORY` (20).
+
+### Blob deduplication (B-4601)
+
+No new route. `server/src/files/dedup.ts` (`s.files.dedup`): identical content in one tenant's file store is stored
+once. Every upload still streams its full bytes, sealed under a key of its own, into quarantine and is scanned; when
+the scan releases a version whose plaintext SHA-256 the tenant already stores (`file_blobs`), the version reads that
+object (`file_versions.blob_id`), the blob's `refs` goes up and the quarantined copy is deleted. Otherwise the version's
+object moves into the store as before and is registered as a blob. The trash purge releases references in the
+transaction that deletes the version rows and deletes an object only with its last reader. Two tenants never share an
+object (the lookup is keyed by tenant, and each tenant's key seals its own copy). Quotas still count every version's
+own size. `file.version.ready` names the blob it shares in `detail.sharedWith`. The migration registers the first
+ready version of each content per tenant as a blob, so later uploads share what was stored before 1.6.0.
+
+| Method and path | What changes |
+| --- | --- |
+| `GET /api/admin/storage/usage` | Adds `dedup: {blobs, shared, references, logicalBytes, storedBytes, savedBytes, tenants: [{tenantId, tenant, blobs, shared, references, logicalBytes, storedBytes, savedBytes}]}`: objects, those read by more than one version, the versions reading them, the bytes the versions hold, the bytes stored and the difference |
+
+The integrity check (`ops.blobs.verify`) sees `file_blobs.blob_key` like any other key column, so a shared object is
+referenced while any version or blob row names it; blob store migrations copy it once.
+
+### Held form values (B-4701)
+
+`server/src/apps/forms-held.ts` (`s.apps.forms.held`). A public form submission with a value the `user-input`
+guardrail holds (a `require-approval` rule in enforce; a hold from a check that could not run stays a refusal) is
+kept: its screened values sealed with the tenant key (`app_form_holds`), a hold flag on the `user-input` checkpoint
+with source kind `app-form-submission` (routed to a moderation queue like any flag; the Flags screen shows the values
+in `held.content`). The submitter gets `202 {held: true}`. At most `APPS_HELD_MAX_PER_FORM` wait per form; past that a
+held value is refused as before (`422 step held-queue-full`). Signed-in submissions are still refused (`422`).
+Audited `app.form.held` (system, with the address).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/held?state=held\|accepted\|rejected\|all` | `flags:review` or `moderation:review`. `{items: [Held]}` in the caller's workspaces and clearance (default `held`, oldest first); a Held is `{id, state, label, workspaceId, app: {id, name, title}, form: {id, name, title}, held: [{field, rule, reason}], dropped, flag: {id, ref, state, queueId} \| null, recordId, decidedBy, decidedAt, reason, createdAt}` |
+| `GET /api/apps/held/:id` | Held plus `values` (the screened values, null once decided). `404` outside the caller's workspaces or clearance |
+| `POST /api/apps/held/:id/decide` `{decision: accept \| reject, reason?}` | `{recordId, state, flag: {id, ref, state}}`. Through the flag queue's hold decision (the flag becomes `approved` or `rejected`): accepting writes the record as an unheld public submission would (by no one, `source: form`, the entity's own validation; a refusal there puts the submission back to `held` and answers the entity's problem), rejecting writes nothing. The values are dropped either way. `409` when already decided. Audited `app.form.held.accepted` (with the record) or `app.form.held.rejected` |
+| `POST /api/flags/:ref/decide` `{decision: approved \| rejected}` | For an `app-form-submission` hold flag: the same as accept and reject above |
+
+The job `apps.held.purge` (every 6 h) deletes decided submissions `APPS_HELD_KEEP_DAYS` after their decision.
+
+### Reveal anomalies (B-4803)
+
+`server/src/vault/anomalies.ts` (`s.revealWatch`). Every reveal of a KV secret over the API (`GET
+/api/vault/kv/data/*path`, with the caller's address) is kept in `vault_reveals` for `VAULT_ANOMALY_HISTORY_DAYS`
+and, before the value is answered, compared with the secret's history: a **new address** (revealed from other
+addresses in that time, never from this one), an **odd hour** (at least `VAULT_ANOMALY_MIN_HISTORY` reveals and none
+in this UTC hour of the day), a **burst** (the `VAULT_ANOMALY_BURST`-th reveal by one principal within
+`VAULT_ANOMALY_BURST_SECONDS`). A signal opens a flag for the secret's owner (its owner, else its creator), who gets a
+notification (kind `vault`, with email) routed to `vault?tab=flags&flag=<id>`; one flag stays open per secret and
+principal, later signals of a new kind are added to it (and tell the owner again), later reveals are counted on it.
+Detection never refuses a reveal. Values the server resolves at use for `vault:` references carry no address and are
+not watched. Audited `vault.reveal.flagged` and `vault.reveal.flag.updated` (system, signal kinds and principal;
+never the value).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/vault/reveal-flags?state=open\|expected\|suspicious\|all` | `secrets:read`. `{flags: [Flag]}`: the flags on secrets the caller owns, or every flag for `secrets:admin`, within their clearance (default `open`). A Flag is `{id, path, label, ownerId, principal: user:<id> \| key:<id>, principalName, ip, signals: [{kind: new-address \| odd-hour \| burst, detail, at}], reveals, state: open \| expected \| suspicious, resolvedBy, resolvedAt, note, createdAt, updatedAt}` |
+| `GET /api/vault/reveal-flags/:id` | Flag plus `recent: [{principal, ip, hour, at, version, flagged}]`: the secret's reveals from a day before the flag on (at most 100). `404` for anyone but the owner and `secrets:admin` |
+| `POST /api/vault/reveal-flags/:id/resolve` `{decision: expected \| suspicious, note?}` | The Flag, resolved by the owner or a vault administrator. `409` when already resolved. Audited `vault.reveal.flag.resolved`. A suspicious reveal calls for rotating the secret (a new version) and reviewing the path policies |
+
+The job `vault.reveals.prune` (hourly) drops reveals older than `VAULT_ANOMALY_HISTORY_DAYS`.
+
+## Sprint 36c (1.6.0): image classification in Knowledge (B-8801 to B-8805)
+
+A knowledge base can hold images, describe them with a vision profile, label them with vision classifiers and search
+and filter by those labels. `server/src/knowledge/images.ts` (detection, images inside PDF and Word documents, the
+vision prompt and answer), `server/src/knowledge/service.ts`, and the `vision` engine in
+`server/src/guardrails/classifiers.ts`. Migration `038c_knowledge_images`.
+
+### Image documents (B-8801)
+
+- Uploads accept PNG, JPEG, WebP, GIF and HEIC, detected from the bytes. They pass quarantine (`knowledge.scan`: the
+  type, ClamAV when configured) like any upload; indexing then runs the image safety check (`IMAGE_SAFETY_URL`,
+  `IMAGE_SAFETY_THRESHOLD`; with `IMAGE_SAFETY_REQUIRED` an image no classifier checked is refused too). A flagged
+  image is `rejected`: its content is deleted, nothing reaches an index, and the system audit entry
+  `knowledge.image.withheld` records the score, classifier and categories.
+- The base's vision profile is asked for JSON `{caption, text}` (the text visible in the image). The answer is
+  validated; `# <name>`, the caption and `Text in the image:` with the text become the document's indexed text, so a
+  phrase from a screenshot finds it. The description is sealed with the document. A base without a vision profile, a
+  profile whose model cannot read images, or an invalid answer leaves the document `failed` with the reason and a trace
+  id (retry with `POST /knowledge/documents/:id/reindex`). The call is metered as `embed` usage with the vision model.
+- When the base has a vision profile, the images inside a PDF (JPEG, and 8-bit RGB or grey Flate images) and a Word
+  document (`word/media/`) become its **parts**: documents of their own with `parentId`, named `<document>, image <n>`,
+  at least the document's label and with its row access, through quarantine and the safety check. At most 20 per
+  document; images under 1 KB are skipped. Unchanged images keep their document on a re-index, images no longer in the
+  document are removed, and removing the document removes its parts. A scanned PDF with no text layer but with images
+  is `indexed` with no chunks of its own. A part cannot be relabelled below its document (`409`).
+
+### Vision classifiers (B-8802, B-8805)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/classifiers` `{name, engine: vision, labels, profile, instructions?}` | A draft vision classifier; `profile` names the tenant profile whose model reads images |
+| `PATCH /api/admin/classifiers/:id` `{profile?, instructions?, thresholds?}` | A new version, as for the other model engines. A change to a published vision classifier re-labels the images of every base naming it |
+| `POST /api/admin/classifiers/:id/samples` `{items: [{image, expected, label?}]}` | Image cases in the eval-set format: `image` is base64 (a PNG, JPEG, WebP, GIF or HEIC image, `422` otherwise), `expected` a label or `none`. A vision classifier refuses text cases and the other engines refuse images (`422`). `201 {added, samples}`; audited `classifier.samples.added` with `images: true` |
+| `PUT /api/admin/classifiers/:id/samples/image?expected=<label>&label=<label>` (body: the image) | One image case as a raw upload (up to `ATTACHMENT_MAX_BYTES`), for images larger than a JSON request allows. `409` for a text classifier. `201 {added, samples}` |
+| `POST /api/classify` `{classifier, image, label?}` | A vision classifier scores one image (base64) synchronously; nothing is stored. `422` with text for a vision classifier or an image for another engine; `503` when the model is unavailable |
+
+The vision profile is asked to score every label from 0 to 1 and answer `{"scores": {"<label>": <score>}}`; an
+unknown label, a score outside 0 to 1 or no `scores` is an error (the case counts in `errors` during an evaluation). A
+label at or above its threshold is a hit, as for `llm`. Image cases are sealed in the blob store
+(`eval-images/<tenant>/<case id>`); `samples` and the publish rule count only image cases for a vision classifier (and
+only text cases for the others), so a vision classifier publishes after an evaluation with at least 200 image cases
+per label (`409 Eval set too small` otherwise). The evaluation scores the image cases of the dataset.
+
+### Image labels on knowledge bases (B-8802, B-8803)
+
+| Method and path | What it does |
+| --- | --- |
+| `PATCH /api/knowledge/bases/:id` `{visionProfile?: <profile> \| null, imageClassifiers?: [<id or slug>]}` | The vision profile must route to a model with the `vision` capability, and the profile and the model must be cleared for the base's label (`409`). Image classifiers (at most 10) must be published `vision` classifiers (`409` for a draft or another engine, `404` unknown). A newly named classifier labels the base's images in the background; the labels of one no longer named are deleted. Audited `knowledge.updated` with `visionProfile` and `imageClassifiers` in the detail |
+| `GET /api/knowledge/models` | Adds `visionProfiles: [{name, displayName, model, label}]` (published profiles whose model reads images) and `imageClassifiers: [{id, slug, name, status, version, labels}]` (the tenant's vision classifiers, drafts included, so the form can say why one cannot be picked) |
+| `GET /api/knowledge/bases/:id/documents?media=image&labels=a,b&labelsAll=c&minScore=0.6` | `media=image` lists image documents only; `labels` (any of them) and `labelsAll` (every one), comma-separated, keep the image documents carrying them at or above `minScore`, or at or above each classifier's threshold without it |
+| `GET /api/knowledge/bases/:id/labels` | `[{label, documents}]`: the labels the base's images carry (hits), counted over documents at or below the caller's clearance |
+| `POST /api/knowledge/bases/:id/reclassify` | `202 {jobId, images}`: labels every indexed image again with every classifier the base names (`knowledge.reclassify`, forced). Manage access; `409` when the base names no image classifier. Audited `knowledge.reclassify.started` |
+| `GET /api/knowledge/documents/:id` | Adds `caption`, `text`, `visionModel` (an image's description, `null` otherwise), `labels` and `parts: [document]` (the images of a PDF or Word document, at or below the caller's clearance); `kb` carries `imageClassifiers` (how many the base names) |
+| `GET /api/knowledge/documents/:id/thumbnail` | The image itself (PNG, JPEG, WebP or GIF), for readers cleared for its label and allowed by its row access, once its safety check passed and it was indexed; `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cache-Control: private, no-store`. `404` for HEIC and for quarantined, rejected or failed images. Nothing is resized on the server |
+| `POST /api/knowledge/documents/:id/reclassify` | `202 {jobId, images: 1}`: labels one indexed image again (`knowledge.classify`). Manage access. Audited `knowledge.document.reclassify.started` |
+
+A document gains `parentId`, `media: image | null`, `thumbnail` (the URL above, or `null`), `safetyScore` and, for an
+image, `labels: [{label, score, hit, classifierId, classifier, version}]` (hits first, then by score). Labels are stored
+per document, classifier and label in `knowledge_doc_labels` with the score, whether it reached the threshold and the
+classifier version that scored it; they carry the image's own label and follow a relabel.
+
+Jobs: `knowledge.classify` `{documentId}` scores one indexed image with the base's published vision classifiers (queued
+after the image is indexed, when the base names any); `knowledge.reclassify` `{kbId, classifierId?, force?}` labels the
+base's images again, skipping images the classifier's current version already labelled unless forced, and ends with
+the system audit entry `knowledge.reclassified` `{images, classified, failed, force}`. A published classifier's new
+version (`PATCH` while published, or `publish`) queues `knowledge.reclassify` for each base naming it, so the images are
+re-labelled without being uploaded again.
+
+### Search with label filters (B-8803)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/knowledge/search` `{kbIds, query, k?, rerank?, labels?: {any?: [label], all?: [label], minScore?}}` | With `labels`, only the chunks of image documents carrying any of `any` and every one of `all` (at or above `minScore`, or each classifier's threshold) are ranked; the filter is applied inside the ranking, at or below the caller's clearance |
+
+An image hit adds `image: {caption, ocr, labels, thumbnail}`: `ocr` is an excerpt of the image's text (300
+characters). The caption and excerpt pass the `context` checkpoint as well as the chunk: a blocking rule withholds them
+(`null`), a redacting rule rewrites them.
+
+The built-in tool **`knowledge_search`** (seeded by `038c`, `read`, ceiling `restricted`) is the knowledge step of
+agents and workflows: `{kbIds (1 to 20), query, k? (1 to 20, default 8), labels?: {any?, all?, minScore?}}` returns
+`{ceiling, hits: [{kb, document, documentId, section, label, score, text | withheld, image?}]}`. It needs
+`knowledge:read`, searches only published bases shared with the caller (refused otherwise), and searches at most at the
+label of the conversation or run it is called from, capped by the caller's clearance.
+

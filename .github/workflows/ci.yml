@@ -45,11 +45,21 @@ jobs:
             e2e/package-lock.json
       # The suite starts the real server in-process (e2e/server.ts through tsx), so it needs the workspace's modules.
       - run: npm ci
-      - name: Install the suite and Chromium
+      - name: Install the suite
         working-directory: e2e
+        run: npm ci
+      # Twice on 2026-10-07 the combined install sat silent until the job's 40 minutes ran out. Each part now has its own
+      # time limit and up to three tries, so a stuck download fails fast and visibly instead of cancelling the job.
+      - name: Install Chromium's system packages
+        working-directory: e2e
+        timeout-minutes: 15
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          for i in 1 2 3; do timeout 300 npx playwright install-deps chromium && exit 0; echo "install-deps attempt $i failed or timed out"; sleep 10; done; exit 1
+      - name: Install Chromium
+        working-directory: e2e
+        timeout-minutes: 15
+        run: |
+          for i in 1 2 3; do timeout 300 npx playwright install chromium && exit 0; echo "browser download attempt $i failed or timed out"; sleep 10; done; exit 1
       - name: Run
         working-directory: e2e
         run: npx playwright test

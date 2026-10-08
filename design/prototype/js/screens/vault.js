@@ -76,9 +76,18 @@
     d.addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (!b) return; d.remove(); pick(b.dataset.v); });
     setTimeout(() => document.addEventListener('click', function off(ev) { if (!d.contains(ev.target)) { d.remove(); document.removeEventListener('click', off); } }), 0);
   }
+  // 1.6.0 (B-4803): flags raised on unusual reveals, for the secret's owner
+  const FLAGS0 = () => [
+    { id: 'rf-1', path: 'kv/apps/erp/db', label: 'confidential', owner: 'Mara Okafor', who: 'tweber', ip: '203.0.113.47', signals: [{ kind: 'new-address', detail: 'First reveal from 203.0.113.47 in 30 days; the secret was revealed 41 times from other addresses.', at: '14:02:11' }, { kind: 'burst', detail: '5 reveals by the same caller within 60 s.', at: '14:02:39' }], reveals: 7, state: 'open', raised: '19 Sep 14:02',
+      recent: [['tweber', '203.0.113.47', '14:02:58', 4, true], ['tweber', '203.0.113.47', '14:02:51', 4, true], ['tweber', '203.0.113.47', '14:02:44', 4, true], ['tweber', '203.0.113.47', '14:02:39', 4, true], ['tweber', '203.0.113.47', '14:02:30', 4, true], ['tweber', '203.0.113.47', '14:02:18', 4, true], ['tweber', '203.0.113.47', '14:02:11', 4, true], ['mokafor', '10.20.4.17', '09:41:05', 4, false]] },
+    { id: 'rf-2', path: 'kv/identity/ldap-bind', label: 'confidential', owner: 'Jonas Lindqvist', who: 'jlindqvist', ip: '10.20.4.31', signals: [{ kind: 'odd-hour', detail: 'Revealed at 03:00 UTC; none of its last 64 reveals were in that hour.', at: '03:14:40' }], reveals: 1, state: 'open', raised: '19 Sep 03:14',
+      recent: [['jlindqvist', '10.20.4.31', '03:14:40', 6, true], ['jlindqvist', '10.20.4.31', '18 Sep 16:02', 6, false]] },
+    { id: 'rf-3', path: 'kv/channels/support-mail', label: 'internal', owner: 'Lena Hoffmann', who: 'lhoffmann', ip: '198.51.100.20', signals: [{ kind: 'new-address', detail: 'First reveal from 198.51.100.20 in 30 days; the secret was revealed 12 times from other addresses.', at: '17 Sep 08:10' }], reveals: 1, state: 'expected', raised: '17 Sep 08:10', resolvedBy: 'Lena Hoffmann', note: 'New office network', recent: [] }
+  ];
+  const SIGNAL = { 'new-address': 'new address', 'odd-hour': 'odd hour', burst: 'burst' };
   const init = (st) => {
     if (st.secrets) return;
-    st.secrets = SECRETS0(); st.keys = KEYS0(); st.grants = GRANTS0(); st.engines = ENGINES0(); st.leases = LEASES0();
+    st.secrets = SECRETS0(); st.keys = KEYS0(); st.grants = GRANTS0(); st.engines = ENGINES0(); st.leases = LEASES0(); st.rflags = FLAGS0(); st.rfFilter = 'open'; st.rfSel = 'rf-1';
     st.tab = 'kv'; st.sel = 'kv/apps/erp/db'; st.query = ''; st.selKey = 'ledger-fields'; st.subjectFilter = 'all'; st.effectFilter = 'all'; st.selEngine = 'ledger-pg'; st.leaseFilter = 'all'; st.leaseEngine = 'all';
     st.revealed = {}; st.shown = {}; st.explainIn = { user: 'tweber', path: 'kv/apps/erp/db', capability: 'read', key: '' }; st.explainOut = null; st.cas = null; st.gone = null; st.denied = null; st.password = null;
   };
@@ -96,6 +105,8 @@
       { title: 'CAS conflict', tone: 'warn', text: 'A write with cas 3 while the current version is 4 is refused with 409 and currentVersion. The path requires cas, so every write must name the version it saw.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'kv'; st.sel = 'kv/apps/erp/db'; st.cas = { given: 3, current: 4 }; ctx.rerender(); } },
       { title: 'Version destroyed', tone: 'neutral', text: 'Reading version 1 answers 410 with state destroyed: the sealed values are gone for good, the version number stays in the metadata.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'kv'; st.sel = 'kv/apps/erp/db'; st.gone = { version: 1, state: 'destroyed' }; ctx.rerender(); } },
       { title: 'Lease revoke failed', tone: 'warn', text: 'The database refused DROP USER. The lease waits in revoking with lastError and attempts; the sweeper retries with back-off (30 s doubling to an hour) and the connection admins were notified once.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'leases'; st.leaseFilter = 'revoking'; st.leaseEngine = 'all'; st.selLease = 'l-855'; ctx.rerender(); } },
+      { title: 'Burst from a new address', tone: 'danger', text: 'tweber revealed kv/apps/erp/db from 203.0.113.47, an address it was never revealed from, five times in a minute. The first reveal raised a flag for its owner, Mara Okafor; the reveals were answered.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'flags'; st.rfFilter = 'open'; if (!st.rflags.some((f) => f.id === 'rf-1')) st.rflags = FLAGS0(); st.rflags.find((f) => f.id === 'rf-1').state = 'open'; st.rfSel = 'rf-1'; ctx.rerender(); } },
+      { title: 'No flags', tone: 'ok', text: 'Nothing unusual: every reveal came from an address, an hour and a pace the secrets have seen before.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'flags'; st.rfFilter = 'open'; st.rflags = st.rflags.filter((f) => f.state !== 'open'); ctx.rerender(); } },
       { title: 'Rotation overdue', tone: 'danger', text: 'kv/apps/erp/api has a 30 day schedule and was last written on 16 Aug. The rotation check sent the due notice on 11 Sep and the overdue notice on 15 Sep to its owner, Felix Brandt.', apply(ctx) { init(ctx.state); const st = ctx.state; st.tab = 'kv'; st.sel = 'kv/apps/erp/api'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -103,8 +114,9 @@
       if (ctx.params.path) { st.tab = 'kv'; if (st.secrets.some((s) => s.path === ctx.params.path)) st.sel = ctx.params.path; delete ctx.params.path; }
       if (ctx.params.key) { st.tab = 'transit'; if (st.keys.some((k) => k.name === ctx.params.key)) st.selKey = ctx.params.key; delete ctx.params.key; }
       if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
+      if (ctx.params.flag) { st.tab = 'flags'; if (st.rflags.some((f) => f.id === ctx.params.flag)) { st.rfSel = ctx.params.flag; st.rfFilter = 'all'; } delete ctx.params.flag; }
       const overdue = st.secrets.filter((s) => s.overdue).length;
-      const tabs = UI.tabs([{ id: 'kv', label: 'KV secrets', count: st.secrets.length }, { id: 'transit', label: 'Transit keys', count: st.keys.length }, { id: 'policies', label: 'Policies', count: st.grants.length }, { id: 'leases', label: 'Database leases', count: st.leases.filter((l) => l.state === 'active').length }], st.tab);
+      const tabs = UI.tabs([{ id: 'kv', label: 'KV secrets', count: st.secrets.length }, { id: 'transit', label: 'Transit keys', count: st.keys.length }, { id: 'policies', label: 'Policies', count: st.grants.length }, { id: 'leases', label: 'Database leases', count: st.leases.filter((l) => l.state === 'active').length }, { id: 'flags', label: 'Reveal flags', count: st.rflags.filter((f) => f.state === 'open').length }], st.tab);
       let left = '', body = '', insp = '';
 
       // ---------------- KV ----------------
@@ -184,6 +196,23 @@
         }
       }
 
+      // ---------------- Reveal flags (B-4803) ----------------
+      if (st.tab === 'flags') {
+        const rows = st.rflags.filter((f) => st.rfFilter === 'all' || f.state === st.rfFilter);
+        if (!rows.some((f) => f.id === st.rfSel)) st.rfSel = rows.length ? rows[0].id : null;
+        const f = st.rflags.find((x) => x.id === st.rfSel && rows.indexOf(x) >= 0) || null;
+        const statePill = (x) => UI.pill(x, x === 'open' ? 'warn' : x === 'suspicious' ? 'danger' : 'ok');
+        body = UI.notice('<b>Unusual reveals raise a flag for the secret\'s owner.</b> Each reveal over the API is compared with the secret\'s last 30 days: an address it was never revealed from, an hour of the day it was never revealed in, or a burst of reveals by one caller. The reveal is still answered; the owner is notified and decides whether it was expected.', 'info')
+          + '<div class="toolbar">' + UI.seg([{ id: 'open', label: 'Open' }, { id: 'expected', label: 'Expected' }, { id: 'suspicious', label: 'Suspicious' }, { id: 'all', label: 'All' }], st.rfFilter, 'data-rfseg') + '<span class="muted right" style="font-size:12px">Yours, or every flag with secrets:admin</span></div>'
+          + UI.table(['Secret', 'Revealed by', 'Address', 'Signals', { label: 'Reveals', right: true }, 'State', 'Raised'], rows.map((x) => ({ cells: ['<span class="mono">' + esc(x.path) + '</span> ' + UI.label(x.label, { sm: true }), esc(x.who), '<span class="mono">' + esc(x.ip) + '</span>', x.signals.map((g) => UI.pill(SIGNAL[g.kind], g.kind === 'burst' ? 'danger' : 'warn')).join(' '), '<span class="num">' + x.reveals + '</span>', statePill(x.state), esc(x.raised)], attrs: 'data-rflag="' + x.id + '"', selected: x.id === st.rfSel })), { minWidth: '820px', emptyTitle: 'No flags', emptyText: st.rfFilter === 'open' ? 'Nothing unusual: every reveal came from an address, an hour and a pace these secrets have seen before.' : 'No flags in this state.' });
+        if (f) insp = '<div class="hstack"><div class="eyebrow grow">Reveal flag</div>' + UI.label(f.label, { sm: true }) + '</div><div style="font-size:15px;font-weight:600;overflow-wrap:anywhere" class="mono">' + esc(f.path) + '</div>'
+          + UI.kv([['Revealed by', esc(f.who)], ['Address', '<span class="mono">' + esc(f.ip) + '</span>'], ['Owner', esc(f.owner)], ['Reveals counted', String(f.reveals)], ['State', statePill(f.state) + (f.resolvedBy ? ' ' + '<span class="muted" style="font-size:12px">by ' + esc(f.resolvedBy) + '</span>' : '')]].concat(f.note ? [['Note', esc(f.note)]] : []), 1)
+          + '<div class="eyebrow">Signals</div>' + UI.timeline(f.signals.map((g) => ({ title: esc(SIGNAL[g.kind]), text: esc(g.detail), meta: esc(g.at), tone: g.kind === 'burst' ? 'danger' : 'warn' })))
+          + (f.recent.length ? '<div class="eyebrow">Recent reveals of the secret</div>' + UI.table(['By', 'Address', 'At', { label: 'v', right: true }], f.recent.map((r) => [esc(r[0]) + (r[4] ? ' ' + UI.pill('flagged', 'warn') : ''), '<span class="mono">' + esc(r[1]) + '</span>', esc(r[2]), '<span class="num">' + r[3] + '</span>']), { clickable: false, minWidth: '0', cls: 'bare' }) : '')
+          + (f.state === 'suspicious' ? UI.notice('Marked suspicious. Rotate the secret: write a new version and update what uses it, then destroy the old versions.', 'danger', UI.btn('Open the secret', { size: 'xs', attrs: 'data-gopath="' + esc(f.path) + '"' })) : '')
+          + (f.state === 'open' ? '<div class="hstack wrap gap6">' + UI.btn('Expected', { kind: 'primary', size: 'sm', attrs: 'data-rfresolve="expected"' }) + UI.btn('Suspicious', { kind: 'danger', size: 'sm', attrs: 'data-rfresolve="suspicious"' }) + UI.btn('Open the secret', { size: 'sm', attrs: 'data-gopath="' + esc(f.path) + '"' }) + '</div>' : '');
+      }
+
       root.innerHTML = '<style>'
         + '#main > .page > *{flex-shrink:0}'
         + '#main .vault-group{display:flex;flex-direction:column;gap:2px}'
@@ -197,6 +226,9 @@
 
       // ---- events ----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      ctx.on('click', '[data-rfseg]', (e) => { const b = e.target.closest('[data-seg]'); if (b) { st.rfFilter = b.dataset.seg; ctx.rerender(); } });
+      ctx.on('click', 'tr[data-rflag]', (e, t) => { st.rfSel = t.dataset.rflag; ctx.rerender(); });
+      ctx.on('click', '[data-rfresolve]', (e, t) => { const f = st.rflags.find((x) => x.id === st.rfSel); if (!f) return; const d = t.dataset.rfresolve; ctx.confirm({ title: d === 'expected' ? 'Mark as expected' : 'Mark as suspicious', tone: d === 'expected' ? 'info' : 'danger', body: '<p class="fg2" style="margin:0">' + (d === 'expected' ? 'Closes the flag: you recognise who revealed ' + esc(f.path) + ' and from where. Later reveals from the address are no longer new.' : 'Closes the flag as suspicious. Rotate the secret next: write a new version, update what uses it and destroy the old versions.') + ' Audited as vault.reveal.flag.resolved.</p>' + UI.field('Note (optional)', UI.textarea('', { rows: 2 })), kv: [['Revealed by', esc(f.who)], ['Address', esc(f.ip)]], ok: d === 'expected' ? 'Expected' : 'Suspicious' }).then((ok) => { if (!ok) return; f.state = d; f.resolvedBy = 'Mara Okafor'; st.rfFilter = 'all'; ctx.rerender(); ctx.toast('Flag on ' + esc(f.path) + ' marked ' + d + '.' + (d === 'suspicious' ? ' Rotate the secret next.' : ''), d === 'suspicious' ? 'warn' : 'ok', 5000); }); });
       ctx.on('click', '[data-path]', (e, t) => { st.sel = t.dataset.path; st.cas = null; st.gone = null; ctx.rerender(); });
       ctx.on('click', '[data-gopath]', (e, t) => { e.preventDefault(); st.tab = 'kv'; st.sel = t.dataset.gopath; ctx.rerender(); });
       ctx.on('click', 'tr[data-key]', (e, t) => { st.selKey = t.dataset.key; ctx.rerender(); });

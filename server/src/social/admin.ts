@@ -463,6 +463,9 @@ export class SocialAdmin {
           name: String(g.name),
           workspaceId: String(g.workspace_id),
           workspace: wsName.get(String(g.workspace_id)) ?? null,
+          // 1.6.0 (B-4401, B-4405): a channel names its group; a group its category.
+          parentId: (g.parent_id as string | null | undefined) ?? null,
+          categoryId: (g.category_id as string | null | undefined) ?? null,
           label: g.label as Label,
           visibility: String(g.visibility),
           joinMode: String(g.join_mode),

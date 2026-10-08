@@ -562,7 +562,13 @@ export class StorageService {
       }
     }
     const kinds = (['files', 'versions', 'trash', 'media', 'knowledge', 'attachments'] as const).map((k) => ({ kind: k, bytes: list.reduce((a, w) => a + w[k], 0) }));
+    // 1.6.0 (B-4601): what shared objects save, per tenant (identical content is shared within a tenant only).
+    const tenantNames = new Map(((await db('tenants').select('id', 'name')) as { id: string; name: string }[]).map((t) => [t.id, t.name]));
+    const perTenant = (await s.files.dedup.savings()).map((d) => ({ ...d, tenant: tenantNames.get(d.tenantId) ?? d.tenantId })).sort((a, b) => b.savedBytes - a.savedBytes);
+    const sum = (k: 'blobs' | 'shared' | 'references' | 'logicalBytes' | 'storedBytes' | 'savedBytes') => perTenant.reduce((a, d) => a + d[k], 0);
+    const dedup = { tenants: perTenant, blobs: sum('blobs'), shared: sum('shared'), references: sum('references'), logicalBytes: sum('logicalBytes'), storedBytes: sum('storedBytes'), savedBytes: sum('savedBytes') };
     return {
+      dedup,
       workspaces: list,
       users: [...byUser.entries()].map(([id, e]) => ({ id, name: names.get(id) ?? id, bytes: e.bytes, workspaces: e.workspaces })).sort((a, b) => b.bytes - a.bytes).slice(0, 200),
       kinds,

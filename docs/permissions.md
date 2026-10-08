@@ -39,7 +39,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `knowledge:read` | no | 23 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
+| `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
 | `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
@@ -49,8 +49,8 @@ An admin permission is any permission outside the member baseline: a custom role
 | `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
-| `flags:review` | yes | 10 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
-| `classifiers:manage` | yes | 12 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
+| `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
@@ -66,7 +66,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `prompts:manage` | yes | 4 | x | x |  |  |  |  | x |  |  |  |  |  |  |  |
 | `billing:read` | yes | 5 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `billing:manage` | yes | 5 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `secrets:read` | no | 17 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
+| `secrets:read` | no | 20 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
 | `secrets:write` | yes | 4 | x | x |  |  |  |  |  |  |  | x |  |  |  |  |
 | `secrets:admin` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `pki:manage` | yes | 32 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
@@ -78,7 +78,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:check` | yes | 3 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:report` | no | 2 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `moderation:appeal` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `moderation:review` | yes | 9 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
+| `moderation:review` | yes | 12 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `moderation:sanction` | yes | 3 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
@@ -86,14 +86,14 @@ An admin permission is any permission outside the member baseline: a custom role
 | `apps:design` | yes | 17 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `groups:read` | no | 42 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `groups:write` | no | 19 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:read` | no | 46 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `groups:write` | no | 20 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `groups:manage` | yes | 0 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:manage` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `channels:review` | yes | 12 | x | x |  |  | x |  |  |  |  |  | x |  |  |  |
 | `social:read` | no | 14 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `social:write` | no | 16 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `social:manage` | yes | 19 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `social:manage` | yes | 23 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:read` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -301,6 +301,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/knowledge/search`
 - `POST /api/knowledge/sources/{id}/sync`
 - `PUT /api/knowledge/bases/{id}/uploads`
+- `GET /api/knowledge/bases/{id}/labels`
+- `GET /api/knowledge/documents/{id}/thumbnail`
+- `POST /api/knowledge/bases/{id}/reclassify`
+- `POST /api/knowledge/documents/{id}/reclassify`
 
 ### `models:read`
 
@@ -471,6 +475,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/{ref}/reassign`
 - `POST /api/flags/{ref}/rule`
 - `GET /api/eval-sets` (or another permission)
+- `GET /api/apps/held` (or another permission)
+- `GET /api/apps/held/{id}` (or another permission)
+- `POST /api/apps/held/{id}/decide` (or another permission)
 
 ### `classifiers:manage`
 
@@ -484,6 +491,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/classifiers/{id}/samples`
 - `POST /api/admin/classifiers/{id}/train`
 - `PUT /api/admin/label-names`
+- `PUT /api/admin/classifiers/{id}/samples/image`
 - `GET /api/eval-sets` (or another permission)
 - `POST /api/classify` (or another permission)
 
@@ -872,6 +880,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/vault/transit/rewrap/{name}`
 - `POST /api/vault/transit/sign/{name}`
 - `POST /api/vault/transit/verify/{name}`
+- `GET /api/vault/reveal-flags`
+- `GET /api/vault/reveal-flags/{id}`
+- `POST /api/vault/reveal-flags/{id}/resolve`
 
 ### `secrets:write`
 
@@ -1082,6 +1093,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/moderation/appeals/{ref}` (or another permission)
 - `GET /api/moderation/queues` (or another permission)
 - `POST /api/moderation/appeals` (or another permission)
+- `GET /api/apps/held` (or another permission)
+- `GET /api/apps/held/{id}` (or another permission)
+- `POST /api/apps/held/{id}/decide` (or another permission)
 
 ### `moderation:sanction`
 
@@ -1180,11 +1194,15 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/calendar/events/{id}/attendees`
 - `GET /api/calendar/events/{id}/reminders`
 - `GET /api/calendar/feeds`
+- `GET /api/group-categories`
 - `GET /api/group-requests`
 - `GET /api/groups`
+- `GET /api/groups/discover`
+- `GET /api/groups/trending`
 - `GET /api/groups/{id}`
 - `GET /api/groups/{id}/candidates`
 - `GET /api/groups/{id}/cases`
+- `GET /api/groups/{id}/channels`
 - `GET /api/groups/{id}/events`
 - `GET /api/groups/{id}/members`
 - `GET /api/groups/{id}/posts`
@@ -1235,6 +1253,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/group-requests/{id}/accept`
 - `POST /api/group-requests/{id}/decline`
 - `POST /api/groups`
+- `POST /api/groups/{id}/channels`
 - `POST /api/groups/{id}/events`
 - `POST /api/groups/{id}/invites`
 - `POST /api/groups/{id}/join`
@@ -1308,6 +1327,7 @@ No route requires it directly; handlers and services check it.
 
 ### `social:manage`
 
+- `DELETE /api/admin/social/group-categories/{id}`
 - `DELETE /api/admin/social/trending/exclusions/{tag}`
 - `GET /api/admin/social/conversations`
 - `GET /api/admin/social/exports/{id}/download`
@@ -1317,10 +1337,13 @@ No route requires it directly; handlers and services check it.
 - `GET /api/admin/social/messaging`
 - `GET /api/admin/social/relations`
 - `GET /api/social/admin/users/{id}`
+- `PATCH /api/admin/social/group-categories/{id}`
 - `POST /api/admin/social/calendar-feeds/{id}/revoke`
 - `POST /api/admin/social/digest/test`
 - `POST /api/admin/social/exports`
 - `POST /api/admin/social/exports/{id}/withdraw`
+- `POST /api/admin/social/group-categories`
+- `POST /api/admin/social/groups/trending/run`
 - `POST /api/admin/social/groups/{id}/archive`
 - `POST /api/admin/social/groups/{id}/transfer`
 - `POST /api/admin/social/trending/exclusions`
