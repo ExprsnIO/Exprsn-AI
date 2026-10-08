@@ -19,4 +19,17 @@ test.describe('Profiles', () => {
     await confirmDialog(page, 'Publish');
     await expect(page.locator('.leftpane')).toContainText(/summariser-8b\s*llama3\.1:8b\s*published/);
   });
+
+  test('B-6901: trust marking is on by default and is switched off as a new version', async ({ page }) => {
+    await open(page, 'profiles?profile=summariser-8b');
+    const check = page.locator('input[data-key="trustMarking"]');
+    await expect(check).toBeChecked();
+    await check.uncheck();
+    await page.locator('[data-save]').click();
+    const modal = page.locator('#overlay .modal');
+    await expect(modal).toContainText('Untrusted content marking');
+    await modal.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('#toasts .toast').filter({ hasText: 'saved as version' }).first()).toBeVisible();
+    await expect(page.locator('.pf-yaml')).toContainText('trustMarking: off');
+  });
 });

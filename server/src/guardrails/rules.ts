@@ -23,7 +23,9 @@ export const mechanismSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('allow-list'), field: z.enum(['domains']).default('domains'), values: z.array(z.string().trim().toLowerCase().min(1).max(253)).max(500) }).strict(),
   z.object({ kind: z.literal('meta'), key: z.string().trim().regex(/^[A-Za-z][\w.-]{0,62}$/), values: z.array(z.string().max(100)).min(1).max(50) }).strict(),
   z.object({ kind: z.literal('classifier'), classifier: slug, label: z.string().trim().min(1).max(100), threshold: z.number().min(0).max(1).optional() }).strict(),
-  z.object({ kind: z.literal('guard-model'), profile: z.string().trim().min(1).max(63), categories: z.array(z.string().regex(/^S\d{1,2}$/)).max(20).default([]) }).strict()
+  z.object({ kind: z.literal('guard-model'), profile: z.string().trim().min(1).max(63), categories: z.array(z.string().regex(/^S\d{1,2}$/)).max(20).default([]) }).strict(),
+  // 1.6.0 (B-6902): instructions aimed at the model in untrusted text, by the heuristic classifier or a guard model.
+  z.object({ kind: z.literal('injection'), engine: z.enum(['heuristic', 'guard-model']).default('heuristic'), profile: z.string().trim().min(1).max(63).optional(), threshold: z.number().min(0).max(1).default(0.6) }).strict()
 ]);
 export type Mechanism = z.infer<typeof mechanismSchema>;
 
@@ -48,7 +50,7 @@ export const actionRank = (a: GuardAction): number => GUARD_ACTIONS.indexOf(a);
 export const SEVERITY_SLA_MINUTES = { high: 60, medium: 240, low: 2880 } as const;
 
 /** Mechanisms that can fail at run time (a model or a trained classifier); the rest are deterministic. */
-export const fallible = (m: Mechanism): boolean => m.kind === 'guard-model' || m.kind === 'classifier';
+export const fallible = (m: Mechanism): boolean => m.kind === 'guard-model' || m.kind === 'classifier' || (m.kind === 'injection' && m.engine === 'guard-model');
 
 /** Validates a list of rules: schema, unique ids, and patterns that compile under RE2. Throws a 422 problem. */
 export function validateRules(input: unknown): Rule[] {
@@ -70,6 +72,7 @@ export function checkRule(r: Rule): void {
     const c = compilePattern(r.mechanism.pattern);
     if (!c.ok) throw new HttpProblem(422, 'Invalid pattern', `RE2 rejected the pattern of ${r.id} at position ${c.error.pos}: ${c.error.msg}.`, { extensions: { ruleId: r.id, pattern: r.mechanism.pattern, ...c.error } });
   }
+  if (r.mechanism.kind === 'injection' && r.mechanism.engine === 'guard-model' && !r.mechanism.profile) throw new HttpProblem(422, 'Invalid rule', `${r.id}: the guard-model engine needs a profile.`, { extensions: { ruleId: r.id } });
   if (r.mechanism.kind === 'label' && r.mechanism.against === 'fixed' && !r.mechanism.label) throw new HttpProblem(422, 'Invalid rule', `${r.id}: a fixed label check needs a label.`, { extensions: { ruleId: r.id } });
 }
 

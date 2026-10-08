@@ -126,7 +126,7 @@ export function agentRoutes(s: Services): Router {
   r.get('/mcp/servers', invoke, async (req, res) => {
     const p = principalOf(req);
     const list = (await s.mcp.servers(p.tenantId)).filter((x) => x.state === 'active' && x.auth === 'user');
-    res.json(await Promise.all(list.map(async (x) => ({ id: x.id, name: x.name, description: x.description, health: x.health, ...(await s.mcp.tokenStatus(p, x.id)) }))));
+    res.json(await Promise.all(list.map(async (x) => ({ id: x.id, name: x.name, description: x.description, health: x.health, url: x.url, oauth: !!(await s.mcp.oauth.config(x.id)), ...(await s.mcp.tokenStatus(p, x.id)) }))));
   });
 
   r.put('/mcp/servers/:id/token', invoke, async (req, res) => {
@@ -141,8 +141,10 @@ export function agentRoutes(s: Services): Router {
   r.delete('/mcp/servers/:id/token', invoke, async (req, res) => {
     const p = principalOf(req);
     const srv = await s.mcp.server(p.tenantId, String(req.params.id));
-    if (!(await s.mcp.removeToken(p, srv))) throw notFound('Token');
-    await audit(req, 'mcp.token.removed', { mcpServer: srv.id, name: srv.name });
+    // B-7103: a token from the OAuth flow is revoked at the authorization server before it is forgotten.
+    const out = await s.mcp.disconnect(p.userId, srv);
+    if (!out.removed) throw notFound('Token');
+    await audit(req, 'mcp.token.removed', { mcpServer: srv.id, name: srv.name }, { revoked: out.revoked });
     res.status(204).end();
   });
 

@@ -759,6 +759,8 @@ table.dt .actions{white-space:nowrap}
     { id: 'jira-internal.create_issue', kind: 'tool', side: 'write', version: '1.0.4', label: 'confidential', egress: 'app-internal', status: 'published', owner: 'Platform tools team', scopes: 'tools:invoke, jira:write', confirm: 'always', rate: '30 per user per hour', secrets: 'per-user token vault', hint: 'destructiveHint: false (untrusted, class set at review)', hash: 'e2b84d10', impl: 'MCP server tool, jira-internal', checks: [['Schema valid', true], ['Dependency scan clean', true], ['Declared egress matches observed', true]] },
     { id: 'kb.delete_documents', kind: 'tool', side: 'destructive', version: '1.2.0', label: 'confidential', egress: 'none', status: 'published', owner: 'Platform tools team', scopes: 'kb:admin', confirm: 'always', rate: '10 per user per hour', secrets: 'none', hint: 'destructiveHint: true (applied after review)', hash: '91d0c4ee', impl: 'Built-in TypeScript', checks: [['Schema valid', true], ['Dependency scan clean', true], ['Declared egress matches observed', true]] },
     { id: 'mail.send_internal', kind: 'tool', side: 'external-comms', version: '0.9.0', label: 'internal', egress: 'mail-relay', status: 'in review', owner: 'Platform tools team', scopes: 'tools:invoke', confirm: 'always', rate: '20 per user per hour', secrets: 'ref: smtp-relay-cred', hint: 'openWorldHint: false (untrusted, not applied)', hash: '7fa2c913', impl: 'Built-in TypeScript', submitted: '18 Sep, Platform tools team', checks: [['Schema valid', true], ['Dependency scan clean', true], ['Declared egress matches observed', false]], egressNote: 'Observed a connection to ldap.northwind.internal that is not declared.' },
+    { id: 'catalog.get_item', kind: 'tool', side: 'read-only', version: '1.0.0', label: 'internal', egress: 'public: api.partner.example', status: 'published', owner: 'Platform tools team', scopes: 'tools:invoke', confirm: 'never', rate: '120 per user per hour', secrets: 'vault:apis/catalog#token, resolved as the author', hint: 'none (HTTP tool)', hash: '0b7e2a91', impl: 'HTTP request', http: { method: 'GET', url: 'https://api.partner.example/v1/items/{id}', params: 'id (path, string)', headers: 'Authorization: Bearer vault:apis/catalog#token', pointer: '/data/name', timeout: '10 s', cap: '64 KB', calls: '212 in the last day, 1 failed, median 140 ms' }, checks: [['Schema valid', true], ['HTTP request', true], ['Secrets scan', true]] },
+    { id: 'crm.update_contact', kind: 'tool', side: 'write', version: '0.2.0', label: 'confidential', egress: 'internal: crm.northwind.internal', status: 'draft', owner: 'Mara Okafor', scopes: 'tools:invoke', confirm: 'always', rate: '30 per user per hour', secrets: 'vault:apps/crm#token, resolved as the author', hint: 'none (HTTP tool)', hash: '6d40c2f8', impl: 'HTTP request', http: { method: 'PATCH', url: 'https://crm.northwind.internal/api/contacts/{contactId}', params: 'contactId (path, string); other arguments as the JSON body', headers: 'Authorization: Bearer vault:apps/crm#token', pointer: '/contact', timeout: '15 s', cap: '64 KB', calls: 'no calls yet' }, checks: [['Schema valid', true], ['HTTP request', true], ['Secrets scan', true]] },
     { id: 'report.generate (script)', kind: 'tool', side: 'write', version: '0.3.1', label: 'internal', egress: 'none', status: 'draft', owner: 'Mara Okafor', scopes: 'tools:invoke', confirm: 'always', rate: '60 per user per hour', secrets: 'none', hint: 'none (script-backed tool)', hash: 'c48b12a7', impl: 'Script-backed, monthly_variance.py', checks: [['Schema valid', true], ['Dependency scan clean', false], ['Declared egress matches observed', true]], egressNote: 'openpyxl 3.0.9 has a known advisory; the curated wheel set carries 3.1.5.' }
   ];
   const SKILLS = [
@@ -812,7 +814,9 @@ table.dt .actions{white-space:nowrap}
       { title: 'Deprecated', tone: 'warn', text: 'Deprecated tools stay callable with a warning in run details and a replacement link.', apply(ctx) { const st = ctx.state; st.tab = 'tools'; st.over = st.over || {}; const id = (st.sel && find(st.sel) && find(st.sel).kind === 'tool' && (st.over[st.sel] || find(st.sel).status) === 'published') ? st.sel : 'ledger.query'; st.over[id] = 'deprecated'; st.sel = id; ctx.rerender(); } },
       { title: 'Retire refused: still in use', tone: 'danger', text: 'Retiring the last callable version of a skill a published agent uses is refused, naming the agent. The used-by view lists every referrer and how it reaches the entry.', apply(ctx) { const st = ctx.state; st.over = st.over || {}; st.over['close-checklist'] = 'deprecated'; st.tab = 'skills'; st.sel = 'close-checklist'; st.retireRefused = true; ctx.rerender(); usedByModal(ctx, find('close-checklist'), 'retire'); } },
       { title: 'Chain reference not published', tone: 'danger', text: 'Support triage delegates to Meeting notes, which is still in review. The Chain references check fails and Approve stays disabled until the delegate is published or removed.', apply(ctx) { const st = ctx.state; st.tab = 'agents'; st.sel = 'Support triage'; ctx.rerender(); } },
-      { title: 'Test harness', tone: 'info', text: 'Runs the tool in the sandbox with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.tab = 'tools'; ctx.state.sel = 'ledger.query'; ctx.state.harnessOpen = true; ctx.rerender(); runHarness(ctx); } }
+      { title: 'Test harness', tone: 'info', text: 'Runs the tool in the sandbox with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.tab = 'tools'; ctx.state.sel = 'ledger.query'; ctx.state.harnessOpen = true; ctx.rerender(); runHarness(ctx); } },
+      { title: 'HTTP host refused', tone: 'danger', text: 'A test call to a host that resolves to a cloud metadata address, an internal host the operator has not named, or a public host off the tenant\'s list is refused before anything is sent.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { url: 'http://169.254.169.254/latest/meta-data/{path}', test: 'refused' }); } },
+      { title: 'Literal credential refused', tone: 'danger', text: 'Saving an HTTP tool with a literal Authorization header, API key query parameter or secret body field is refused: credentials go in as vault references, resolved at call time.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { header: 'Bearer 9f3ab21c7d4e5f6a', literal: true }); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -876,7 +880,7 @@ table.dt .actions{white-space:nowrap}
         + '<div class="mono" style="font-size:14px">' + esc(sel.id) + '</div>'
         + '<div class="hstack wrap gap6">' + (sel.side ? sidePill(sel.side) : UI.pill(sel.kind, 'outline')) + statusPill(selStatus) + UI.label(sel.label, { sm: true }) + '</div>'
         + deprecatedNote + retiredNote
-        + UI.kv([['Owner', esc(sel.owner)], ['Version', '<span class="mono">' + esc(sel.version) + '</span> <span class="muted">' + esc(selStatus) + '</span>'], ['Schema hash', '<span class="mono">' + esc(sel.hash) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="' + esc(sel.hash) + '"' })], ['Implemented as', esc(sel.impl)], ['Required scopes', '<span class="mono">' + esc(sel.scopes) + '</span>'], ['Ceiling label', UI.label(sel.label, { sm: true })], ['Confirmation required', esc(sel.confirm) + (sel.side && sel.side !== 'read-only' ? ' <span class="muted">(' + esc(sel.side) + ' class)</span>' : '')], ['Rate limit', esc(sel.rate)], ['Secrets', '<span class="mono">' + esc(sel.secrets) + '</span>'], ['MCP hint', esc(sel.hint)]].concat(chainRows(ed(sel))).concat([['Used by', usedByText(sel) + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
+        + UI.kv([['Owner', esc(sel.owner)], ['Version', '<span class="mono">' + esc(sel.version) + '</span> <span class="muted">' + esc(selStatus) + '</span>'], ['Schema hash', '<span class="mono">' + esc(sel.hash) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="' + esc(sel.hash) + '"' })], ['Implemented as', esc(sel.impl)], ['Required scopes', '<span class="mono">' + esc(sel.scopes) + '</span>'], ['Ceiling label', UI.label(sel.label, { sm: true })], ['Confirmation required', esc(sel.confirm) + (sel.side && sel.side !== 'read-only' ? ' <span class="muted">(' + esc(sel.side) + ' class)</span>' : '')], ['Rate limit', esc(sel.rate)], ['Secrets', '<span class="mono">' + esc(sel.secrets) + '</span>'], ['MCP hint', esc(sel.hint)]].concat(sel.http ? [['Request', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.method + ' ' + sel.http.url) + '</span>'], ['Parameters', esc(sel.http.params)], ['Headers', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.headers) + '</span>'], ['Response', esc('JSON pointer ' + sel.http.pointer + ', at most ' + sel.http.cap + ', ' + sel.http.timeout + ' timeout')], ['Calls', esc(sel.http.calls)], ['Outbound guard', 'resolved once, every address checked, connection pinned, redirects not followed']] : []).concat(chainRows(ed(sel))).concat([['Used by', usedByText(sel) + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
         + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) + '</div>'
         + '<div class="vstack gap4">' + checks.map((c) => '<div class="hstack" style="color:var(--' + (c[1] ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c[1] ? 'check' : 'x', 14) + '<span style="color:var(--fg)">' + esc(c[0]) + '</span></div>').join('')
         + (!checksOk && sel.egressNote ? '<div style="font-size:12px;color:var(--danger-fg)">' + esc(sel.egressNote) + '</div>' : '') + (sel.kind !== 'tool' ? chainProblems(sel).map((x) => '<div style="font-size:12px;color:var(--danger-fg)">' + esc(x) + '</div>').join('') : '') + '</div>'
@@ -891,7 +895,7 @@ table.dt .actions{white-space:nowrap}
         + harness + '</aside>';
 
       root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
-        + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit' }))
+        + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Allowed hosts', { attrs: 'data-hosts' }) + UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('New HTTP tool', { attrs: 'data-newhttp' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit' }))
         + (st.showEgress && !st.egressFixed ? UI.notice('<b>Undeclared egress.</b> mail.send_internal opened a connection to <span class="mono">ldap.northwind.internal</span> during checks. Approve stays disabled until the owner declares or removes the destination.', 'danger', UI.btn('Declare destination', { size: 'sm', attrs: 'data-declare' })) : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: entries.filter((e) => e.kind === 'tool').length }, { id: 'skills', label: 'Skills', count: entries.filter((e) => e.kind === 'skill').length }, { id: 'agents', label: 'Agents', count: entries.filter((e) => e.kind === 'agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
         + '<div class="toolbar">' + UI.search('Search by name, owner or tool', 'data-search', st.query) + UI.seg([{ id: 'all', label: 'All' }].concat(VERSIONS.map((v) => ({ id: v, label: v }))), st.filter, 'data-statusseg') + '<span class="muted right" style="font-size:12px">Lifecycle: draft, in review, published, deprecated, retired</span></div>'
@@ -945,6 +949,8 @@ table.dt .actions{white-space:nowrap}
       on('click', '[data-publishmore]', () => publishScope(cur.ctx, find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel)));
       on('click', '[data-editentry]', () => { const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); if (e.kind === 'tool') cur.ctx.toast('Tool drafts are edited in their source: script, OpenAPI document or MCP server. The registry only records the entry.'); else editChain(cur.ctx, e); });
       on('click', '[data-submit]', () => submitEntry(cur.ctx));
+      on('click', '[data-newhttp]', () => httpForm(cur.ctx, {}));
+      on('click', '[data-hosts]', () => hostsDrawer(cur.ctx));
       on('click', '[data-entrylink]', (e, t) => { e.preventDefault(); const x = find(t.dataset.entrylink); if (!x) return; cur.st.sel = x.id; cur.st.tab = x.kind === 'tool' ? 'tools' : x.kind + 's'; cur.ctx.rerender(); });
       on('click', '[data-gowf]', (e, t) => { e.preventDefault(); cur.ctx.navigate('workflows', { wf: t.dataset.gowf }); });
     }
@@ -1013,7 +1019,7 @@ table.dt .actions{white-space:nowrap}
     const tick = () => {
       i++;
       if (i < steps.length) { st.harness = { phase: 'running', step: steps[i][0], pct: steps[i][1] }; ctx.rerender(); st.htimer = setTimeout(tick, 420); return; }
-      const result = e.id === 'ledger.query' ? 'cost_centre, q3_actual, q3_budget\nFIELD-SALES, 188420.00, 150000.00\nrows: 1, elapsed: 212 ms' : e.id === 'mail.send_internal' ? '{ "accepted": true, "message_id": "<9f1c@mail-relay>", "relay": "mail-relay.northwind.internal" }' : e.kind === 'tool' ? '{ "hits": 3, "top": "Travel policy 2026, section 4.2", "score": 0.83 }' : '{ "ok": true, "steps": 4, "tokens": 1204 }';
+      const result = e.http ? '"Widget"\n(GET api.partner.example answered 200 in 140 ms; /data/name of 1.2 KB; reached the model as untrusted content, source http)' : e.id === 'ledger.query' ? 'cost_centre, q3_actual, q3_budget\nFIELD-SALES, 188420.00, 150000.00\nrows: 1, elapsed: 212 ms' : e.id === 'mail.send_internal' ? '{ "accepted": true, "message_id": "<9f1c@mail-relay>", "relay": "mail-relay.northwind.internal" }' : e.kind === 'tool' ? '{ "hits": 3, "top": "Travel policy 2026, section 4.2", "score": 0.83 }' : '{ "ok": true, "steps": 4, "tokens": 1204 }';
       st.harness = { phase: 'done', valid: true, result };
       st.lastHarness = { id: e.id, when: 'just now, sandbox run 1.8 s' };
       ctx.rerender();
@@ -1036,6 +1042,65 @@ table.dt .actions{white-space:nowrap}
         m.querySelector('[data-ok]').addEventListener('click', () => { const n = Array.prototype.filter.call(m.querySelectorAll('[data-scope]'), (c) => c.checked).length; App.closeOverlay(); ctx.state.over[e.id] = 'published'; ctx.state.showEgress = false; ctx.rerender(); ctx.toast(esc(e.id) + ' ' + esc(e.version) + ' published to ' + n + ' scope' + (n === 1 ? '' : 's') + '. Workspace admins can now enable it.', 'ok', 5000); });
       }
     });
+  }
+
+  // B-8904: the tenant's list of allowed hosts (GET and PUT /api/admin/integrations/hosts).
+  const HOSTS = ['api.partner.example', '*.stripe.com', '203.0.113.0/24'];
+  function hostsDrawer(ctx) {
+    const draw = () => '<div class="vstack gap6">' + (HOSTS.length ? HOSTS.map((h, i) => '<div class="hstack"><span class="mono grow">' + esc(h) + '</span>' + UI.btn('Remove', { kind: 'ghost', size: 'xs', attrs: 'data-rmhost="' + i + '"' }) + '</div>').join('') : UI.empty('No public hosts', 'HTTP tools reach only the internal hosts the operator names.')) + '</div>'
+      + '<div class="hstack gap6">' + UI.input('', { placeholder: 'api.example.com, *.example.com or 203.0.113.0/24', attrs: 'data-newhost aria-label="Host to allow"' }) + UI.btn('Add', { size: 'sm', attrs: 'data-addhost' }) + '</div>'
+      + UI.notice('HTTP tools call a public host only when it is on this list. Internal hosts need the operator\'s SERVICE_ALLOWED_HOSTS; cloud metadata addresses are always refused. Workflow HTTP steps and webhooks read the same list.', 'info');
+    ctx.drawer({ title: 'Allowed hosts', body: '<div data-hostsbody>' + draw() + '</div>', actions: UI.btn('Close', { attrs: 'data-close' }),
+      onMount(d) {
+        const body = d.querySelector('[data-hostsbody]');
+        body.addEventListener('click', (e) => {
+          const rm = e.target.closest('[data-rmhost]');
+          if (rm) { const h = HOSTS.splice(Number(rm.dataset.rmhost), 1)[0]; body.innerHTML = draw(); ctx.toast(esc(h) + ' removed. Audited tenant.hosts.updated.', 'warn'); return; }
+          if (e.target.closest('[data-addhost]')) { const v = body.querySelector('[data-newhost]').value.trim().toLowerCase(); if (!v) return; if (!/^(\*\.)?[a-z0-9.-]+(\/\d+)?$/.test(v)) { ctx.toast(esc(v) + ' is not a hostname, *.domain, address or CIDR network.', 'danger'); return; } HOSTS.push(v); body.innerHTML = draw(); ctx.toast(esc(v) + ' added. Audited tenant.hosts.updated.', 'ok'); }
+        });
+      } });
+  }
+
+  /** B-8904: an HTTP tool's draft: method, URL template, parameters from the schema, vault references, mapping, test call. */
+  function httpForm(ctx, o) {
+    const VAULT = ['apis/catalog#token', 'apps/crm#token', 'apps/billing/stripe#key'];
+    const url0 = o.url || 'https://api.partner.example/v1/items/{id}';
+    const params = (u) => (u.match(/\{([A-Za-z_][\w-]*)\}/g) || []).map((x) => x.slice(1, -1));
+    const body = '<div class="formgrid">' + UI.field('Name', UI.input('catalog.get_price', { attrs: 'data-hn' })) + UI.field('Version', UI.input('0.1.0', { attrs: 'data-hv' }))
+      + UI.field('Method', UI.select(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], 'GET', 'data-hm'), 'GET is read; other methods are write, or destructive if you choose it')
+      + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal'))
+      + '<div class="span2">' + UI.field('URL template', UI.input(url0, { attrs: 'class="input mono" data-hu' }).replace('class="input" ', ''), 'The host is fixed. {name} in the path or query takes the argument of that name, percent-encoded.') + '</div>'
+      + '<div class="span2" data-hparams>' + UI.field('Parameters from the input schema', '<div class="mono">' + esc(params(url0).map((x) => x + ' (path, string, required)').join(', ') || 'none') + '</div>') + '</div>'
+      + UI.field('Header', UI.input('Authorization', { attrs: 'data-hhn' })) + UI.field('Value', UI.input(o.header || 'Bearer vault:apis/catalog#token', { attrs: 'class="input mono" data-hhv' }).replace('class="input" ', ''), 'Credentials only as vault:path#key, resolved at call time as you')
+      + UI.field('Vault reference', '<div class="hstack gap6">' + UI.select(VAULT, VAULT[0], 'data-hvault aria-label="Vault reference"') + UI.btn('Insert', { size: 'sm', attrs: 'data-hinsert' }) + '</div>', 'Paths you may read under the vault policies')
+      + UI.field('Response mapping', UI.input('/data/price', { attrs: 'class="input mono" data-hp' }).replace('class="input" ', ''), 'A JSON pointer, or empty for the whole body')
+      + UI.field('Timeout, seconds', UI.input('10', { type: 'number' })) + UI.field('Answer cap, KB', UI.input('64', { type: 'number' }))
+      + '</div>'
+      + '<div data-hresult></div>'
+      + UI.notice('Every call goes through the outbound address guard (resolved once, every address checked, the connection pinned, redirects not followed), the tool-call guardrail, the rate limit and the untrusted-content checkpoint. Calls are metered and audited with host, method, status, size and latency, never a secret.', 'info');
+    ctx.modal({ cls: 'wide', title: 'New HTTP tool', body, actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Test call', { icon: 'play', attrs: 'data-htest' }) + UI.btn('Save draft and run checks', { kind: 'primary', attrs: 'data-hsave' }),
+      onMount(m) {
+        const res = m.querySelector('[data-hresult]');
+        const literal = () => !/^((Bearer|Basic|Token) )?vault:\S+$/.test(m.querySelector('[data-hhv]').value.trim()) && /^(authorization|cookie)$|token|key|secret/i.test(m.querySelector('[data-hhn]').value);
+        const refused = (u) => /169\.254\.|\/\/10\.|\/\/192\.168\./.test(u) ? (/169\.254\./.test(u) ? '169.254.169.254 is a cloud metadata address and is always refused.' : 'The host is an internal address. HTTP tools reach internal hosts only when the operator names them in SERVICE_ALLOWED_HOSTS.') : HOSTS.some((h) => u.indexOf('//' + h.replace('*.', '')) >= 0 || (h.startsWith('*.') && u.indexOf(h.slice(1)) >= 0)) ? null : 'The host is a public address that is not on this tenant\'s list of allowed hosts. A tenant admin adds it under Allowed hosts.';
+        m.querySelector('[data-hu]').addEventListener('input', (e) => { m.querySelector('[data-hparams]').innerHTML = UI.field('Parameters from the input schema', '<div class="mono">' + esc(params(e.target.value).map((x) => x + ' (path, string, required)').join(', ') || 'none') + '</div>'); });
+        m.querySelector('[data-hinsert]').addEventListener('click', () => { m.querySelector('[data-hhv]').value = 'Bearer vault:' + m.querySelector('[data-hvault]').value; });
+        const test = () => {
+          const u = m.querySelector('[data-hu]').value; const why = refused(u);
+          res.innerHTML = why ? UI.problem('Egress refused', 'egress_refused: ' + why + ' Nothing was sent.', 'trace 4f1c02aa') : UI.kv([['Outcome', UI.pill('ok', 'ok')], ['Status', '200 in 140 ms'], ['Mapped value', '<span class="mono">19.99</span>'], ['Untrusted content', 'checked, nothing detected']], 2);
+        };
+        m.querySelector('[data-htest]').addEventListener('click', test);
+        if (o.test) test();
+        if (o.literal) res.innerHTML = UI.problem('Invalid request', 'The header Authorization carries a credential: use a vault reference (vault:path#key, optionally after Bearer, Basic or Token), never a literal.', 'trace 9a0d61e2');
+        m.querySelector('[data-hsave]').addEventListener('click', () => {
+          if (literal()) { res.innerHTML = UI.problem('Invalid request', 'The header ' + esc(m.querySelector('[data-hhn]').value) + ' carries a credential: use a vault reference (vault:path#key, optionally after Bearer, Basic or Token), never a literal.', 'trace 9a0d61e2'); return; }
+          const name = m.querySelector('[data-hn]').value.trim() || 'catalog.get_price'; const method = m.querySelector('[data-hm]').value; const u = m.querySelector('[data-hu]').value;
+          App.closeOverlay();
+          const st = ctx.state; st.added = st.added || [];
+          st.added.push({ id: name, kind: 'tool', side: method === 'GET' ? 'read-only' : 'write', version: m.querySelector('[data-hv]').value || '0.1.0', label: 'internal', egress: 'public', status: 'draft', owner: 'Mara Okafor', scopes: 'tools:invoke', confirm: method === 'GET' ? 'never' : 'always', rate: 'none', secrets: m.querySelector('[data-hhv]').value.replace(/^(Bearer|Basic|Token) /, '') + ', resolved as the author', hint: 'none (HTTP tool)', hash: Math.random().toString(16).slice(2, 10), impl: 'HTTP request', http: { method, url: u, params: params(u).map((x) => x + ' (path, string)').join(', ') || 'none', headers: m.querySelector('[data-hhn]').value + ': ' + m.querySelector('[data-hhv]').value, pointer: m.querySelector('[data-hp]').value || '(whole body)', timeout: '10 s', cap: '64 KB', calls: 'no calls yet' }, checks: [['Schema valid', true], ['HTTP request', true], ['Secrets scan', true]] });
+          st.sel = name; st.tab = 'tools'; ctx.rerender(); ctx.toast('Draft ' + esc(name) + ' saved. Checks pass; submit it for review.', 'ok');
+        });
+      } });
   }
 
   function submitEntry(ctx) {

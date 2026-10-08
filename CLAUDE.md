@@ -257,6 +257,25 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the
   `vision` classifier engine and image eval cases in `guardrails/classifiers.ts`; the built-in tool `knowledge_search`.
   The fake Ollama answers image prompts from a picture's text chunks (`markedPng` in `server/test/fake-ollama.ts`).
+- 1.6.0 Sprint 37a: `registry/http-tool.ts` (`s.httpTools`, B-89: `impl: http` registry tools, their definition rules,
+  the runner the dispatcher calls, the meter `registry_http_calls`) over `guardedRequest` and `toolAddressProblem` in
+  `platform/egress.ts`; `guardrails/injection.ts` (`s.injection`, B-69: the `untrusted-content` checkpoint, the
+  `injection` mechanism's heuristic classifier, trust marking with `markUntrusted` and `toolResultContent`, detections
+  per source) and `guardrails/injection-corpus.ts` (the CI corpus and its floor). The fake Ollama's guard answers
+  injection prompts from the heuristic, and `obeyingReply` stands in for a model that follows unmarked instructions.
+- 1.6.0 Sprint 37b: `mcp/server/` (B-7101, B-7102: `resource.ts` the endpoint URL and resource identifier per
+  workspace, `service.ts` `s.mcpServer`: publications, the tool catalogue by group, calls through the dispatcher and
+  held calls) behind `routes/mcp-server-public.ts` (`/mcp/<tenant>/<workspace>` and its RFC 9728 metadata, outside
+  `/api`) and `routes/mcp-access.ts`; `mcp/oauth.ts` (`s.mcp.oauth`, B-7103: discovery, registration, the authorization
+  code with PKCE, refresh and revocation for per-user MCP servers); RFC 8707 resources and RFC 7591 registration in
+  `federation/oidc.ts`; the `records.*` built-ins in `registry/builtin/`. `server/test/sprint37b-fakes.ts` has an
+  authorization server for `fake-mcp.ts`.
+- 1.6.0 Sprint 37c: `identity/scim/` (`service.ts` `s.scim`: SCIM 2.0 users and groups into a SCIM store, tokens,
+  deactivation, group membership to roles; `filter.ts` the RFC 7644 filter and path grammar; `patch.ts` PATCH and the
+  writable document; `schemas.ts` the discovery documents) with `identity/providers/scim.ts` (the store in the chain)
+  and `routes/scim.ts` (`/scim/v2`, outside `/api`, and the token routes under Identity, B-7201, B-7202);
+  `vault/shares.ts` (`s.vaultShares`, B-4801: a KV secret shared as a policy grant); the MongoDB lease engine in
+  `vault/db-engines.ts` (B-4802); quotes and visibility in `feed/service.ts` (B-4901).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

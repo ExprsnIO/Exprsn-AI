@@ -115,7 +115,13 @@ describe('profiles (B-5801)', () => {
     expect((await alice.get('/api/people/me').expect(200)).body.avatar.state).toBe('rejected');
     // not an image type at all: refused before it is stored
     await alice.avatar(Buffer.from('hello'), 'text/plain').expect(415);
-    await alice.avatar(Buffer.alloc(2 * 1024 * 1024 + 1, 1)).expect(413);
+    // The server answers 413 from the declared length without reading the body: the client may see the socket close
+    // (EPIPE) before it reads the answer, depending on timing.
+    const big = await alice.avatar(Buffer.alloc(2 * 1024 * 1024 + 1, 1)).then(
+      (r) => r.status,
+      (e: NodeJS.ErrnoException) => (e.code === 'EPIPE' || e.code === 'ECONNRESET' ? 413 : Promise.reject(e))
+    );
+    expect(big).toBe(413);
 
     // a good one, then the file is trashed (as a takedown does): no longer shown
     await alice.avatar(TINY_PNG).expect(202);

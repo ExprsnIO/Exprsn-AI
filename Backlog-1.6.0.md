@@ -32,13 +32,30 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | **Done** |
-| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | Next |
-| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | **Done** (B-7202 partial) |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Next |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Planned |
 
 ### Progress
 
-**Sprint 36: done** (this PR). Groups depth (B-4401 to B-4405, migration `038_groups2`): channels inside a group with
+**Sprint 37: done** (this PR). The HTTP tool kind (B-8901 to B-8904): registry tools that call web APIs from a URL
+template, headers, a body and a response mapping, only to the tenant's allowed hosts, credentials only as vault
+references, every call metered and audited. Prompt-injection defence (B-6901 to B-6903): knowledge chunks, crawled
+pages and tool, MCP and HTTP results reach the model marked as untrusted content, an `untrusted-content` checkpoint with
+an injection rule (annotate by default, block per tenant), and a 57-attack, 30-benign corpus in CI with a 0.9 detection
+and 0.1 false-positive bar. The MCP server and MCP authorization (B-7101 to B-7103): a per-workspace MCP endpoint that
+publishes workflows, agents, knowledge bases, registry tools and app records and acts as the signed-in user, an OAuth 2.1
+resource server of the tenant's issuer (RFC 9728, RFC 8707), and per-user OAuth with PKCE in the MCP client. SCIM 2.0
+Users and Groups with deprovisioning that ends sessions, tokens, keys and app passwords in one request, and group
+mappings to roles (B-7201, B-7202). Vault secrets shared with one principal (B-4801), MongoDB dynamic credentials
+(B-4802), quote posts and per-post visibility (B-4901). Migrations `039_tools_injection`, `039b_mcp_server`,
+`039c_scim_vault_posts`. **B-7202 is partial**: the Entra ID and Okta validators could not reach this server; a local
+conformance suite covers what they check (`docs/identity.md`). Unit suite 1098 passed; PostgreSQL and MySQL integration
+passed. Each part ran its own Playwright specs. Known gaps in `docs/security.md`: the injection heuristic is tuned on its
+own corpus, the MCP server has no sessions, resources or prompts, write calls over MCP need a browser approval each time,
+and an unlisted post stays in the bookmarks of whoever saved it.
+
+**Sprint 36: done** (PR #64). Groups depth (B-4401 to B-4405, migration `038_groups2`): channels inside a group with
 their own members, roles and feed, never labelled below their group; a discovery page of joinable groups ranked by shared
 members and activity, filtered by clearance; places on groups and points on events with distance filters (PostGIS when
 installed, a bounding box otherwise, the same great-circle cut everywhere); trending groups by job; tenant group

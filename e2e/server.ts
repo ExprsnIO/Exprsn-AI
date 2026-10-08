@@ -117,6 +117,9 @@ async function main() {
     JOB_POLL_MS: '200',
     OLLAMA_POLL_MS: '2000',
     MCP_ALLOWED_HOSTS: '127.0.0.1',
+    // 1.6.0 (B-8902): HTTP tools reach internal hosts only as SERVICE_ALLOWED_HOSTS names them; the registry-http spec
+    // serves its outside API on loopback.
+    SERVICE_ALLOWED_HOSTS: '127.0.0.1',
     WORKFLOW_HTTP_ALLOW_LOOPBACK: 'true',
     ACME_DIRECTORY_URL: acme.directory,
     ACME_POLL_MS: '20',

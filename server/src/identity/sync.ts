@@ -43,7 +43,8 @@ export class DirectorySync {
 
   async syncTenant(tenantId: string, progress?: (pct: number, m?: string) => Promise<void>): Promise<SyncReport[]> {
     // Local accounts have no directory; upstream (OIDC, SAML) providers are only asked at sign-in.
-    const stores = (await this.providers.list(tenantId)).filter((p) => p.enabled && p.kind !== 'local' && !signsInByRedirect(p.kind));
+    // 1.6.0 (B-7201): a SCIM store is pushed to, never read from.
+    const stores = (await this.providers.list(tenantId)).filter((p) => p.enabled && p.kind !== 'local' && p.kind !== 'scim' && !signsInByRedirect(p.kind));
     const reports: SyncReport[] = [];
     for (const [i, p] of stores.entries()) {
       reports.push(await this.syncProvider(p));
@@ -56,6 +57,7 @@ export class DirectorySync {
     const report: SyncReport = { provider: row.name, checked: 0, updated: 0, disabled: [], errors: [] };
     const tenantId = row.tenant_id;
     if (row.kind === 'local' || signsInByRedirect(row.kind)) return { ...report, aborted: 'This store has no directory to sync with.' };
+    if (row.kind === 'scim') return { ...report, aborted: 'A SCIM store is kept current by its identity provider; there is nothing to pull.' };
     const links = (await this.db('user_identities as i')
       .join('users as u', 'u.id', 'i.user_id')
       .where({ 'i.provider_id': row.id, 'u.tenant_id': tenantId, 'u.state': 'active' })

@@ -14,6 +14,7 @@ import { escapeLiteral } from '../guardrails/regex.js';
 import { checkRule, diffRules, ruleSchema, rulesFromYaml, rulesToYaml, type Rule } from '../guardrails/rules.js';
 import type { RuleSetRow, VersionRow } from '../guardrails/sets.js';
 import { CHECKPOINTS, GUARD_ACTIONS, type Checkpoint } from '../guardrails/types.js';
+import { scoreCorpus } from '../guardrails/injection-corpus.js';
 import type { Services } from '../services.js';
 import { imageType } from '../knowledge/images.js';
 
@@ -326,6 +327,28 @@ export function guardrailRoutes(s: Services): Router {
   /** Guard-model and classifier failures in the last hour: turns held, decisions that fell open. */
   r.get('/admin/guardrails/status', manage, async (req, res) => {
     res.json(await engine.status(principalOf(req).tenantId));
+  });
+
+  /**
+   * B-6902: prompt-injection defence. Detections at the untrusted-content checkpoint per source over the last `days`
+   * (blocked and annotated) and the most recent ones; the mode the tenant's effective rules give (block when any
+   * enforced rule there blocks or holds, annotate when one warns, flags or logs); those rules; and the heuristic
+   * classifier's rates on the CI corpus (B-6903).
+   */
+  r.get('/admin/guardrails/injection', manage, async (req, res) => {
+    const p = principalOf(req);
+    const q = parseBody(z.object({ days: z.coerce.number().int().min(1).max(90).default(7) }), req.query);
+    const summary = await s.injection.summary(p.tenantId, q.days);
+    const active = (await sets.forCheck(p.tenantId, null, null)).filter((a) => !a.pending && a.rule.enabled && a.rule.checkpoint === 'untrusted-content');
+    const enforced = active.filter((a) => a.rule.stage === 'enforce');
+    const mode = enforced.some((a) => a.rule.action === 'block' || a.rule.action === 'require-approval') ? 'block' : enforced.some((a) => a.rule.action !== 'allow') ? 'annotate' : 'off';
+    const corpus = await scoreCorpus();
+    res.json({
+      ...summary,
+      mode,
+      rules: active.map((a) => ({ setId: a.set.id, set: a.set.name, scope: a.set.scope, ruleId: a.rule.id, rule: a.rule.name, action: a.rule.action, stage: a.rule.stage, mechanism: a.rule.mechanism.kind, engine: a.rule.mechanism.kind === 'injection' ? a.rule.mechanism.engine : null, threshold: a.rule.mechanism.kind === 'injection' ? a.rule.mechanism.threshold : null })),
+      corpus: { attacks: corpus.attacks, detectionRate: corpus.detectionRate, benign: corpus.benign, falsePositiveRate: corpus.falsePositiveRate, floor: corpus.floor, ceiling: corpus.ceiling, byCarrier: corpus.byCarrier }
+    });
   });
 
   // ---------- classifiers ----------

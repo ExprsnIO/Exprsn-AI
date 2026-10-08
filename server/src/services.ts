@@ -41,6 +41,7 @@ import type { Guardrails } from './guardrails/types.js';
 import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 import { RegistryService } from './registry/service.js';
 import { ToolDispatcher } from './registry/dispatch.js';
+import { McpServerService } from './mcp/server/service.js';
 import { McpService } from './mcp/service.js';
 import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
@@ -104,6 +105,8 @@ import { DatabaseLeases } from './vault/leases.js';
 import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
 import { RevealWatch } from './vault/anomalies.js';
+import { VaultShares } from './vault/shares.js';
+import { ScimService } from './identity/scim/service.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
@@ -135,6 +138,8 @@ import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
 import { ImportService } from './imports/service.js';
+import { InjectionDefence } from './guardrails/injection.js';
+import { HttpToolRunner } from './registry/http-tool.js';
 
 export interface Services {
   cfg: Config;
@@ -178,6 +183,10 @@ export interface Services {
   mcp: McpService;
   scripts: ScriptService;
   tools: ToolDispatcher;
+  /** 1.6.0 (B-8901): `impl: http` registry tools through the outbound address guard. */
+  httpTools: HttpToolRunner;
+  /** 1.6.0 (B-6902): the untrusted-content checkpoint, its counts per source and audit. */
+  injection: InjectionDefence;
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
@@ -258,6 +267,10 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.6.0, Sprint 36b (B-4803): reveal history and anomaly flags for secret owners. */
   revealWatch: RevealWatch;
+  /** 1.6.0, Sprint 37c (B-4801): KV secrets shared with a principal, as policy grants. */
+  vaultShares: VaultShares;
+  /** 1.6.0, Sprint 37c (B-7201, B-7202): SCIM 2.0 users and groups pushed to a tenant's SCIM store. */
+  scim: ScimService;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
@@ -300,6 +313,8 @@ export interface Services {
   feed: FeedService;
   /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
   socialAdmin: SocialAdmin;
+  /** 1.6.0, Sprint 37b (B-7101): each workspace's MCP server: publications, the tool catalogue, calls and held calls. */
+  mcpServer: McpServerService;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
@@ -417,10 +432,15 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const registry = new RegistryService(db);
   const chainRefs = new ChainRefs(db, registry);
   registry.useRefs(chainRefs);
-  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
+  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS, secret: cfg.SESSION_SECRET, callbackUrl: `${cfg.PUBLIC_URL.replace(/\/+$/, '')}/api/mcp-oauth/callback` });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  // 1.6.0 (B-6902, B-8901): tool results pass the untrusted-content checkpoint; HTTP tools go through the address guard.
+  const injection = new InjectionDefence(db, () => s.guardrails, audit);
+  tools.useInjection(injection);
+  const httpTools = new HttpToolRunner({ db, audit, log, policy: servicePolicy(cfg), tenantHosts: (t) => s.integrations.allowList(t), vault: (t, owner, ref, via) => s.vault.resolveFor(t, owner, ref, { via }), maxTimeoutMs: cfg.HTTP_TOOL_TIMEOUT_MS, maxResponseBytes: cfg.HTTP_TOOL_MAX_RESPONSE_BYTES });
+  tools.useHttp(httpTools);
   const chains = new ChainService(db, {
     maxDepth: cfg.CHAIN_MAX_DEPTH,
     kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
@@ -459,7 +479,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
   const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers }, overrides.dynamicCredentials !== undefined ? overrides.dynamicCredentials : createDynamicCredentials(cfg));
   const knowledge = new KnowledgeService(
-    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers },
+    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers, injection: () => s.injection },
     {
       maxBytes: cfg.ATTACHMENT_MAX_BYTES,
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
@@ -516,6 +536,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     guardrails: guard.engine,
     guard,
     registry,
+    injection,
+    httpTools,
     mcp,
     scripts,
     tools,
@@ -571,6 +593,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     revealWatch: new RevealWatch(() => s),
+    vaultShares: new VaultShares(() => s),
+    scim: new ScimService(() => s),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
     // 1.4.0, Sprint 26d: the file store.
@@ -611,6 +635,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
     socialAdmin: new SocialAdmin(() => s),
+    mcpServer: new McpServerService(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
@@ -695,6 +720,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.dbLeases.registerJobs();
   s.rotation.registerJobs();
   s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.registerJobs(); // 1.6.0, Sprint 37c (B-4801): expired shares removed
+  s.scim.registerJobs(); // 1.6.0, Sprint 37c (B-7202): group mappings re-applied to a SCIM store
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
@@ -825,6 +852,7 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.revealWatch.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.schedule(s.scheduler); // 1.6.0, Sprint 37c (B-4801)
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge

@@ -107,6 +107,9 @@ interface PolicyRow {
   created_by: string | null;
   created_at: number;
   updated_at: number;
+  /** 1.6.0 (B-4801): set on the grants that share one KV secret. */
+  share_secret_id?: string | null;
+  expires_at?: number | string | null;
 }
 
 const num = (v: unknown): number => Number(v);
@@ -118,7 +121,7 @@ const versionFrom = (r: Record<string, unknown>): SecretVersionRow => ({ ...(r a
 const keyFrom = (r: Record<string, unknown>): KeyRow => ({ ...(r as unknown as KeyRow), latest_version: num(r.latest_version), min_decrypt_version: num(r.min_decrypt_version), min_available_version: num(r.min_available_version), deletion_allowed: bool(r.deletion_allowed), created_at: num(r.created_at), updated_at: num(r.updated_at), rotation_period_ms: numOrNull(r.rotation_period_ms), auto_rotate: bool(r.auto_rotate), owner_id: (r.owner_id as string | null | undefined) ?? null });
 const grantFrom = (r: Record<string, unknown>): Grant & { createdBy: string | null; createdAt: number; updatedAt: number } => {
   const p = r as unknown as PolicyRow;
-  return { id: p.id, subjectKind: p.subject_kind, subject: p.subject, path: p.path, capabilities: json<Grant['capabilities']>(p.capabilities, []), effect: p.effect, description: p.description, createdBy: p.created_by, createdAt: num(p.created_at), updatedAt: num(p.updated_at) };
+  return { id: p.id, subjectKind: p.subject_kind, subject: p.subject, path: p.path, capabilities: json<Grant['capabilities']>(p.capabilities, []), effect: p.effect, description: p.description, createdBy: p.created_by, createdAt: num(p.created_at), updatedAt: num(p.updated_at), shareSecretId: p.share_secret_id ?? null, expiresAt: p.expires_at == null ? null : num(p.expires_at) };
 };
 
 export const DAY_MS = 86_400_000;
@@ -183,8 +186,11 @@ export class VaultService {
 
   /** The grants that name any of the subjects (the only ones that can matter for them). */
   private async grantsFor(tenantId: string, s: Subjects): Promise<Grant[]> {
+    const now = Date.now();
     const rows = (await this.db('vault_policies')
       .where({ tenant_id: tenantId })
+      // 1.6.0 (B-4801): a share past its expiry no longer applies, before the sweep removes it.
+      .andWhere((q) => q.whereNull('expires_at').orWhere('expires_at', '>', now))
       .andWhere((q) => {
         if (s.userId) q.orWhere((w) => w.where({ subject_kind: 'user', subject: s.userId }));
         if (s.apiKeyId) q.orWhere((w) => w.where({ subject_kind: 'api_key', subject: s.apiKeyId }));
@@ -215,6 +221,22 @@ export class VaultService {
   private async allowed(c: VaultCaller, paths: string[], capability: Capability): Promise<Set<string>> {
     const grants = await this.grantsFor(c.tenantId, c.subjects);
     return new Set(paths.filter((p) => evaluate(grants, c.subjects, p, capability).allow));
+  }
+
+  /** 1.6.0 (B-4801): the grants naming these subjects that apply now (shares past their expiry left out). */
+  grantsOf(tenantId: string, s: Subjects): Promise<Grant[]> {
+    return this.grantsFor(tenantId, s);
+  }
+
+  /** 1.6.0 (B-4801): a KV secret's row as the caller may see it (null when absent or above their clearance). */
+  async secretAt(c: VaultCaller, rawPath: string): Promise<{ id: string; path: string; label: Label; ownerId: string | null; createdBy: string | null } | null> {
+    const row = await this.secret(c, this.kvPath(rawPath));
+    return row ? { id: row.id, path: row.path, label: row.label, ownerId: row.owner_id ?? null, createdBy: row.created_by } : null;
+  }
+
+  /** 1.6.0 (B-4801): checks a policy subject exists in the tenant (and normalises a group name). */
+  validSubject(tenantId: string, kind: SubjectKind, subject: string): Promise<string> {
+    return this.subjectValue(tenantId, kind, subject);
   }
 
   /** The path policy for other parts of the vault (database leases, B-1704): allows, or throws 403 and audits. */
@@ -284,6 +306,7 @@ export class VaultService {
 
   async updateGrant(c: VaultCaller, id: string, patch: { path?: string; capabilities?: (Capability | '*')[]; effect?: Effect; description?: string | null }) {
     const before = await this.getGrant(c.tenantId, id);
+    if (before.shareSecretId) throw conflict('This grant is a share of one secret; revoke it and share again instead of editing it.');
     const upd: Record<string, unknown> = { updated_at: Date.now() };
     if (patch.path !== undefined) upd.path = this.grantPath(patch.path);
     if (patch.capabilities !== undefined) upd.capabilities = JSON.stringify([...new Set(patch.capabilities)]);
@@ -570,6 +593,8 @@ export class VaultService {
     await this.db.transaction(async (trx) => {
       await trx('vault_secret_versions').where({ secret_id: row.id }).delete();
       await trx('vault_secrets').where({ id: row.id }).delete();
+      // 1.6.0 (B-4801): its shares go with it, so a secret written later at the same path is not shared by them.
+      await trx('vault_policies').where({ tenant_id: c.tenantId, share_secret_id: row.id }).delete();
     });
     await this.audit(c, 'vault.secret.removed', 'admin', { path }, row.label, { versions: row.current_version });
   }

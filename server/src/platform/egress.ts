@@ -1,4 +1,6 @@
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Agent } from 'undici';
 import { parseAllowList, type AllowList } from '../mcp/hosts.js';
@@ -162,4 +164,95 @@ export function serviceLookup(policy: ServicePolicy) {
  */
 export function serviceAgent(policy: ServicePolicy, connect: Record<string, unknown> = {}, timeouts: { headersTimeout?: number; bodyTimeout?: number } = {}): Agent {
   return new Agent({ connect: { ...connect, lookup: serviceLookup(policy) as never }, ...timeouts });
+}
+
+// ---------- 1.6.0 (B-8902): outbound calls of HTTP tools ----------
+
+/**
+ * Why an HTTP tool may not reach this address, or null when it may. Cloud metadata, unspecified, multicast and
+ * broadcast addresses are always refused; link-local, private and loopback addresses only when the operator's
+ * service allow-list (`SERVICE_ALLOWED_HOSTS`) names the host or network; public addresses only when the tenant's list
+ * of allowed hosts names the host (or a network holding the address). A tenant's list never admits an internal host.
+ */
+export function toolAddressProblem(ip: string, host: string, policy: ServicePolicy, tenant: AllowList | null): string | null {
+  const addr = v4(ip);
+  const f = fam(addr);
+  const shown = host === addr ? addr : `${host} resolves to ${addr}, which`;
+  if (METADATA.check(addr, f)) return `${shown} is a cloud metadata address and is always refused.`;
+  if (NEVER.check(addr, f)) return `${shown} is an unspecified, multicast or broadcast address.`;
+  const operator = named(host, policy.allow) || policy.allow.networks.check(addr, f);
+  if (LINK_LOCAL.check(addr, f) || PRIVATE.check(addr, f)) return operator ? null : `${shown} is an internal address. HTTP tools reach internal hosts only when the operator names them in SERVICE_ALLOWED_HOSTS.`;
+  if (tenant && !tenant.empty && (named(host, tenant) || tenant.networks.check(addr, f))) return null;
+  return `${shown} is a public address that is not on this tenant's list of allowed hosts. A tenant admin adds it under Registry, Allowed hosts.`;
+}
+
+export interface GuardedRequest {
+  method: string;
+  url: URL;
+  headers: Record<string, string>;
+  body?: string;
+  timeoutMs: number;
+  maxBytes: number;
+  signal?: AbortSignal;
+  /** Why an address is refused (null: allowed); every address the host resolves to is checked. */
+  check: (address: string, host: string) => string | null;
+}
+
+export interface GuardedResponse {
+  status: number;
+  contentType: string | null;
+  body: Buffer;
+  /** The address dialled (the one that was checked). */
+  address: string;
+}
+
+/**
+ * One request through the outbound address guard: the host is resolved once, every address is checked, the
+ * connection is pinned to the checked address (a second DNS answer cannot point elsewhere), redirects are not
+ * followed (a 3xx comes back as it is), and the answer is capped. Throws ServiceUrlRefused when refused.
+ */
+export async function guardedRequest(r: GuardedRequest): Promise<GuardedResponse> {
+  if (r.url.protocol !== 'http:' && r.url.protocol !== 'https:') throw new ServiceUrlRefused('Only http:// and https:// are allowed.');
+  if (r.url.username || r.url.password) throw new ServiceUrlRefused('Credentials do not belong in the URL.');
+  const host = r.url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const addresses = isIP(host) ? [host] : await resolveAll(host);
+  if (!addresses.length) throw new ServiceUrlRefused(`${host} does not resolve.`);
+  for (const a of addresses) {
+    const p = r.check(a, host);
+    if (p) throw new ServiceUrlRefused(p);
+  }
+  const target = addresses[0]!;
+  const family = isIP(target) === 6 ? 6 : 4;
+  return new Promise<GuardedResponse>((resolve, reject) => {
+    const send = r.url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const req = send(
+      r.url,
+      {
+        method: r.method,
+        headers: { 'user-agent': 'exprsn-ai-tool', ...r.headers, ...(r.body != null ? { 'content-length': String(Buffer.byteLength(r.body)) } : {}) },
+        // Dial the address that was checked, whatever the name resolves to now.
+        lookup: (_h: string, opts: { all?: boolean }, cb: (...a: unknown[]) => void) => (opts?.all ? cb(null, [{ address: target, family }]) : cb(null, target, family)),
+        timeout: r.timeoutMs,
+        ...(r.signal ? { signal: r.signal } : {})
+      } as never,
+      (res) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size > r.maxBytes) {
+            req.destroy(new ServiceUrlRefused(`The answer is larger than ${Math.round(r.maxBytes / 1024)} KB.`));
+            return;
+          }
+          chunks.push(c);
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, contentType: (res.headers['content-type'] as string | undefined) ?? null, body: Buffer.concat(chunks), address: target }));
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new ServiceUrlRefused(`No answer within ${r.timeoutMs} ms.`)));
+    req.on('error', (err) => reject(err));
+    if (r.body != null) req.write(r.body);
+    req.end();
+  });
 }

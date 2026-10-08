@@ -7,6 +7,7 @@ import { effectivePermissions, type Principal } from '../authz/policy.js';
 import type { AuditLog } from '../audit/chain.js';
 import { clamScan, classify } from '../chat/attachments.js';
 import type { ContextItem, ContextRequest } from '../chat/context.js';
+import type { InjectionDefence } from '../guardrails/injection.js';
 import { allowed as allowedObject, type ConnectionRow, type ConnectionService } from '../connections/service.js';
 import type { Gateway } from '../gateway/gateway.js';
 import type { Guardrails } from '../guardrails/types.js';
@@ -250,6 +251,8 @@ export interface SearchHit {
   withheld?: string;
   /** Sprint 36c (B-8803): an image document's caption, text excerpt, labels and thumbnail. */
   image?: ImageHit;
+  /** B-6901: a crawled page (a `web` source) or any other knowledge. */
+  origin?: 'knowledge' | 'crawl';
 }
 
 export interface KnowledgeOptions {
@@ -289,6 +292,8 @@ export interface KnowledgeDeps {
   safetyRequired?: boolean;
   /** B-8802: the classifier registry, for the bases' vision classifiers. */
   classifiers?: ClassifierService;
+  /** B-6902: the untrusted-content checkpoint every chunk passes before a model reads it (`contextFor`). */
+  injection?: () => InjectionDefence;
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
@@ -1845,7 +1850,7 @@ export class KnowledgeService {
       if (d?.state === 'hidden') continue; // Sprint 26 (B-1903): hidden by moderation until an appeal restores it
       const opened = await this.openChunk(c.tenant_id, c.id, c.content);
       const src = d ? srcs.get(d.source_id) : undefined;
-      hits.push({ chunkId: c.id, kbId: c.kb_id, kb: kbById.get(c.kb_id)?.name ?? '', documentId: c.document_id, document: d?.name ?? '', source: src ? (src.kind === 'upload' ? 'Uploads' : src.location) : '', heading: opened.heading, label: c.label, vector: vScore.has(id) ? Number(vScore.get(id)!.toFixed(4)) : null, keyword: kScore.has(id) ? Number(kScore.get(id)!.toFixed(4)) : null, fused: Number(score.toFixed(5)), rerank: null, text: opened.text });
+      hits.push({ chunkId: c.id, kbId: c.kb_id, kb: kbById.get(c.kb_id)?.name ?? '', documentId: c.document_id, document: d?.name ?? '', source: src ? (src.kind === 'upload' ? 'Uploads' : src.location) : '', heading: opened.heading, label: c.label, vector: vScore.has(id) ? Number(vScore.get(id)!.toFixed(4)) : null, keyword: kScore.has(id) ? Number(kScore.get(id)!.toFixed(4)) : null, fused: Number(score.toFixed(5)), rerank: null, text: opened.text, origin: src?.kind === 'web' ? 'crawl' : 'knowledge' });
     }
     if (reranking) hits = await this.rerank(p, hits, query, kbs, opts.queryLabel ?? 'internal', opts.signal);
     hits = hits.slice(0, k);
@@ -1937,9 +1942,23 @@ export class KnowledgeService {
     const kbs = (await this.visible(req.principal)).map((x) => x.kb).filter((kb) => ids.has(kb.id) && kb.status === 'published');
     if (!kbs.length) return [];
     const { hits } = await this.search(req.principal, kbs, req.query, { k: 6, ceiling: req.ceiling, queryLabel: req.label, rerank: true, withText: true, lenient: true });
-    return hits
-      .filter((h) => !h.withheld && h.text)
-      .map((h) => ({ tag: 'context' as const, label: h.label, attrs: { source: `${h.kb}: ${h.document}`, ...(h.heading ? { section: h.heading } : {}) }, text: h.text!, cite: { kbId: h.kbId, kb: h.kb, documentId: h.documentId, document: h.document, chunkId: h.chunkId, section: h.heading, score: h.rerank ?? h.fused } }));
+    const items: ContextItem[] = [];
+    for (const h of hits) {
+      if (h.withheld || !h.text) continue;
+      const origin = h.origin ?? 'knowledge';
+      const item: ContextItem = { tag: 'context' as const, label: h.label, attrs: { source: `${h.kb}: ${h.document}`, ...(h.heading ? { section: h.heading } : {}) }, text: h.text, cite: { kbId: h.kbId, kb: h.kb, documentId: h.documentId, document: h.document, chunkId: h.chunkId, section: h.heading, score: h.rerank ?? h.fused }, origin };
+      // B-6902: the untrusted-content checkpoint, before a model reads the chunk: a block withholds it, a milder
+      // action annotates it (the warning goes with it into the prompt).
+      const defence = this.d.injection?.();
+      if (defence) {
+        const v = await defence.screen({ tenantId: req.tenantId, workspaceId: req.workspaceId, principal: req.principal, label: h.label, source: origin, ref: h.chunkId, name: `${h.kb}: ${h.document}`, text: h.text, meta: { kb: h.kbId, document: h.documentId, conversationId: req.conversationId } });
+        if (v.action === 'block') continue;
+        item.text = v.text;
+        item.untrusted = v;
+      }
+      items.push(item);
+    }
+    return items;
   }
 
   /** Deletes everything a tenant holds in knowledge (offboarding): vectors by tenant, then blobs. */

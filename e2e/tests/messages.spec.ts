@@ -121,6 +121,52 @@ test.describe('Messages and feed', () => {
     await expect(main.locator('.messages-post', { hasText: `Close checklist ${stamp}` })).toBeVisible();
   });
 
+  // 1.6.0 (B-4901): an unlisted post is reachable by link and absent from every feed; quoting with a comment.
+  test('posts unlisted (link only), opens it by its link, and quotes a post with a comment', async ({ page }) => {
+    test.setTimeout(90_000);
+    const stamp = Date.now();
+    const ops = await apiAs('ops');
+    const listed = await ops.post('/api/feed/posts', { body: `Quarter plan ${stamp}` });
+    await ops.close();
+    await open(page, 'messages');
+    await expectLive(page);
+    const main = page.locator('#main');
+    await page.locator('[data-view] [data-seg="feed"]').click();
+    await page.locator('[data-fseg] [data-seg="ws"]').click();
+    await page.locator('[data-pdraft]').fill(`Offsite agenda ${stamp} #offsite${stamp}`);
+    await page.locator('[data-pvis]').selectOption('unlisted');
+    await page.locator('button[data-post]').click();
+    await toast(page, 'Published unlisted.');
+    // Opened on its own above the feed, and listed for its author only; never in the feed itself.
+    const link = main.locator('section[aria-label="Post opened by link"]');
+    await expect(link).toContainText(`Offsite agenda ${stamp}`);
+    await expect(link.locator('.messages-post')).toContainText('unlisted');
+    await expect(main.locator('aside')).toContainText(`Offsite agenda ${stamp}`);
+    await expect(page.locator('#toasts .toast')).toHaveCount(0, { timeout: 15_000 }); // measured once the toast has gone
+    await checkAll(page, 'feed, unlisted post opened by link');
+    await page.locator('[data-closelink]').click();
+    await expect(main.locator('.vstack .messages-post', { hasText: `Offsite agenda ${stamp}` })).toHaveCount(0);
+    // A repost is refused: it would put the post in a feed.
+    await main.locator('aside [data-openlink]').first().click();
+    await link.locator('[data-prepost]').click();
+    await link.locator('.dropdown button[data-v="plain"]').click();
+    await expect(link).toContainText('Repost refused');
+    await page.locator('[data-closelink]').click();
+
+    // Quote another post with a comment.
+    const orig = main.locator('.messages-post', { hasText: `Quarter plan ${stamp}` });
+    await expect(orig).toBeVisible();
+    await orig.locator('[data-prepost]').click();
+    await orig.locator('.dropdown button[data-v="quote"]').click();
+    const modal = page.locator('#overlay .modal');
+    await modal.locator('[data-qt]').fill(`Worth a read ${stamp}`);
+    await modal.locator('[data-qgo]').click();
+    await toast(page, 'Quote published.');
+    const quote = main.locator('.messages-post', { hasText: `Worth a read ${stamp}` });
+    await expect(quote).toContainText(`Quarter plan ${stamp}`);
+    await expect(quote).toContainText('quote');
+  });
+
   test('the conversation, thread, feed and people views pass the accessibility checks with content', async ({ page }) => {
     test.setTimeout(120_000);
     const member = await apiAs('member');

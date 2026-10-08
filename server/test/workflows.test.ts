@@ -492,7 +492,7 @@ describe('workflow tool steps and workflows as tools', () => {
 
   it('calls published tools through the dispatcher, pausing before a write call until it is approved', async () => {
     const offered = (await admin.agent.get('/api/workflow-tools').expect(200)).body;
-    expect(offered.map((x: { name: string; sideEffect: string }) => `${x.name}:${x.sideEffect}`)).toEqual(['calculate:read', 'channels.answer:write', 'feed.post:write', 'files.write_version:write', 'groups.create_event:write', 'jira.create_issue:write', 'jira.search_issues:read', 'knowledge_search:read', 'messages.send:write']); // with the B-3904 built-ins and knowledge_search (B-8803)
+    expect(offered.map((x: { name: string; sideEffect: string }) => `${x.name}:${x.sideEffect}`)).toEqual(['calculate:read', 'channels.answer:write', 'feed.post:write', 'files.write_version:write', 'groups.create_event:write', 'jira.create_issue:write', 'jira.search_issues:read', 'knowledge_search:read', 'messages.send:write', 'records.aggregate:read', 'records.count:read', 'records.create:write', 'records.delete:destructive', 'records.entities:read', 'records.query:read', 'records.update:write']); // with the B-3904 built-ins, knowledge_search (B-8803) and the record tools (B-7101)
     const { id, saved } = await workflow('triage', toolGraph(false));
     expect(saved.validation).toMatchObject({ ok: true, labels: { create: 'internal' } });
     expect(saved.validation.warnings[0].nodeId).toBe('create');

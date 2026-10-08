@@ -218,6 +218,79 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
+- **Registry: HTTP tools and allowed hosts** (B-8904, Sprint 37a): the entry form's Kind select offers Tool (HTTP
+  request), which swaps the fields inside the same dialog so focus stays in it. Every HTTP field is labelled with a
+  hint (method, URL template, input schema, query parameters, headers, body, response mapping, cap and timeout); the
+  side-effect select is disabled for GET with the reason in its hint; the vault reference picker is a labelled select
+  of the paths the caller may read, a labelled key field and an Insert button that writes the reference into the
+  headers field, so nothing is picked by pointer alone. "Fill from the URL" fills the input schema from the URL's
+  placeholders. A refused save (a literal credential) is a problem panel with the server's words in the inspector, not
+  only a toast. The inspector's HTTP rows (request, parameters, headers, response, calls in the last day, the outbound
+  guard) are text in the key and value list. Allowed hosts is a drawer with a labelled host field, an Add button and a
+  Remove button per host whose accessible name names the host; changes are announced by toast and stay visible in the
+  list. `e2e/tests/registry-http.spec.ts` creates, tests and publishes an HTTP tool from the console and keeps the
+  allowed hosts; `y-accessibility.spec.ts`, `y-reflow.spec.ts` and `y-reflow-overlays.spec.ts` (with
+  `E2E_ONLY=registry,guardrails,profiles`) found nothing on the screen, its two new design states (HTTP host refused,
+  Literal credential refused), the form and the drawer, Standard and Enhanced, light and dark, at 320 and 640 px.
+- **Guardrails: the untrusted-content checkpoint** (B-6902, Sprint 37a): a twelfth checkpoint in the list. Its
+  Prompt-injection defence panel states the mode as a pill with its word (annotate, block, off) and a sentence saying
+  what it does; detections by source and the recent detections are tables with column headers, actions as pills with
+  words (annotated, blocked), scores as numbers; the CI corpus rates are a sentence. Add a blocking rule is a button
+  that is disabled with its reason (`title`) where it does not apply (the platform baseline, a set that already has
+  it) and goes through a confirm dialog. The rule editor's injection mechanism has a labelled engine select and a
+  threshold or guard profile field with hints. The review bar wraps at narrow widths (it scrolled sideways at 320 px
+  when a draft had all four buttons). The new design state (Poisoned page blocked) is in the sweeps.
+- **Profiles: trust marking** (B-6901, Sprint 37a): a labelled check box, "Mark retrieved and tool text as data",
+  under the field label Untrusted content with a hint saying what it does; the save dialog names the change in words
+  ("Untrusted content marking: on → off") and the saved YAML shows `trustMarking`. `e2e/tests/profiles.spec.ts`
+  switches it off as a new version.
+
+- **Identity: MCP server; Settings: MCP access; MCP servers: OAuth for users** (B-7101 to B-7103, Sprint 37b): the
+  Identity tab list gains MCP server with its published count in text. Each workspace is a table row whose state is a
+  word ("published", "off"), never only a colour; Edit and the copy button carry the workspace's name in their
+  accessible names ("Edit the MCP server of Finance Ops", "Copy the URL of Finance Ops"). The edit drawer is a labelled
+  form: Published and Require DPoP-bound tokens are switches (`role="switch"`, `aria-checked`), the tool groups are
+  checkboxes in a fieldset with a legend, each saying what the group publishes, and the label select has a hint naming
+  the workspace ceiling; the preview below it is a table that updates as groups change. Self-registration is a switch
+  whose state is repeated in text (the registration endpoint, or "not offered"), and turning it on asks for
+  confirmation in a dialog. In Settings, MCP access is one panel of tables with column headers: the connection URLs
+  (copy buttons named per workspace), the calls waiting for approval (Approve and Reject named with the tool, the side
+  effect as a word, the arguments in text, and the approval dialog repeating them in a code block), and the MCP servers
+  that act as you (the connection as words, Connect and Disconnect named per server; Connect opens a dialog that says
+  where the browser will go before it leaves). On MCP servers, OAuth for users is a key-value list with Discover, Enter
+  by hand and Remove buttons; discovery reports each step in a table with the result in words; Enter OAuth by hand is
+  a dialog of labelled fields with hints. Identity's PKCE switch for a public client, which cannot be changed, is now
+  `aria-disabled` (the toast still explains why). `e2e/tests/mcp-server.spec.ts` runs axe-core (Standard and Enhanced)
+  and the in-page checker in light and dark on the MCP server tab and its drawer, MCP access and its approval dialog,
+  the Connect dialog, the OAuth panel, the discovery result and the manual dialog, and checks each for sideways
+  scrolling at 320 and 640 px; the new design states (three on Identity, two on Settings, one on MCP servers) are in
+  the `y-accessibility.spec.ts` sweep.
+
+- **Identity: SCIM provisioning** (B-7201, B-7202, Sprint 37c): under User stores and federation, each SCIM store is a
+  section with a level-2 heading naming it; its status is a key and value list in text (users active of total, groups,
+  the stores its users sign in through, last change), its tokens a table with column headers whose Revoke buttons
+  carry the token's name in their accessible names, and its recent changes a timeline whose tone is also said in words
+  (deactivated, created, access changed). A new token is shown once in a notice with the token in a selectable block
+  and labelled Copy token and Done buttons. Add a SCIM store and New SCIM token are labelled dialogs; the sign-in stores
+  are checkboxes in a fieldset with a legend, and server refusals land in the dialog in the server's words.
+  `e2e/tests/identity-additions.spec.ts` runs the in-page checker and axe-core on the section with a store, a token and
+  a provisioned user, once the toast has gone.
+- **Vault: sharing** (B-4801, Sprint 37c): Share is a labelled button beside Edit metadata; its dialog has labelled
+  selects for the kind of grantee, the grantee and the duration, and a note field. Shared with is a panel whose table
+  names the grantee kind in text and whose Revoke buttons name the grantee; an expired share says "expired" in a pill
+  and its date. Shared with you is a list in the paths column, each entry naming who shared it and until when in text,
+  and "a deny refuses you" when one does. A share refused because a deny wins is a problem panel with the deciding
+  grant in words and an Open Policies button. Share grants carry a "share" pill and their expiry in text in the
+  Policies table. `e2e/tests/vault.spec.ts` runs both checkers with a share shown and checks 320 and 640 px.
+- **Messages and feed: quotes and visibility** (B-4901, Sprint 37c): the composer's Visibility is a labelled select
+  (Workspace, Public, Unlisted (link only)); a post's visibility and quote status are pills in words beside its label,
+  never colour alone. Quote opens a labelled dialog (Your comment, Post in, Visibility) that says the quote's label
+  floor in text; the quoted post is embedded as a quotation block naming its author, time and label, or a sentence
+  saying it is out of reach. A post opened by its link is a region named "Post opened by link" with a notice and a
+  labelled Close button; a refused repost is a problem panel in words. Your unlisted posts is an inspector panel whose
+  Open and Copy link buttons sit beside the post's opening words. `e2e/tests/messages.spec.ts` runs both checkers in
+  Standard and Enhanced on the feed with an unlisted post opened by link.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

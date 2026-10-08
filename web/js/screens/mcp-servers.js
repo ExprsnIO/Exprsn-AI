@@ -37,6 +37,8 @@
       { title: 'Server unreachable', tone: 'danger', text: 'A server that fails its health check has its tools hidden from bound profiles; runs receive a typed error tool_unavailable.', apply(ctx) { ctx.state.demo = 'unreachable'; ctx.rerender(); } },
       { title: 'Vault connection needed', tone: 'info', text: 'A server that acts with each user\'s own token hides its tools from anyone who has not connected one. Tokens never enter model context.', apply(ctx) { ctx.state.demo = 'vault'; ctx.rerender(); } },
       { title: 'Internal only', tone: 'neutral', text: 'Registration accepts hosts that resolve to internal addresses only, unless the platform allow-list names them.', apply(ctx) { ctx.state.openRegister = 'https://mcp.vendor-saas.com/mcp'; ctx.rerender(); } },
+      // 1.6.0 (B-7103): OAuth for per-user servers.
+      { title: 'OAuth discovery failed', tone: 'warn', text: 'A server that answers 401 without resource metadata, on a host that publishes no authorization server metadata, cannot be discovered. Users cannot connect until a tool admin enters the endpoints and a client by hand.', apply(ctx) { ctx.state.demo = 'oauth'; ctx.rerender(); } },
       { title: 'Compatibility failed', tone: 'warn', text: 'A server that speaks only the older HTTP+SSE transport (protocol 2024-11-05) is marked incompatible and its tools are hidden.', apply(ctx) { ctx.state.demo = 'incompatible'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -66,11 +68,13 @@
 
       const servers = st.servers;
       if (ctx.params.server) { const hit = servers.find((x) => x.id === ctx.params.server || x.name === ctx.params.server); if (hit) st.sel = hit.id; delete ctx.params.server; }
+      if (ctx.params.tab === 'authorization') { st.tab = 'authorization'; delete ctx.params.tab; }
       if (st.demo) {
         const d = st.demo; st.demo = null; st.demoNote = null;
         const pick = (f, note) => { const s = servers.find(f); if (s) { st.sel = s.id; return s; } st.demoNote = note; return null; };
         if (d === 'unreachable') { if (pick((x) => x.health === 'unreachable', 'Every server answers its health checks. A server that stops answering shows here with its tools hidden.')) st.tab = 'health'; }
         else if (d === 'vault') { if (pick((x) => x.auth === 'user', 'No server uses per-user tokens. Register one with per-user authorization to see the connect prompt.')) { st.tab = 'authorization'; st.vaultPrompt = true; } }
+        else if (d === 'oauth') { if (pick((x) => x.auth === 'user', 'No server uses per-user tokens. Register one with per-user authorization to set up OAuth for its users.')) { st.tab = 'authorization'; st.oauthFailedDemo = true; } }
         else if (d === 'incompatible') { if (pick((x) => x.health === 'incompatible', 'Every server speaks streamable HTTP. A server that answers with protocol 2024-11-05 is marked incompatible here.')) st.tab = 'health'; }
       }
       const list = servers.filter((x) => !st.query || (x.name + ' ' + x.url + ' ' + x.zone).toLowerCase().indexOf(st.query.toLowerCase()) >= 0);
@@ -98,9 +102,11 @@
             + '<div>' + UI.btn('Bind to a profile', { size: 'sm', icon: 'plus', attrs: 'data-bind', disabled: !App.can('profiles:manage') || !active, title: App.can('profiles:manage') ? '' : 'Binding changes a profile, which needs profiles:manage' }) + '</div>');
       } else if (st.tab === 'authorization') {
         const mine = d.myToken || { connected: false };
-        body = (s.auth === 'user' && st.vaultPrompt && !mine.connected ? UI.notice('<b>Connect your token.</b> ' + esc(s.name) + ' acts with each user\'s own token. You have not connected one, so its tools are hidden for you until you do. The token is sealed on the server and never enters model context.', 'info', UI.btn('Connect token', { kind: 'primary', size: 'sm', attrs: 'data-connect' })) : '')
+        const oa = d.oauth;
+        body = (s.auth === 'user' && st.vaultPrompt && !mine.connected ? UI.notice('<b>Connect your account.</b> ' + esc(s.name) + ' acts with each user\'s own token. You have not connected, so its tools are hidden for you until you do. Tokens are sealed on the server and never enter model context.', 'info', oa ? UI.btn('Connect with OAuth', { kind: 'primary', size: 'sm', attrs: 'data-oauthconnect' }) : UI.btn('Connect token', { kind: 'primary', size: 'sm', attrs: 'data-connect' })) : '')
           + UI.kv([['Mode', esc(AUTH[s.auth])], ['Endpoint', '<span class="mono">' + esc(s.url) + '</span>'], ['Service credential', s.auth === 'service' ? (s.hasCredential ? 'sealed; rotated ' + esc(when(s.credentialRotatedAt)) : 'missing') : 'not used'], ['Token passthrough', UI.pill('never', 'ok') + ' <span class="muted">the server never receives the user\'s session or another server\'s token</span>'], ['Connected users', s.auth === 'user' ? esc(d.connections.length + (mine.connected ? ', including you' : '; you are not connected')) : 'not applicable'], ['Network', 'internal addresses only, checked when each connection is made']], 2)
-          + (s.auth === 'user' ? UI.panel('Per-user token vault', UI.table(['User', 'Connected', 'Scopes', 'Expires', ''], d.connections.map((c) => [esc(c.name), c.expired ? UI.pill('expired', 'danger') : UI.pill('connected', 'ok'), '<span class="mono">' + esc(c.scopes || '') + '</span>', esc(c.expiresAt ? when(c.expiresAt) : 'no expiry'), App.me && App.me.user && c.userId === App.me.user.id ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-disconnect' }) : '']), { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'Nobody has connected a token', emptyText: 'Each user connects their own; tools stay hidden for users without one.' }) + (mine.connected ? '' : '<div>' + UI.btn('Connect your token', { size: 'sm', attrs: 'data-connect' }) + '</div>')) : '');
+          + (s.auth === 'user' ? oauthPanel(oa) : '')
+          + (s.auth === 'user' ? UI.panel('Per-user token vault', UI.table(['User', 'Connected', 'How', 'Scopes', 'Expires', ''], d.connections.map((c) => [esc(c.name), c.expired ? UI.pill('expired', 'danger') : UI.pill('connected', 'ok'), UI.pill(c.source === 'oauth' ? 'OAuth' : 'pasted token', 'outline'), '<span class="mono">' + esc(c.scopes || '') + '</span>', esc(c.expiresAt ? (c.source === 'oauth' ? 'refreshed after ' : '') + when(c.expiresAt) : 'no expiry'), App.me && App.me.user && c.userId === App.me.user.id ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-disconnect' }) : '']), { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'Nobody has connected', emptyText: 'Each user connects their own account; tools stay hidden for users who have not.' }) + (mine.connected ? '' : '<div class="hstack wrap gap6">' + (oa ? UI.btn('Connect with OAuth', { size: 'sm', kind: 'primary', attrs: 'data-oauthconnect' }) : '') + UI.btn(oa ? 'Paste a token instead' : 'Connect your token', { size: 'sm', kind: oa ? 'ghost' : '', attrs: 'data-connect' }) + '</div>')) : '');
       } else if (st.tab === 'health') {
         const failing = s.health === 'unreachable' || s.health === 'incompatible';
         const report = st.reports[s.id];
@@ -164,6 +170,44 @@
       ctx.on('click', '[data-connect]', () => {
         ctx.modal({ title: 'Connect your token for ' + esc(s.name), body: '<p class="fg2" style="margin:0">Paste a personal access token issued by the service behind <span class="mono">' + esc(s.url) + '</span>. It is sealed with your tenant\'s key, used only when a tool from ' + esc(s.name) + ' runs for you, and never enters model context.</p>' + UI.field('Token', UI.input('', { type: 'password', attrs: 'data-token autocomplete="off"' })) + UI.field('Scopes (for your reference)', UI.input('', { attrs: 'data-scopes', placeholder: 'api, read_repository' })) + UI.field('Expires', UI.input('', { type: 'date', attrs: 'data-exp' })), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Connect', { kind: 'primary', attrs: 'data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { const token = m.querySelector('[data-token]').value; const scopes = m.querySelector('[data-scopes]').value.trim() || null; const exp = m.querySelector('[data-exp]').value; App.closeOverlay(); st.vaultPrompt = false; act(() => App.api('PUT', '/api/mcp/servers/' + s.id + '/token', { token, scopes, expiresAt: exp ? new Date(exp + 'T23:59:59').getTime() : null }), 'Token connected. ' + esc(s.name) + ' tools are now available to you.'); }); } });
       });
+      ctx.on('click', '[data-oauthconnect]', async () => {
+        try { const r = await App.post('/api/mcp-oauth/start', { server: s.id, returnTo: 'mcp-servers' }); location.assign(r.authorizeUrl); } catch (err) { App.fail(err); }
+      });
+      ctx.on('click', '[data-oauthdiscover]', async () => {
+        toast('Discovering the authorization server of ' + esc(s.name) + '.');
+        const stepsTable = (steps) => UI.table(['Step', 'Result', 'Detail'], (steps || []).map((x) => [esc(x.check), UI.pill(x.result, x.result === 'passed' ? 'ok' : x.result === 'skipped' ? 'outline' : 'danger'), esc(x.detail)]), { clickable: false, minWidth: '0' });
+        try {
+          const r = await App.post('/api/admin/mcp-servers/' + s.id + '/oauth/discover');
+          st.oauthFailedDemo = false; delete st.details[s.id]; ctx.rerender();
+          ctx.modal({ title: 'OAuth discovery: ' + esc(s.name) + ' ' + UI.pill('passed', 'ok'), body: stepsTable(r.steps), actions: UI.btn('Close', { attrs: 'data-close' }) });
+        } catch (err) {
+          const pr = err.problem || {};
+          ctx.modal({ title: 'OAuth discovery: ' + esc(s.name) + ' ' + UI.pill('failed', 'danger'), body: (pr.steps ? stepsTable(pr.steps) : '') + UI.notice(esc(err.message) + ' Enter the endpoints and a client by hand instead.', 'warn'), actions: UI.btn('Close', { attrs: 'data-close' }) + (manage ? UI.btn('Enter by hand', { kind: 'primary', attrs: 'data-tomanual' }) : ''), onMount(m) { const b = m.querySelector('[data-tomanual]'); if (b) b.addEventListener('click', () => { App.closeOverlay(); setTimeout(openManual, 30); }); } });
+        }
+      });
+      ctx.on('click', '[data-oauthmanual]', () => openManual());
+      function openManual() {
+        const oa = d.oauth || {};
+        ctx.modal({ title: 'Enter OAuth by hand: ' + esc(s.name), cls: 'wide',
+          body: '<div class="formgrid">' + UI.field('Authorization endpoint', UI.input(oa.authorizationEndpoint || '', { attrs: 'data-oa-auth', placeholder: 'https://sso.example.internal/authorize' })) + UI.field('Token endpoint', UI.input(oa.tokenEndpoint || '', { attrs: 'data-oa-token', placeholder: 'https://sso.example.internal/token' })) + UI.field('Revocation endpoint', UI.input(oa.revocationEndpoint || '', { attrs: 'data-oa-revoke', placeholder: 'optional' })) + UI.field('Client ID', UI.input(oa.clientId || '', { attrs: 'data-oa-client' })) + UI.field('Client secret', UI.input('', { type: 'password', attrs: 'data-oa-secret autocomplete="off"', placeholder: oa.hasSecret ? 'sealed; leave empty to keep it' : 'optional' }), 'Sealed, never shown again') + UI.field('Scopes', UI.input(oa.scopes || '', { attrs: 'data-oa-scopes', placeholder: 'space-separated' })) + '<div class="span2">' + UI.field('Resource', UI.input(oa.resource || s.url, { attrs: 'data-oa-resource' }), 'The MCP server, as the authorization server names it (RFC 8707)') + '</div></div>'
+            + UI.notice('Register Exprsn-AI at the authorization server with the redirect URI <span class="mono" style="overflow-wrap:anywhere">' + esc(d.callbackUrl || '') + '</span> first.', 'info') + '<div data-oa-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(m) {
+            m.querySelector('[data-ok]').addEventListener('click', async () => {
+              const v = (k) => m.querySelector('[data-oa-' + k + ']').value.trim();
+              const body = { authorizationEndpoint: v('auth'), tokenEndpoint: v('token'), revocationEndpoint: v('revoke') || null, clientId: v('client'), scopes: v('scopes') || null, resource: v('resource') || null };
+              if (v('secret')) body.clientSecret = m.querySelector('[data-oa-secret]').value;
+              try { await App.api('PUT', '/api/admin/mcp-servers/' + s.id + '/oauth', body); App.closeOverlay(); st.oauthFailedDemo = false; delete st.details[s.id]; toast('OAuth saved for users of ' + esc(s.name) + '.', 'ok'); ctx.rerender(); }
+              catch (err) { m.querySelector('[data-oa-err]').innerHTML = UI.notice(esc(err.message), 'danger'); }
+            });
+          } });
+      }
+      ctx.on('click', '[data-oauthremove]', async () => {
+        const ok = await ctx.confirm({ title: 'Remove OAuth from ' + esc(s.name) + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">Nobody can connect through OAuth until it is discovered or entered again. Tokens users already connected stay until they expire or are disconnected.</p>', ok: 'Remove' });
+        if (!ok) return;
+        try { await App.del('/api/admin/mcp-servers/' + s.id + '/oauth'); delete st.details[s.id]; toast('OAuth removed from ' + esc(s.name) + '.', 'warn'); ctx.rerender(); } catch (err) { App.fail(err); }
+      });
+      if (ctx.params.result === 'connected') { delete ctx.params.result; toast('Connected through OAuth. Tools from this server now act as you.', 'ok', 6000); }
       ctx.on('click', '[data-disconnect]', () => act(() => App.del('/api/mcp/servers/' + s.id + '/token'), 'Your token was removed from the vault.'));
       ctx.on('click', '[data-bind]', () => {
         const approved = d.tools.filter((t) => t.state === 'approved');
@@ -188,6 +232,16 @@
         if (!x) return;
         const ok = await ctx.confirm({ title: 'Reject schema change', tag: 'disable', tone: 'danger', body: '<p class="fg2" style="margin:0">' + esc(x.name) + ' stays disabled until the server restores the approved schema or a tool admin approves the new one.</p>', ok: 'Reject change' });
         if (ok) act(() => App.post('/api/admin/mcp-servers/' + s.id + '/tools/' + encodeURIComponent(x.name) + '/reject-change'), 'Change rejected. ' + esc(x.name) + ' stays disabled.', 'warn');
+      }
+      /** B-7103: how users of a per-user server get their tokens. */
+      function oauthPanel(oa) {
+        const failed = st.oauthFailedDemo ? UI.notice('<b>When discovery fails</b> (a 401 without resource metadata, no authorization server metadata, no registration endpoint), users cannot connect until you enter the endpoints and a client by hand.', 'warn') : '';
+        if (!oa) return UI.panel('OAuth for users', failed + UI.notice('Users of ' + esc(s.name) + ' connect through its authorization server once it is known. Discovery reads the server\'s 401 challenge and resource metadata (RFC 9728), its authorization server\'s metadata (RFC 8414) and registers a client there (RFC 7591).', 'info')
+          + UI.kv([['Redirect URI', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.callbackUrl || '') + '</span>']], 1)
+          + (manage ? '<div class="hstack wrap gap6">' + UI.btn('Discover', { size: 'sm', kind: 'primary', attrs: 'data-oauthdiscover' }) + UI.btn('Enter by hand', { size: 'sm', kind: 'ghost', attrs: 'data-oauthmanual' }) + '</div>' : ''));
+        return UI.panel('OAuth for users', failed + UI.kv([['Mode', oa.mode === 'manual' ? 'entered by hand' : 'discovered (RFC 9728, RFC 8414)'], ['Authorization server', '<span class="mono">' + esc(oa.issuer || 'not named') + '</span>'], ['Authorization endpoint', '<span class="mono" style="overflow-wrap:anywhere">' + esc(oa.authorizationEndpoint) + '</span>'], ['Token endpoint', '<span class="mono" style="overflow-wrap:anywhere">' + esc(oa.tokenEndpoint) + '</span>'], ['Revocation endpoint', oa.revocationEndpoint ? '<span class="mono" style="overflow-wrap:anywhere">' + esc(oa.revocationEndpoint) + '</span>' : 'none: disconnecting only forgets the token'], ['Client', '<span class="mono">' + esc(oa.clientId) + '</span> ' + UI.pill(oa.registered ? 'registered itself' : 'given', 'outline') + (oa.hasSecret ? ' ' + UI.pill('secret sealed', 'outline') : '')], ['Scopes', '<span class="mono">' + esc(oa.scopes || 'none asked') + '</span>'], ['Resource (RFC 8707)', '<span class="mono" style="overflow-wrap:anywhere">' + esc(oa.resource || '') + '</span>'], ['Redirect URI', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.callbackUrl || '') + '</span>']], 2)
+          + (manage ? '<div class="hstack wrap gap6">' + UI.btn('Discover again', { size: 'sm', attrs: 'data-oauthdiscover' }) + UI.btn('Enter by hand', { size: 'sm', kind: 'ghost', attrs: 'data-oauthmanual' }) + UI.btn('Remove', { size: 'sm', kind: 'ghost', attrs: 'data-oauthremove' }) + '</div>' : '')
+          + '<span class="muted" style="font-size:12px">Each person connects with the authorization code and PKCE; tokens are sealed with the tenant key, refreshed before they expire, and revoked at the authorization server when the person disconnects.</span>');
       }
       function openTool(x) {
         if (!x) return;

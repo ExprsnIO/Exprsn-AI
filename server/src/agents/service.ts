@@ -17,6 +17,7 @@ import { ToolPending, type CalleeResult, type PendingResult, type ToolCallContex
 import { validateAgainst } from '../registry/schema.js';
 import { MAX_BUDGETS, type AgentBudgets, type AgentDefinition, type EntryRow, type RegistryService } from '../registry/service.js';
 import { skillClosure } from '../registry/skills.js';
+import { toolResultContent } from '../guardrails/injection.js';
 
 export type RunState = 'queued' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'budget';
 export type Lane = 'think' | 'do' | 'calc';
@@ -804,7 +805,8 @@ export class AgentService {
             meta: { ...(tool ? this.toolMeta(tool, outcome) : { tool: call.name }), ...(call.decision ? { approval: { decision: call.decision, by: call.decidedBy ?? null, note: call.note ?? null } } : {}) },
             detail: { arguments: outcome.arguments, result: outcome.result ?? null, error: outcome.error ?? null, ...(outcome.errorType ? { errorType: outcome.errorType } : {}) }
           });
-          messages.push({ role: 'tool', tool_name: call.name, content: JSON.stringify(outcome.ok ? outcome.result : { error: outcome.error, ...(outcome.errorType ? { type: outcome.errorType } : {}) }) });
+          // B-6901: a result reaches the model as untrusted content, datamarked when the profile marks it.
+          messages.push({ role: 'tool', tool_name: call.name, content: toolResultContent(outcome.ok ? outcome.result : { error: outcome.error, ...(outcome.errorType ? { type: outcome.errorType } : {}) }, { name: tool?.entry.name ?? call.name, untrusted: outcome.ok ? (outcome.untrusted ?? null) : null, marking: resolved.profile.trust_marking !== false }) });
           pending = pending.slice(1);
           tick();
           await this.checkpoint(run, n, { messages, pending }, usage);

@@ -74,12 +74,20 @@ export const GUARD_CHANGED = 'guardrails.changed';
 const CACHE_MS = 15_000;
 export const PLATFORM_SET_ID = '0000000000000000GRBASELINE';
 
+/**
+ * 1.6.0 (B-6902): instructions aimed at the model in untrusted content are annotated everywhere; a tenant or
+ * workspace set may add a rule that blocks them (the most severe action wins). Migration 039 adds it to an existing
+ * baseline as a new published version.
+ */
+export const INJECTION_BASELINE_RULE: Rule = { id: 'injection-untrusted', name: 'Instructions in untrusted content', checkpoint: 'untrusted-content', type: 'injection', mechanism: { kind: 'injection', engine: 'heuristic', threshold: 0.6 }, action: 'warn', stage: 'enforce', onError: 'closed', severity: 'medium', enabled: true, description: 'Retrieved chunks, crawled pages, tool results and MCP and HTTP answers that try to instruct the model reach it with a warning. Add a blocking rule in a tenant set to withhold them instead.' };
+
 /** The platform baseline a fresh installation starts with: deterministic, and published. */
 const BASELINE: Rule[] = [
   { id: 'secrets-input', name: 'Secrets and private keys', checkpoint: 'user-input', type: 'pattern', mechanism: { kind: 'secrets', detectors: ['private_key', 'cloud_access_key', 'bearer_token'], threshold: 0.9 }, action: 'block', stage: 'enforce', onError: 'closed', severity: 'high', enabled: true },
   { id: 'secrets-out', name: 'Secrets and private keys', checkpoint: 'model-output', type: 'pattern', mechanism: { kind: 'secrets', detectors: ['private_key', 'cloud_access_key', 'bearer_token'], threshold: 0.9 }, action: 'block', stage: 'enforce', onError: 'closed', severity: 'high', enabled: true },
   { id: 'clearance-ctx', name: 'Chunk above clearance', checkpoint: 'context', type: 'label', mechanism: { kind: 'label', against: 'clearance' }, action: 'block', stage: 'enforce', onError: 'closed', severity: 'high', enabled: true },
-  { id: 'mem-secrets', name: 'Secrets in memory', checkpoint: 'memory', type: 'pattern', mechanism: { kind: 'secrets', detectors: ['private_key', 'cloud_access_key', 'bearer_token'], threshold: 0.9 }, action: 'block', stage: 'enforce', onError: 'closed', severity: 'high', enabled: true }
+  { id: 'mem-secrets', name: 'Secrets in memory', checkpoint: 'memory', type: 'pattern', mechanism: { kind: 'secrets', detectors: ['private_key', 'cloud_access_key', 'bearer_token'], threshold: 0.9 }, action: 'block', stage: 'enforce', onError: 'closed', severity: 'high', enabled: true },
+  INJECTION_BASELINE_RULE
 ];
 
 /**

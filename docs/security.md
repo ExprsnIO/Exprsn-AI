@@ -152,6 +152,77 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
   clearance), so a result never carries data above the context it lands in.
 
+## HTTP tools and untrusted content (1.6.0, Sprint 37a)
+
+- **HTTP tools (B-89) reach only what an operator and a tenant admin allow.** Ported from exprsn-platform under the
+  port findings' constraints (decision D11c). The scheme and host of an `impl: http` tool are fixed by its author; only
+  the path and query take the model's arguments, percent-encoded. Every call goes through the outbound address guard
+  (`platform/egress.ts`, `guardedRequest`): the host is resolved once, every address is checked, the connection is
+  pinned to the checked address (a second DNS answer cannot point elsewhere) and redirects are not followed. Cloud
+  metadata addresses (169.254.169.254 and the other providers'), unspecified, multicast and broadcast addresses are
+  always refused, also when written as a literal at save time; link-local, private and loopback addresses only when
+  `SERVICE_ALLOWED_HOSTS` names the host or network; public addresses only when the tenant's list of allowed hosts
+  names them (kept by `tenant:manage` on the Registry screen and audited `tenant.hosts.updated`). A tenant's list never
+  admits an internal host. Answers are capped (`HTTP_TOOL_MAX_RESPONSE_BYTES`) and timed out (`HTTP_TOOL_TIMEOUT_MS`).
+- **Credentials only as vault references.** `Authorization`, `Proxy-Authorization`, `Cookie` and any header, query
+  parameter or body field named like a credential take `vault:path#key`, refused as a literal when the tool is saved
+  (and the secrets scan check runs over the whole definition). The references are resolved on every call as the tool's
+  author, under the vault policies and the author's `secrets:read` (a reference the author cannot read is refused at
+  save), and the value is placed in the request only. The audit entry `registry.http.called` and the meter
+  (`registry_http_calls`) keep the host, method, status, size, latency and outcome; never the path, query string,
+  headers or body. An HTTP tool goes through the registry's review and publish lifecycle; GET tools are `read`, every
+  other method `write` or `destructive`, so chat and `/v1` never offer a write HTTP tool and agents and workflows hold
+  it for approval. Arguments pass the `tool-call` guardrail before the request; the tool's rate limit applies.
+- **Untrusted content is marked (B-6901).** Retrieved knowledge chunks, crawled pages, tool results, MCP results and
+  HTTP tool answers reach the model inside `<untrusted-content>` delimiters that name the source and say the text is
+  data, with its words joined by a datamark (Spotlighting), and closing tags inside defused. Per profile
+  (`trust_marking`), on by default. A delegated agent's answer and a workflow's output are not wrapped again (their own
+  inputs were screened and marked inside their runs). Marking lowers the chance a model follows an instruction it
+  reads; it does not make it impossible.
+- **The untrusted-content checkpoint (B-6902)** screens each such text before the model reads it. The platform
+  baseline's `injection-untrusted` rule (heuristic classifier, threshold 0.6) annotates: the text goes in with a
+  warning. A tenant, workspace or agent rule set adds a blocking rule to leave chunks out and withhold tool results.
+  The `injection` mechanism's guard-model engine asks a profile's model instead and fails closed by default. Each
+  detection is counted per source without its text (`injection_detections`, 90 days) and audited
+  `guardrail.injection.detected`; the inspected text is in the sealed guard decision like any checkpoint's.
+- **The corpus (B-6903).** CI fails when the heuristic classifier, the checkpoint with the baseline rule, or a
+  guard-model rule detects fewer than 90% of the corpus's attacks or flags more than 10% of its benign texts.
+## The MCP server and MCP authorization (1.6.0, Sprint 37b)
+
+- **Per-user access without a service account (B-7101).** Before 1.6.0 Exprsn-AI was an MCP client only, so reaching
+  its workflows or records from an MCP client meant a separate MCP service holding a service account's credential,
+  which acted with that account's rights for everyone. Each workspace's MCP server now acts as the person who signed
+  in: their roles narrowed by the token's scopes, their clearance lowered to the label the workspace publishes at, the
+  workspace membership, and the same dispatcher, label ceilings, rate limits and `tool-call` and `context` checkpoints
+  as a call from the console. Nothing is published until an identity admin turns a workspace's server on, and only the
+  groups chosen there.
+- **Writes wait for the person (B-7101).** A write or destructive call, and any call the `tool-call` guardrail holds,
+  does not run: it is held with its arguments sealed (`mcp-hold:<id>`) and the person is notified. Only a browser
+  session decides (the decide route is session-only, and an MCP token is refused by the API anyway), so a client, or a
+  prompt injected into its model, cannot approve its own call. An approval covers that tool with exactly those
+  arguments (compared by hash), once, for 15 minutes; a pending call lapses after an hour.
+- **A resource server of the tenant's issuer (B-7102).** The endpoint accepts only access tokens from the tenant's own
+  issuer whose audience is that endpoint's URL (RFC 8707): the resource named at the authorization endpoint is checked
+  against the tenant's endpoints, kept with the code and the refresh token family, and becomes the `aud`. A token for
+  the API, another workspace or another tenant is refused with `401` and the protected resource metadata URL (RFC
+  9728); the API refuses tokens for an MCP endpoint, so a token handed to an MCP client cannot be replayed against the
+  console's API. Revocation, disabled clients and users, ended sessions and the deny-list apply as to any token from
+  the issuer. DPoP-bound tokens are checked with a proof per request and can be required per workspace. Requests with
+  a foreign `Origin` are refused (DNS rebinding), failed tokens count towards the per-address bearer-failure limit,
+  and each user has at most 600 requests a minute.
+- **Dynamic client registration is off by default (B-7102).** When an identity admin turns it on, any client that
+  reaches the issuer can register (RFC 7591), but only with the authorization code grant, PKCE required, redirect URIs
+  on HTTPS or a loopback address, and the MCP scopes; each such client is third-party or public, so every person is
+  asked for consent before it acts as them, and an admin can disable it like any client. At most 500 per tenant.
+- **OAuth for the MCP client (B-7103).** Each person connects to an authorization-protected MCP server with the
+  authorization code grant and PKCE (`S256`), naming the server as the resource. The `state` is single use and bound to
+  the browser that started the flow by an HttpOnly cookie (so a code obtained by someone else cannot be attached to
+  another account), the verifier is sealed at rest, and an `iss` in the answer must be the authorization server asked
+  (RFC 9207). Access and refresh tokens are sealed with the tenant key (`mcp-token:` and `mcp-refresh:` associated
+  data), refreshed before they expire, deleted when a refresh is refused, and revoked at the authorization server when
+  the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
+  MCP calls; tokens never enter model context.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -159,6 +230,35 @@ the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, emp
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- HTTP tools and prompt-injection defence (1.6.0, Sprint 37a). The heuristic injection classifier is a set of
+  patterns tuned on the corpus it is measured against (detection 100%, false positives 3.3% on it); new phrasings,
+  other languages than English, Spanish, French, German and Dutch, and attacks split across chunks are missed, and a
+  benign text quoting an attack (security training) is flagged. A guard-model rule (any profile, through the
+  `injection` mechanism) is the stronger option; whether the platform should ship one by default is an open decision.
+  Annotate mode only warns the model, and trust marking lowers but does not remove the chance that a model follows an
+  instruction it reads; block mode drops whole chunks, including the rest of their text. Memories are not wrapped as
+  untrusted (they are proposed through the memory checkpoint and accepted by a curator), and neither are a delegated
+  agent's answer or a workflow's output (a workflow HTTP step's answer reaches a later model step unmarked). The
+  injection counts are per tenant and source, not per workspace on the Guardrails screen. HTTP tool answers are not
+  scanned for malware and must be JSON or text; a tool's vault references resolve as its author, so a tool keeps
+  working for its callers until the author loses `secrets:read` or the vault policy changes, and stops for everyone
+  then. Public hosts are allowed per tenant, not per tool (one list shared with workflow HTTP steps and webhooks, as the
+  open decision assumes); the guard re-resolves on every call, so a host whose DNS answer moves to a refused address
+  is refused at that call, not before. Only `read` HTTP tools run in the registry's test harness; a write tool is
+  tested through an agent run with its approval.
+- The MCP server and MCP authorization (1.6.0, Sprint 37b, B-7101 to B-7103). The server offers no sessions, no
+  event stream and no resources or prompts: a long agent run or a workflow paused on an approval answers with a handle
+  after 20 s, and the client asks again with `exprsn_run_status`. Held calls are matched by the arguments' hash, so a
+  client that changes any argument asks again; the approval is per call, with no "trust this client" setting. Agents
+  published to a workspace run as tools with their own approvals inside the run (decided on the Runs screen, as in the
+  console), not with a held call. The DNS-rebinding check refuses any foreign `Origin`, so a browser-based MCP client
+  on another origin cannot use the endpoint. Dynamically registered clients are not removed when unused. On the client
+  side, refreshes are serialised per server and user on one instance only: two instances refreshing the same rotating
+  refresh token at once can make the authorization server revoke the grant, and the person then connects again.
+  Discovery and token requests reach internal hosts only (or those `MCP_ALLOWED_HOSTS` names), so an MCP server whose
+  authorization server is public needs that host allow-listed. A server's OAuth configuration removed or rediscovered
+  for another issuer leaves tokens users already connected until they expire or are disconnected.
 
 - Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
   server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
@@ -311,6 +411,53 @@ filter, private `/tmp`, only the state directory writable.
   holds addresses for `VAULT_ANOMALY_HISTORY_DAYS`; it is readable by the owner and vault administrators through the
   flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
   vault administrators.
+
+- SCIM 2.0 provisioning (1.6.0, Sprint 37c, B-7201, B-7202). A SCIM token is a bearer secret for one store with no
+  sender binding (no mTLS, no DPoP): anyone holding it creates, changes and deprovisions that store's users and their
+  group memberships, which through group mappings means their roles, clearance and workspaces (never more than the
+  mappings name: a SCIM store cannot give a role no mapping names, and it never takes over a user of another store).
+  Tokens are shown once, kept as an HMAC with `SESSION_SECRET` (rotating it invalidates every SCIM token, as it does
+  API keys), expire after `IDENTITY_SCIM_TOKEN_MAX_DAYS` and are revoked under Identity; the rate limit is per address
+  (`IDENTITY_SCIM_RATE_PER_MINUTE`), not per token. Failed token checks are not written to the audit chain (no tenant
+  is known yet); use the access log. Complex filters are evaluated in memory over at most 50 000 users or groups of the
+  store; one `eq` on an indexed attribute is asked of the database. Deprovisioning ends what can be ended at once
+  (sessions and their sockets, OAuth refresh tokens, API keys, DAV app passwords); an OAuth access token already issued
+  to another relying party stays valid until it expires (at most its lifetime, 5 to 30 minutes) unless that party
+  introspects it, as for any disabled user. Sign-in for SCIM users goes through the upstream stores the SCIM store
+  names, matched by username: an upstream store whose usernames are not the provider's `userName` (Entra ID's UPN,
+  Okta's login) does not link, and an upstream store an administrator names that belongs to another provider would let
+  its accounts with the same names sign in as the SCIM users, so name only the stores of the same provider. The
+  conformance runs of the Entra ID SCIM Validator and Okta's SCIM test suite could not be made from here (they call
+  the service from the internet); `server/test/sprint37c-scim.test.ts` reproduces their checks locally
+  (`docs/identity.md`).
+
+- Vault sharing (1.6.0, Sprint 37c, B-4801). A share is an ordinary allow grant of `read` and `list` on one exact KV
+  path, so it widens who reads that secret by design, within what the policy allows: a deny that names the grantee
+  still wins, and the secret's label still has to clear the grantee's clearance. Sharing with a directory group or a
+  workspace reaches whoever is in it at read time, including people who join later; share with a person when that
+  matters. Whoever may share (holders of `secrets:write` with `read` and `write` on the path) may share with any
+  principal of the tenant, without a second approval. An expired share stops applying in the same instant (the policy
+  query compares the expiry), and is removed by `vault.shares.expire` within five minutes. A grantee who read the value
+  keeps what they read: revoking a share does not rotate the secret. Reveals by grantees are audited and watched for
+  anomalies (B-4803) like the owner's.
+
+- MongoDB leases (1.6.0, Sprint 37c, B-4802). MongoDB accounts carry no expiry, so a leased user exists until the
+  sweeper drops it (every `VAULT_LEASE_SWEEP_SECONDS`, 60 by default) or a revoke does; between the lease's expiry and
+  the next sweep its password still works (PostgreSQL's `VALID UNTIL` closes that window there, MySQL has the same gap).
+  The expiry is recorded in the user's `customData` for operators. Ending a dropped user's open sessions needs
+  `killAnySession`, which `userAdmin` does not include: without it, sessions opened before the drop run until they
+  close. The admin login is checked for `createUser`, `dropUser` and `grantRole` at registration, not for
+  `killAnySession`. Connections use one direct connection to the checked, pinned address (no replica-set discovery);
+  `mongodb+srv` is not supported.
+
+- Quote posts and visibility (1.6.0, Sprint 37c, B-4901). Unlisted means out of feeds, not secret: anyone who may read
+  the post's workspace or group and has its link (or its id, a ULID that encodes its creation time) can open it, and a
+  bookmark keeps it listed for whoever saved it. Moderation, the flag queue, search over the audit chain and exports
+  treat unlisted posts like any other. `public` changes nothing inside the instance (D4: there is no public feed); it
+  only marks posts an author lets the 1.7.0 cross-posting (B-11402) write elsewhere. A quote may sit in another
+  workspace than what it quotes: readers there who cannot read the quoted post see the quote without the embed, but its
+  author's own words about the quoted post are theirs to share, under the guardrail and the quote's label (at least the
+  quoted post's).
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or

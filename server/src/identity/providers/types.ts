@@ -44,7 +44,7 @@ export interface IdentityProvider {
   close(): Promise<void>;
 }
 
-export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml', 'atproto', 'github'] as const;
+export const PROVIDER_KINDS = ['local', 'ldap', 'sql', 'oidc', 'saml', 'atproto', 'github', 'scim'] as const;
 /**
  * Upstream identity providers: sign-in is redirected to them; they take no passwords and have no directory to sync.
  * Sprint 26a (B-1804): GitHub is one, as an OAuth 2.0 store.
@@ -210,13 +210,28 @@ export const githubConfigSchema = z
   .strict();
 
 export type GitHubConfig = z.infer<typeof githubConfigSchema>;
+
+/**
+ * 1.6.0, Sprint 37c (B-7201): a SCIM 2.0 store. An identity provider pushes users and groups to it at /scim/v2 with a
+ * SCIM token; it takes no passwords. Its users sign in through the upstream stores named in `signInStores` (the OIDC,
+ * SAML or GitHub store of the same provider): a sign-in there with the user's username signs in as the SCIM user, with
+ * the roles the SCIM groups map to. Group mappings name the SCIM groups' display names, with this store as provider.
+ */
+export const scimConfigSchema = z
+  .object({
+    ...common,
+    signInStores: z.array(z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, 'A user store id')).max(10).default([])
+  })
+  .strict();
+
+export type ScimConfig = z.infer<typeof scimConfigSchema>;
 export type LocalConfig = z.infer<typeof localConfigSchema>;
 export type OidcUpstreamConfig = z.infer<typeof oidcConfigSchema>;
 export type SamlUpstreamConfig = z.infer<typeof samlConfigSchema>;
 export type LdapConfig = z.infer<typeof ldapConfigSchema>;
 export type SqlConfig = z.infer<typeof sqlConfigSchema>;
 
-export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig | AtprotoConfig | GitHubConfig {
+export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalConfig | LdapConfig | SqlConfig | OidcUpstreamConfig | SamlUpstreamConfig | AtprotoConfig | GitHubConfig | ScimConfig {
   switch (kind) {
     case 'local':
       return localConfigSchema.parse(config ?? {});
@@ -232,6 +247,8 @@ export function parseProviderConfig(kind: ProviderKind, config: unknown): LocalC
       return atprotoConfigSchema.parse(config ?? {});
     case 'github':
       return githubConfigSchema.parse(config);
+    case 'scim':
+      return scimConfigSchema.parse(config ?? {});
   }
 }
 

@@ -222,7 +222,9 @@ describe('MCP servers', () => {
         if (view.messages[1].state !== 'queued' && view.messages[1].state !== 'streaming') break;
         await new Promise((r) => setTimeout(r, 20));
       }
-      expect(view.messages[1]).toMatchObject({ state: 'complete', content: 'Found {"hits":["travel-1"]}' });
+      // B-6901: the result reaches the model wrapped as untrusted content (the fake echoes the tool message).
+      expect(view.messages[1]).toMatchObject({ state: 'complete' });
+      expect(view.messages[1].content).toMatch(/^Found <untrusted-content source="mcp" from="jira.search_issues" datamark="ˆ">\n.*\n\{"hits":\["travel-1"\]\}\n<\/untrusted-content>$/);
       expect(view.messages[1].tools[0]).toMatchObject({ name: 'jira.search_issues', output: { hits: ['travel-1'] } });
       expect(mcp.calls).toEqual([expect.objectContaining({ name: 'search_issues', arguments: { q: 'travel' } })]);
 
@@ -261,7 +263,7 @@ describe('MCP servers', () => {
       h.s.guardrails = { check: async (i) => (i.checkpoint === 'context' && i.meta?.via === 'tool-result' ? { action: 'redact', text: i.text.replace('travel-1', '[REDACTED]'), findings: [] } : { action: 'allow', text: i.text, findings: [] }) };
       const redacted = await ask('And again');
       expect(redacted.tools[0].output).toEqual({ hits: ['[REDACTED]'] });
-      expect(redacted.content).toBe('Found {"hits":["[REDACTED]"]}');
+      expect(redacted.content).toContain('{"hits":["[REDACTED]"]}');
 
       await a.agent.delete(`/api/admin/mcp-servers/${reg.id}`).set('x-csrf-token', a.csrf).expect(200);
       expect((await h.s.gateway.repo.profile(h.tenantId, profile.id))!.tools).toEqual([]);

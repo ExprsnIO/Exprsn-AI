@@ -45,6 +45,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "A PDS access token (at+jwt) from com.atproto.server.createSession or createAccount (B-2901); accepted at /xrpc only. refreshSession and deleteSession take the refresh token (refresh+jwt) instead"
+      },
+      "scimToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A SCIM token (exai_scim1_…) made under Identity for one SCIM store"
       }
     },
     "schemas": {
@@ -6259,6 +6264,23 @@
                 "type": "null"
               }
             ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "workspace",
+              "unlisted"
+            ]
+          },
+          "quoteOf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quoted": {
+            "description": "The quoted post as the caller may see it; null when blocked, gone or out of reach; absent unless the post is a quote"
           }
         },
         "required": [
@@ -10704,6 +10726,224 @@
           "name",
           "position"
         ]
+      },
+      "ScimToken": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ]
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastUsedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastUsedIp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "state",
+          "createdAt"
+        ]
+      },
+      "VaultShare": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "subjectKind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "group",
+              "workspace",
+              "api_key"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharedByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharedAt": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "subjectKind",
+          "subject",
+          "capabilities",
+          "sharedAt",
+          "state"
+        ]
+      },
+      "ScimError": {
+        "type": "object",
+        "properties": {
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "scimType": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemas",
+          "status",
+          "detail"
+        ]
+      },
+      "ScimResource": {
+        "type": "object",
+        "description": "A SCIM resource (RFC 7643): User or Group with schemas, id, meta",
+        "properties": {
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "meta": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "schemas",
+          "id"
+        ]
+      },
+      "ScimList": {
+        "type": "object",
+        "properties": {
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "totalResults": {
+            "type": "integer"
+          },
+          "itemsPerPage": {
+            "type": "integer"
+          },
+          "startIndex": {
+            "type": "integer"
+          },
+          "Resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScimResource"
+            }
+          }
+        },
+        "required": [
+          "schemas",
+          "totalResults",
+          "Resources"
+        ]
       }
     },
     "responses": {
@@ -10904,6 +11144,223 @@
           ".well-known"
         ],
         "summary": "Discovery (issuer, endpoints, S256, ES256, grant types). CORS open",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 authorization server metadata of the default tenant: the OpenID discovery document, with registration_endpoint when the tenant allows dynamic client registration (Identity, MCP server) (B-7102)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server/t/{tenant}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 metadata of another tenant at the path-inserted address MCP clients try first (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration/t/{tenant}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The OpenID discovery document of another tenant at the path-inserted address (RFC 8414 section 5 style) (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp/{tenant}/{workspace}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "RFC 9728 protected resource metadata of a workspace's MCP server: resource (the endpoint URL), authorization_servers (the tenant's issuer), scopes_supported, bearer_methods_supported [header], dpop_signing_alg_values_supported, dpop_bound_access_tokens_required. 404 unless the workspace publishes it (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/mcp/{tenant}/{workspace}": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "A workspace's MCP server (B-7101, B-7102): one JSON-RPC 2.0 message per POST over the streamable HTTP transport, answered with JSON (protocol 2025-06-18 or 2025-03-26; no sessions, no batches): initialize, ping, tools/list, tools/call; notifications get 202. Authorization: an access token from the tenant's issuer whose audience is this URL (RFC 8707), as Bearer or DPoP (required when the workspace says so). Without one: 401 with WWW-Authenticate Bearer resource_metadata=..., scope=...; a token for another resource: 401 error=invalid_token; no usable scope: 403 error=insufficient_scope. The query ?groups=workflows,agents,knowledge,tools,records narrows the tool groups. Calls act as the user with their clearance lowered to the workspace's published label, through the tool dispatcher, guardrails and approval; write calls answer isError with structuredContent.held {id, expiresAt} until the user approves them; every call is audited mcp.server.call",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jsonrpc": {
+                    "const": "2.0"
+                  },
+                  "id": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "method"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "405: no server-sent event stream is offered (B-7101)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp-server"
+        ],
+        "summary": "405: there are no sessions to end (B-7101)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13021,6 +13478,32 @@
         }
       }
     },
+    "/api/admin/guardrails/injection": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/guardrails"
+        ],
+        "summary": "guardrails:manage. B-6902 prompt-injection defence: detections at the untrusted-content checkpoint per source (knowledge, crawl, tool, mcp, http; blocked and annotated) over the last ?days (1 to 90, default 7) and the 50 most recent (no text), the mode the tenant's effective rules give (block, annotate or off), those rules, and the heuristic classifier's rates on the CI corpus (B-6903) with its floor and ceiling",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/guardrails/test": {
       "post": {
         "tags": [
@@ -13300,6 +13783,255 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/identity-providers/{id}/scim": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/identity-providers"
+        ],
+        "summary": "identity:manage. B-7201: a SCIM store's base URL, counts and tokens",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "store": {
+                      "type": "object"
+                    },
+                    "baseUrl": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "integer"
+                    },
+                    "activeUsers": {
+                      "type": "integer"
+                    },
+                    "groups": {
+                      "type": "integer"
+                    },
+                    "groupMappings": {
+                      "type": "integer"
+                    },
+                    "lastChangeAt": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ScimToken"
+                      }
+                    }
+                  },
+                  "required": [
+                    "store",
+                    "baseUrl",
+                    "users",
+                    "tokens"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/identity-providers/{id}/scim/reapply": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/identity-providers"
+        ],
+        "summary": "identity:manage. B-7202: re-applies the group mappings to every user of the SCIM store, as the job identity.scim.reapply. Audited scim.mappings.reapplied",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "jobId"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/identity-providers/{id}/scim/tokens": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/identity-providers"
+        ],
+        "summary": "identity:manage. B-7201: a SCIM token for the store, shown once. Audited scim.token.created",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "expiresInDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 3650
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The token (its secret once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ScimToken"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "type": "string"
+                        },
+                        "baseUrl": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "token",
+                        "baseUrl"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/identity-providers/{id}/scim/tokens/{tokenId}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/identity-providers"
+        ],
+        "summary": "identity:manage. B-7201: revokes a SCIM token. Audited scim.token.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tokenId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimToken"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -14025,6 +14757,126 @@
         }
       }
     },
+    "/api/admin/mcp-servers/{id}/oauth": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. The manual OAuth fallback for a per-user server (B-7103): {authorizationEndpoint, tokenEndpoint, revocationEndpoint?, clientId, clientSecret? (sealed; omitted keeps it, null clears it), scopes?, resource?}. Audited mcp.oauth.configured",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "authorizationEndpoint": {
+                    "type": "string"
+                  },
+                  "tokenEndpoint": {
+                    "type": "string"
+                  },
+                  "revocationEndpoint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "clientSecret": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scopes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "resource": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "authorizationEndpoint",
+                  "tokenEndpoint",
+                  "clientId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. Removes the server's OAuth configuration (204); stored user tokens stay until they expire or users disconnect. Audited mcp.oauth.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-servers/{id}/oauth/discover": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-servers"
+        ],
+        "summary": "mcp:manage. OAuth discovery for a per-user server (B-7103): the unauthenticated 401 challenge and its RFC 9728 metadata, the authorization server's RFC 8414 (or OpenID) metadata, and RFC 7591 registration of a public client with this server's callback. Answers {oauth, steps [{check, result, detail}]}; 422 with reason and steps when a step fails. Audited mcp.oauth.discovered or mcp.oauth.discovery.failed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/mcp-servers/{id}/tools/{tool}/approve": {
       "post": {
         "tags": [
@@ -14104,6 +14956,140 @@
           },
           {
             "name": "tool",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. The MCP server page (B-7101, B-7102): issuer, scopes, groups, dynamicRegistration and registrationEndpoint, publications (every active workspace with workspaceId, workspace, ceiling, url, enabled, groups, label, requireDpop, updatedAt) and the clients that registered themselves",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/settings": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. {dynamicRegistration}: whether MCP clients may register themselves with the tenant's issuer (RFC 7591). Audited mcp.server.settings.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dynamicRegistration": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "dynamicRegistration"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/workspaces/{workspaceId}": {
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. Publishes a workspace's MCP server: {enabled?, groups?, label? (at most the workspace ceiling), requireDpop?}. Answers {workspaceId, url, enabled, groups, label, requireDpop, updatedAt}. Audited mcp.server.published, mcp.server.unpublished or mcp.server.publication.updated",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "groups": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "workflows",
+                        "agents",
+                        "knowledge",
+                        "tools",
+                        "records"
+                      ]
+                    }
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "requireDpop": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/workspaces/{workspaceId}/tools": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage. What the workspace publishes, as the admin would see it over MCP (their roles and clearance, lowered to the label), in every group so a change of groups can be previewed: {asYou, label, groups (the published ones), tools [{name, title, group, sideEffect, description, published}]}",
+        "parameters": [
+          {
+            "name": "workspaceId",
             "in": "path",
             "required": true,
             "schema": {
@@ -18100,7 +19086,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "A draft, checked at once. Tool: {kind: 'tool', name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
+        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -26486,6 +27472,133 @@
         }
       }
     },
+    "/api/mcp-oauth/start": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp"
+        ],
+        "summary": "tools:invoke, browser session. Starts the user's OAuth connection to a per-user MCP server (B-7103): {server, returnTo?: settings|mcp-servers} answers {authorizeUrl} (authorization code with PKCE S256, resource the server's URL) and sets a short-lived cookie binding the request to this browser. Audited mcp.oauth.started",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "server": {
+                    "type": "string"
+                  },
+                  "returnTo": {
+                    "type": "string",
+                    "enum": [
+                      "settings",
+                      "mcp-servers"
+                    ]
+                  }
+                },
+                "required": [
+                  "server"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/mcp-oauth/callback": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "mcp"
+        ],
+        "summary": "The redirect back from the MCP server's authorization server (B-7103): the state (single use, ten minutes) and the binding cookie identify the user; the code is exchanged with the PKCE verifier and the tokens stored sealed. Redirects to /#/settings?tab=mcp&server=...&result=connected, or result=failed&reason=.... Audited mcp.oauth.connected",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's MCP access (B-7101): servers (the enabled MCP servers of their workspaces: workspaceId, workspace, url, groups, label, requireDpop) and holds (their calls waiting for approval)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-holds": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's held MCP calls, ?state=pending|all: id, workspace, client, tool, sideEffect, label, reason, state (pending, approved, rejected, used, expired), arguments, createdAt, expiresAt, decidedAt (B-7101)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-holds/{id}/decide": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Browser session only (never the token that asked). {decision: approve|reject}; an approved call runs when the client calls again with the same arguments within 15 minutes, once. 404 for another user's call, 409 when decided or expired. Audited mcp.server.hold.approved or rejected (B-7101)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/me": {
       "get": {
         "tags": [
@@ -32834,6 +33947,231 @@
         }
       }
     },
+    "/api/vault/kv/shares/{path}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read and the path policy's read and write. B-4801: the shares of one secret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "shares": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VaultShare"
+                      }
+                    }
+                  },
+                  "required": [
+                    "shares"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:write and the path policy's read and write. B-4801: shares the secret with a principal as a policy grant of read and list on its path. 409 step vault-policy when a deny names the user. Audited vault.secret.shared",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "subjectKind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "group",
+                      "workspace",
+                      "api_key"
+                    ]
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "expiresInDays": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "minimum": 0.01,
+                    "maximum": 3650
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "subjectKind",
+                  "subject"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The share",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultShare"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/shared-with-me": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:read. B-4801: the secrets shared with the caller, within their clearance",
+        "responses": {
+          "200": {
+            "description": "The shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "shares": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/VaultShare"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "currentVersion": {
+                                "type": "integer"
+                              },
+                              "updatedAt": {
+                                "type": "integer"
+                              },
+                              "readable": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "shares"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/vault/shares/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "vault"
+        ],
+        "summary": "secrets:write (the sharer, someone who may share the secret, or secrets:admin). B-4801: revokes a share. Audited vault.secret.share.revoked",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "revoked"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/vault/kv/undelete/{path}": {
       "post": {
         "tags": [
@@ -35950,6 +37288,62 @@
         }
       }
     },
+    "/oauth/register": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 7591 dynamic client registration of the default tenant, when it allows it (else 404): redirect_uris (https, or http on a loopback address), token_endpoint_auth_method none (public) or client_secret_basic/client_secret_post (a secret in the answer, shown once), grant_types authorization_code [refresh_token], scope within the MCP scopes. 201 with client_id; audited oidc.client.registered (B-7102)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "redirect_uris": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "client_name": {
+                    "type": "string"
+                  },
+                  "token_endpoint_auth_method": {
+                    "type": "string"
+                  },
+                  "grant_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "response_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "scope": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "redirect_uris"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/oauth/userinfo": {
       "get": {
         "tags": [
@@ -36418,6 +37812,1062 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/scim/v2/Groups": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: the store's groups, filtered (RFC 7644 grammar) and paged",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startIndex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "attributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludedAttributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: creates a group. 409 uniqueness for a taken name. Audited scim.group.created",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with Location and ETag",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/Groups/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: one group",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludedAttributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: replaces the group. If-Match honoured (412). Audited scim.group.replaced",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: add, replace and remove operations on the group (members by value list or value filter). Audited scim.group.patched",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "schemas": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "Operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "op"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "Operations"
+                ]
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "schemas": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "Operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "op"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "Operations"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: deletes the group. Audited scim.group.deleted",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/ResourceTypes": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: the User and Group resource types",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/ResourceTypes/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: one resource type",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/Schemas": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: the User, enterprise User and Group schemas",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/Schemas/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: one schema by URN",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/ServiceProviderConfig": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: what this server supports (patch, filter with maxResults, etag; no bulk, sort or password change)",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/Users": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: the store's users, filtered (RFC 7644 grammar) and paged",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startIndex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "attributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludedAttributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: creates a user. 409 uniqueness for a taken name. Audited scim.user.created",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with Location and ETag",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scim/v2/Users/{id}": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: one user",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludedAttributes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: replaces the user. If-Match honoured (412). Audited scim.user.replaced",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: add, replace and remove operations on the user (active false ends every session, OAuth grant, API key and app password). Audited scim.user.patched",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "schemas": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "Operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "op"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "Operations"
+                ]
+              }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "schemas": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "Operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "op"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "Operations"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimResource"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM token. B-7201: deletes the user (the user is disabled, signed out everywhere and unlinked; the row stays). Audited scim.user.deleted",
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "description": "A SCIM error (RFC 7644 3.12)",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
           }
         }
       }
@@ -37141,6 +39591,54 @@
           "t"
         ],
         "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/oauth/register": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 7591 dynamic client registration of another tenant (B-7102)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/t/{tenant}/.well-known/oauth-authorization-server": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 authorization server metadata of another tenant under its issuer path (B-7102)",
         "parameters": [
           {
             "name": "tenant",
@@ -48023,6 +50521,19 @@
               "minimum": 1,
               "maximum": 100
             }
+          },
+          {
+            "name": "unlisted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "1.6.0 (B-4901): on one's own page, adds one's own unlisted posts"
           }
         ],
         "responses": {
@@ -48330,6 +50841,14 @@
                       "confidential",
                       "restricted"
                     ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "workspace",
+                      "unlisted"
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -48402,7 +50921,7 @@
         "tags": [
           "feed"
         ],
-        "summary": "feed:write. Edits the caller's post (checked again by the guardrails)",
+        "summary": "feed:write. Edits the caller's post (checked again by the guardrails). 1.6.0 (B-4901): the author may change the visibility (audited feed.post.visibility)",
         "parameters": [
           {
             "name": "id",
@@ -48423,11 +50942,16 @@
                   "body": {
                     "type": "string",
                     "maxLength": 100000
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "workspace",
+                      "unlisted"
+                    ]
                   }
                 },
-                "required": [
-                  "body"
-                ],
                 "additionalProperties": false
               }
             }
@@ -48601,6 +51125,103 @@
                     "id",
                     "state"
                   ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/feed/posts/{id}/quote": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "feed"
+        ],
+        "summary": "feed:write. B-4901: quotes a post with a comment, in any workspace or group the caller may post in; labelled at least as high as the quoted post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "maxLength": 100000
+                  },
+                  "workspaceId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "groupId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "media": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "maxItems": 10
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "workspace",
+                      "unlisted"
+                    ]
+                  }
+                },
+                "required": [
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedPost"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Held for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedPost"
                 }
               }
             }

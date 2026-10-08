@@ -2,6 +2,48 @@
 
 ## 1.6.0 (in progress)
 
+### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
+
+- Migration `039_tools_injection` (with the items below): `registry_http_calls`, the meter of HTTP tool calls.
+- Registry tools with `impl: http` (B-8901): a method (GET, POST, PUT, PATCH, DELETE), a URL template whose path and
+  query parameters come from the tool's input schema, query and header values, a body (none, the other arguments as
+  JSON, or a template), a response mapping (a JSON pointer, capped in size) and a timeout. GET tools are `read`, every
+  other method `write` unless the author raises it to `destructive`. Drafts go through the registry's checks (a new
+  one, HTTP request), review and publish lifecycle; a draft's request can be edited. Ported from exprsn-platform's
+  agent runtime (port decision D11c). `server/src/registry/http-tool.ts`.
+- The outbound address guard (B-8902): every call through `platform/egress.ts` (resolved once, every address checked,
+  the connection pinned, redirects not followed); cloud metadata addresses always refused, internal hosts only as
+  `SERVICE_ALLOWED_HOSTS` names them, public hosts only from the tenant's list of allowed hosts (the list workflow HTTP
+  steps and webhooks read). Credentials only as `vault:path#key` references, resolved at call time as the tool's
+  author; a literal credential in a header, query parameter or body field is refused when the tool is saved.
+- Guardrails, limits and audit (B-8903): arguments pass the `tool-call` guardrail before the request and the result
+  the `context` and `untrusted-content` checkpoints after it; the tool's rate limit applies; each call is metered and
+  audited `registry.http.called` with host, method, status, size and latency, never a secret. New settings
+  `HTTP_TOOL_TIMEOUT_MS` (30 s) and `HTTP_TOOL_MAX_RESPONSE_BYTES` (1 MiB).
+- Console (B-8904): the Registry screen's entry form has the kind Tool (HTTP request) with a vault reference picker;
+  the inspector shows the request and the last day's calls; the test harness calls a read-only HTTP tool through the
+  guard; Allowed hosts keeps the tenant's list. Prototype board first; `e2e/tests/registry-http.spec.ts` with axe-core
+  and the reflow checks. The e2e server names 127.0.0.1 in `SERVICE_ALLOWED_HOSTS`.
+
+### Prompt-injection defence for untrusted content (Sprint 37a, B-6901 to B-6903)
+
+- Trust marking (B-6901): knowledge chunks, crawled pages, tool results, MCP results and HTTP tool answers reach the
+  model inside `<untrusted-content>` delimiters naming the source, with their words datamarked, in chat, `/v1`, agent
+  runs and workflow model steps with skills. Per profile (`profiles.trust_marking`, `trustMarking` on the profiles
+  API and the Profiles screen), on by default. Calculate, delegated agents and workflows are not wrapped.
+- The `untrusted-content` checkpoint (B-6902), the twelfth, with the `injection` rule mechanism (a heuristic
+  classifier, or a guard model answering injection or benign). The platform baseline gains `injection-untrusted`
+  (annotate: the text goes on with a warning); migration `039` adds it to an existing baseline as a new published
+  version. A blocking rule in a tenant set leaves chunks out and withholds tool results. Detections are counted per
+  source (`injection_detections`), audited `guardrail.injection.detected` and shown on the Guardrails screen
+  (`GET /api/admin/guardrails/injection`), with Add a blocking rule.
+- The injection corpus (B-6903): `server/src/guardrails/injection-corpus.ts`, 57 attacks (direct; indirect in
+  documents, pages, tool, MCP and HTTP results) and 30 benign texts. CI (`server/test/sprint37a-injection.test.ts`)
+  fails below a 90% detection rate or above a 10% false-positive rate, for the heuristic classifier, the checkpoint
+  with the baseline rule and a guard-model rule on the fake guard model; canary cases check that a marked prompt is
+  not followed.
+- Tests that compared a tool result echoed by the fake model now expect it wrapped (`mcp.test.ts`, `agents.test.ts`).
+
 ### Pinned models stay pinned while they serve
 
 - Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned
@@ -9,6 +51,67 @@
   loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
+
+### The MCP server and MCP authorization (Sprint 37b, B-7101 to B-7103)
+
+- Migration `039b_mcp_server`: `mcp_publications`, `mcp_server_settings`, `mcp_server_holds`, `mcp_oauth`,
+  `mcp_oauth_states`; `oidc_codes.resource`, `oidc_refresh_tokens.resource`, `oidc_clients.dynamic`;
+  `mcp_tokens.refresh_token`, `source`, `refreshed_at`; the `records.*` built-in tools.
+- An MCP server per workspace (B-7101) at `/mcp/<tenant>/<workspace>` over streamable HTTP (protocol 2025-06-18, JSON
+  answers): the workspace's published workflows, its agents, one search tool per knowledge base, its registry tools and
+  the record tools over low-code apps (list, query, count, aggregate, create, update, delete), in groups a client picks
+  with `?groups=`. Each call acts as the person who signed in, at most at the label the workspace publishes at, through
+  the tool dispatcher, guardrails and audit (`mcp.server.call`); writes wait for the person's approval from a browser
+  session (`/api/me/mcp-holds`). The record tools (`records.entities`, `records.query`, `records.count`,
+  `records.aggregate`, `records.create`, `records.update`, `records.delete`) are built-ins for chat, agents and
+  workflows too. A separate MCP service with a service account is no longer needed to reach Exprsn-AI from an MCP client.
+- MCP authorization (B-7102): the endpoint is an OAuth 2.1 resource server of the tenant's issuer, with RFC 9728
+  protected resource metadata, `WWW-Authenticate` naming it on 401, RFC 8707 audiences (the resource named at the
+  authorization endpoint is kept with the code and the refresh token family and becomes `aud`; `invalid_target` for a
+  resource the issuer does not serve) and DPoP, optionally required per workspace. The issuer publishes RFC 8414
+  metadata at the addresses MCP clients try and, when an identity admin turns it on, RFC 7591 dynamic client
+  registration (`POST /oauth/register`, off by default). Discovery documents announce `authorization_response_iss_
+  parameter_supported`.
+- MCP client OAuth (B-7103): for per-user MCP servers, discovery (the 401 challenge, RFC 9728, RFC 8414, RFC 7591
+  registration) or endpoints and a client entered by hand; each person connects with the authorization code and PKCE
+  (state bound to the browser), tokens are sealed with the tenant key, refreshed before they expire and on a 401, and
+  revoked at the authorization server on disconnect.
+- Console: Identity gains the MCP server tab (publish per workspace, tool groups, label, DPoP, a preview, self-
+  registration and the clients that registered themselves); Settings gains MCP access (connection URLs, held calls,
+  connect and disconnect); MCP servers gains OAuth for users. Prototype boards first; `e2e/tests/mcp-server.spec.ts`.
+- Fixed: Identity's PKCE switch for a public client is `aria-disabled`, so axe-core's enhanced contrast check no longer
+  flags its dimmed label.
+
+### SCIM 2.0, vault sharing, MongoDB leases, quote posts and visibility (Sprint 37c, B-7201, B-7202, B-4801, B-4802, B-4901)
+
+- Migration `039c_scim_vault_posts`: `scim_tokens`, `scim_users`, `scim_groups`, `scim_group_members`;
+  `vault_policies.share_secret_id` and `expires_at`; `feed_posts.visibility` and `quote_of`.
+- SCIM 2.0 provisioning (B-7201): a SCIM store (`kind: scim`) in the tenant's chain, `/scim/v2` Users and Groups
+  (RFC 7643/7644: create, replace, patch, delete, the full filter grammar, paging, `attributes`, ETags), SCIM tokens
+  made and revoked under Identity (`identity:manage`, shown once). Deactivating a user ends their sessions, OAuth
+  refresh tokens, API keys and DAV app passwords in the same request; a delete disables and unlinks them. SCIM users
+  sign in through the upstream stores the SCIM store names. `server/src/identity/scim/`, `routes/scim.ts`.
+- Group membership maps to roles (B-7202): group mappings with the SCIM store name SCIM groups; every membership change
+  recomputes roles, clearance and workspaces (`identity.scim.reapply` after mapping changes). A local conformance suite
+  (`server/test/sprint37c-scim.test.ts`) covers what the Entra ID and Okta validators check; the external validator run
+  could not be made from here (`docs/identity.md`).
+- Vault sharing (B-4801): share a KV secret with a person, a directory group, a workspace or an API key, as a policy
+  grant of read on its exact path, with an expiry (`VAULT_SHARE_MAX_DAYS`), revocable, audited; a deny still wins and
+  the label must clear the grantee. `GET /api/vault/shared-with-me`; expired shares stop applying at once and are
+  removed by `vault.shares.expire`. `server/src/vault/shares.ts`.
+- MongoDB leases (B-4802): `dialect: mongodb` for database engines (createUser with read or readWrite, updateUser on
+  renew, killAllSessionsByPattern and dropUser at the end), tested against `mongo:8`.
+- Quote posts and visibility (B-4901): `POST /api/feed/posts/:id/quote` quotes a post with a comment in any workspace
+  or group the author may post in, labelled at least as high as the quoted post; `visibility: public | workspace |
+  unlisted` on posts. An unlisted post is reachable by its link and absent from every feed, tag and digest; a repost
+  of it is refused, a quote of it is unlisted.
+- Console: Identity shows SCIM stores with their tokens and recent changes; Vault has Share, Shared with and Shared
+  with you; Messages and feed has a visibility choice, Quote, the quoted post, a post opened by its link and Your
+  unlisted posts. Prototype boards first.
+- Settings: `VAULT_SHARE_MAX_DAYS`, `IDENTITY_SCIM_MAX_RESULTS`, `IDENTITY_SCIM_RATE_PER_MINUTE`,
+  `IDENTITY_SCIM_TOKEN_MAX_DAYS`.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/identity.md` (SCIM and its conformance), `docs/security.md` (SCIM
+  tokens, shares, MongoDB lease expiry, what unlisted means), `docs/accessibility.md`, `docs/permissions.md`.
 
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 

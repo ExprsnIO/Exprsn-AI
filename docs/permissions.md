@@ -35,7 +35,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `tools:invoke` | no | 3 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -46,16 +46,16 @@ An admin permission is any permission outside the member baseline: a custom role
 | `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `mcp:manage` | yes | 11 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
-| `guardrails:manage` | yes | 18 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
-| `identity:manage` | yes | 51 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
+| `identity:manage` | yes | 59 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `tenant:manage` | yes | 44 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -66,8 +66,8 @@ An admin permission is any permission outside the member baseline: a custom role
 | `prompts:manage` | yes | 4 | x | x |  |  |  |  | x |  |  |  |  |  |  |  |
 | `billing:read` | yes | 5 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `billing:manage` | yes | 5 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `secrets:read` | no | 20 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
-| `secrets:write` | yes | 4 | x | x |  |  |  |  |  |  |  | x |  |  |  |  |
+| `secrets:read` | no | 22 | x | x |  |  |  |  |  |  |  | x |  | x |  |  |
+| `secrets:write` | yes | 6 | x | x |  |  |  |  |  |  |  | x |  |  |  |  |
 | `secrets:admin` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `pki:manage` | yes | 32 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `plugins:manage` | yes | 15 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -97,7 +97,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `messages:read` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `messages:write` | no | 15 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:read` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
-| `feed:write` | no | 11 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
+| `feed:write` | no | 12 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `feed:manage` | yes | 3 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `roles:manage` | yes | 16 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `calendars:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -212,6 +212,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `DELETE /api/mcp/servers/{id}/token`
 - `GET /api/mcp/servers`
 - `PUT /api/mcp/servers/{id}/token`
+- `POST /api/mcp-oauth/start`
 
 ### `agents:run`
 
@@ -423,6 +424,9 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/mcp-servers/{id}/tools/{tool}/reject-change`
 - `POST /api/admin/mcp-servers/{id}/tools/{tool}/revoke`
 - `PUT /api/admin/mcp-servers/{id}/credential`
+- `DELETE /api/admin/mcp-servers/{id}/oauth`
+- `POST /api/admin/mcp-servers/{id}/oauth/discover`
+- `PUT /api/admin/mcp-servers/{id}/oauth`
 
 ### `workflows:manage`
 
@@ -462,6 +466,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/{ref}/rule`
 - `PUT /api/admin/guardrails/sets/{id}/draft`
 - `PUT /api/admin/guardrails/sets/{id}/draft/rules/{ruleId}`
+- `GET /api/admin/guardrails/injection`
 
 ### `flags:review`
 
@@ -612,6 +617,14 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/federation/metadata/{id}`
 - `PUT /api/admin/identity-policy/mfa`
 - `PUT /api/admin/identity-policy/signup`
+- `GET /api/admin/mcp-server`
+- `GET /api/admin/mcp-server/workspaces/{workspaceId}/tools`
+- `PUT /api/admin/mcp-server/settings`
+- `PUT /api/admin/mcp-server/workspaces/{workspaceId}`
+- `GET /api/admin/identity-providers/{id}/scim`
+- `POST /api/admin/identity-providers/{id}/scim/tokens`
+- `DELETE /api/admin/identity-providers/{id}/scim/tokens/{tokenId}`
+- `POST /api/admin/identity-providers/{id}/scim/reapply`
 
 ### `users:manage`
 
@@ -883,6 +896,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/vault/reveal-flags`
 - `GET /api/vault/reveal-flags/{id}`
 - `POST /api/vault/reveal-flags/{id}/resolve`
+- `GET /api/vault/shared-with-me`
+- `GET /api/vault/kv/shares/{path}`
 
 ### `secrets:write`
 
@@ -890,6 +905,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/vault/kv/delete/{path}`
 - `POST /api/vault/kv/undelete/{path}`
 - `PUT /api/vault/kv/data/{path}`
+- `POST /api/vault/kv/shares/{path}`
+- `DELETE /api/vault/shares/{id}`
 
 ### `secrets:admin`
 
@@ -1411,6 +1428,7 @@ No route requires it directly; handlers and services check it.
 - `POST /api/feed/posts/{id}/repost`
 - `PUT /api/feed/posts/{id}/bookmark`
 - `PUT /api/feed/posts/{id}/reactions/{kind}`
+- `POST /api/feed/posts/{id}/quote`
 
 ### `feed:manage`
 
@@ -1617,6 +1635,10 @@ These need a signed-in session or credential and no particular permission; the h
 - `GET /api/me/app-passwords`
 - `GET /api/me/dav`
 - `POST /api/me/app-passwords`
+- `GET /api/me/mcp-holds`
+- `GET /api/me/mcp-server`
+- `POST /api/me/mcp-holds/{id}/decide`
+- `POST /mcp/{tenant}/{workspace}`
 
 ## Public routes
 
@@ -1766,3 +1788,30 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `POST /xrpc/com.atproto.server.createSession`
 - `POST /xrpc/com.atproto.server.deleteSession`
 - `POST /xrpc/com.atproto.server.refreshSession`
+- `DELETE /mcp/{tenant}/{workspace}`
+- `GET /.well-known/oauth-authorization-server`
+- `GET /.well-known/oauth-authorization-server/t/{tenant}`
+- `GET /.well-known/oauth-protected-resource/mcp/{tenant}/{workspace}`
+- `GET /.well-known/openid-configuration/t/{tenant}`
+- `GET /api/mcp-oauth/callback`
+- `GET /mcp/{tenant}/{workspace}`
+- `GET /t/{tenant}/.well-known/oauth-authorization-server`
+- `POST /oauth/register`
+- `POST /t/{tenant}/oauth/register`
+- `GET /scim/v2/ServiceProviderConfig`
+- `GET /scim/v2/ResourceTypes`
+- `GET /scim/v2/ResourceTypes/{id}`
+- `GET /scim/v2/Schemas`
+- `GET /scim/v2/Schemas/{id}`
+- `GET /scim/v2/Users`
+- `POST /scim/v2/Users`
+- `GET /scim/v2/Users/{id}`
+- `PUT /scim/v2/Users/{id}`
+- `PATCH /scim/v2/Users/{id}`
+- `DELETE /scim/v2/Users/{id}`
+- `GET /scim/v2/Groups`
+- `POST /scim/v2/Groups`
+- `GET /scim/v2/Groups/{id}`
+- `PUT /scim/v2/Groups/{id}`
+- `PATCH /scim/v2/Groups/{id}`
+- `DELETE /scim/v2/Groups/{id}`

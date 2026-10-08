@@ -2,10 +2,12 @@ import type { Label } from '../authz/labels.js';
 import type { Principal } from '../authz/policy.js';
 
 /**
- * The seam every feature calls at its guardrail checkpoint. Sprint 5 provides the rule-set engine behind it; until a
+ * The seam every feature calls at its guardrail checkpoint. 1.6.0 (B-6902) adds `untrusted-content`: retrieved chunks,
+ * crawled pages, tool results and MCP and HTTP answers before a model reads them (`guardrails/injection.ts`).
+ * Sprint 5 provides the rule-set engine behind it; until a
  * tenant has rules, `check` allows everything and returns the text unchanged.
  */
-export const CHECKPOINTS = ['user-input', 'context', 'tool-call', 'model-output', 'image', 'context-transfer', 'memory', 'script', 'db-query', 'media', 'export'] as const;
+export const CHECKPOINTS = ['user-input', 'context', 'tool-call', 'model-output', 'image', 'context-transfer', 'memory', 'script', 'db-query', 'media', 'export', 'untrusted-content'] as const;
 export type Checkpoint = (typeof CHECKPOINTS)[number];
 
 /** Ordered from least to most severe; the effective action of a check is the most severe enforced finding. */

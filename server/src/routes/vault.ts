@@ -89,6 +89,25 @@ export function vaultRoutes(s: Services): Router {
     res.json(await s.revealWatch.resolve(principalOf(req), parseBody(z.string().length(26), req.params.id), b.decision, b.note || null, { ip: ip(req), traceId: req.traceId ?? null }));
   });
 
+  // ---- shares (1.6.0, B-4801): a KV secret shared with a principal, as a policy grant of read on its path ----
+
+  r.get('/vault/shared-with-me', read, async (req, res) => {
+    res.json({ shares: await s.vaultShares.sharedWithMe(await caller(req)) });
+  });
+
+  r.get('/vault/kv/shares/*path', read, async (req, res) => {
+    res.json({ shares: await s.vaultShares.list(await caller(req), wildPath(req)) });
+  });
+
+  r.post('/vault/kv/shares/*path', write, async (req, res) => {
+    const b = parseBody(z.object({ subjectKind: z.enum(SUBJECT_KINDS), subject: z.string().trim().min(1).max(200), expiresInDays: z.number().min(0.01).max(3650).nullable().optional(), note: z.string().trim().max(500).nullable().optional() }).strict(), req.body);
+    res.status(201).json(await s.vaultShares.share(await caller(req), wildPath(req), b));
+  });
+
+  r.delete('/vault/shares/:id', write, async (req, res) => {
+    res.json(await s.vaultShares.revoke(await caller(req), parseBody(z.string().length(26), req.params.id), effectivePermissions(principalOf(req)).has('secrets:admin')));
+  });
+
   r.get('/vault/kv/data/*path', read, async (req, res) => {
     const q = parseBody(z.object({ version: z.coerce.number().int().min(1).max(1_000_000_000).optional() }).strict(), req.query);
     res.json(await v.read(await caller(req), wildPath(req), q.version));
