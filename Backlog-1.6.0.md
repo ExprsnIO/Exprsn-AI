@@ -477,7 +477,7 @@ references, and the tool-call guardrail.
 | --- | --- |
 | Live streaming | Dropped (2026-10-05): no live streaming in Exprsn-AI |
 | End-to-end-encrypted messaging | Dropped (2026-10-05): server-side guardrails and AI features stay |
-| Governance voting | 1.7 or later (port decision D7); not yet in a backlog |
+| Governance voting | 1.7 or later (port decision D7); B-116 in [Backlog-1.7.0.md](Backlog-1.7.0.md) since 2026-10-07, unscheduled |
 | Recurring events and VTIMEZONE in calendar feeds | 1.7 or later |
 | Web push notifications | 1.7 or later |
 | SMS one-time codes | 1.7 or later; needs a paid SMS provider |

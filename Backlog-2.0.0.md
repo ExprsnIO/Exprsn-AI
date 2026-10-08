@@ -21,7 +21,7 @@ only (B-109).
 
 **Numbering.** Epics start at B-100 and items at B-10001. Lower epic numbers are taken: B-42 to B-99 in 1.6.0 and
 1.7.0 (the 1.6.0 gaps and the exprsn-platform port were merged on 2026-10-07; B-63 to B-68 are held for the workbench
-storyboard). B-100 to B-111 are 2.0.0's, and later epics continue at B-112 (the port's last three, in 1.7.0).
+storyboard). B-100 to B-111 are 2.0.0's, and later epics continue at B-112 (the port's last three, in 1.7.0) and B-115 to B-121 (governance, thinking, learning, skills from knowledge, classification and moderation, unscheduled in 1.7.0).
 
 **Size.** 76 items, 474 points (1 point ≈ half a day for one engineer, tests included): P0 197, P1 254, release 23. At
 about 70 points a sprint that is Sprints 44 to 50, after 1.7.0, which ends at Sprint 43 (renumbered from 40 to 46 on
