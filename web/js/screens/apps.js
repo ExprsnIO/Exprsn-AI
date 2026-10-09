@@ -577,6 +577,7 @@
             + '<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Draft JSON (edit before accepting)</summary>' + UI.textarea(JSON.stringify(draft, null, 2), { rows: 10, attrs: 'data-dr-json spellcheck="false"' }) + '</details>'
             + (r.valid ? UI.notice('<b>Draft is valid.</b> Accepting creates the new entities (after what they reference), adds the drafted fields and state machines to existing ones (nothing is removed) and creates the triggers whose workflow exists, in one request. Audited <span class="mono">app.model.applied</span>.', 'ok') : UI.notice('<b>Draft is not valid.</b> ' + esc(r.problems.join('; ')) + ' Edit the JSON and accept, or draft again.', 'warn'));
           save.disabled = !draft || !draft.entities || !draft.entities.length;
+          App.a11yPass(out); // the diff table arrived after the dialog's own pass: a scrolling table needs its keyboard stop
         } catch (err) { draft = null; out.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); }
       });
       save.addEventListener('click', async () => {
