@@ -59,6 +59,7 @@
     id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls), connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
+      { title: 'Weekly digest of new things', tone: 'neutral', text: 'Notices about newly published workflows, agents, tools and skills come once a week as one digest, linking to the catalogue.', apply(ctx) { ctx.state.catalogNotices = 'digest'; ctx.rerender(); } },
       { title: 'Key limited to one entity', tone: 'info', text: 'A key made for one app and one entity holds records:read (and records:write when picked) and nothing else: accepted under /api/apps only, refused with 403 step scope on another entity, another app or the rest of the API. The list shows the app and entity beside its scopes.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.keyNote = 'app'; ctx.rerender(); } },
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7103): MCP access.
@@ -128,7 +129,11 @@
         + (st.contrast === 'AAA' ? UI.notice('<b>AAA contrast is on.</b> Muted text, borders and shadows now use the stronger tokens. Saved to your profile and applied on every device you sign in from.', 'info') : ''));
 
       const notifs = UI.panel('Notifications', '<div class="vstack gap6">' + NOTIFS.map((n) => UI.check(n[1], st.notifs[n[0]], 'data-notif="' + n[0] + '"')).join('') + '</div>'
-        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>');
+        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>'
+        // 1.7.0 (B-12302): notices when a workflow, agent, tool or skill is published to your workspace, once each.
+        + '<div class="eyebrow">New things you can use</div>'
+        + UI.seg([{ id: 'each', label: 'As they happen' }, { id: 'digest', label: 'Weekly digest' }, { id: 'off', label: 'Off' }], st.catalogNotices || 'each', 'data-catnotices aria-label="Notices about new things you can use"')
+        + '<span class="muted" style="font-size:12px">' + ((st.catalogNotices || 'each') === 'digest' ? 'One notice a week lists what was published to your workspaces within your clearance; 2 entries wait for the next one.' : (st.catalogNotices || 'each') === 'off' ? 'No notices. The catalogue still lists everything you can use.' : 'One notice per new workflow, agent, tool or skill published to your workspaces within your clearance, linking to it in the catalogue.') + '</span>');
 
       const acctRows = st.accounts.map((a) => {
         const connected = a.state === 'connected';
@@ -219,6 +224,7 @@
       ctx.on('change', '[data-theme]', (e, t) => { ctx.app.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '. Saved to your profile.'); });
       ctx.on('change', '[data-contrast]', (e, t) => { st.contrast = t.value === 'AAA' ? 'AAA' : 'AA'; applyContrast(st.contrast); ctx.rerender(); ctx.toast(st.contrast === 'AAA' ? 'AAA contrast on. Saved to your profile.' : 'Back to AA contrast.', 'ok'); });
       ctx.on('change', '[data-language]', (e, t) => { st.language = t.value; ctx.toast('Language set to ' + esc(t.value) + '. Model answers follow the prompt language, not this setting.'); });
+      ctx.on('click', '[data-catnotices] [data-seg]', (e, t) => { st.catalogNotices = t.dataset.seg; ctx.rerender(); ctx.toast(t.dataset.seg === 'digest' ? 'Weekly digest on. What is published waits for the next one.' : t.dataset.seg === 'off' ? 'Notices about new things you can use are off.' : 'Notices as they happen.', 'ok'); });
       ctx.on('change', '[data-notif]', (e, t) => { st.notifs[t.dataset.notif] = t.checked; ctx.toast('Notification preference saved.'); ctx.rerender(); });
       ctx.on('click', '[data-disconnect]', async (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.disconnect);

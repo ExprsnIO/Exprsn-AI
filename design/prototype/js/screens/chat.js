@@ -111,6 +111,38 @@
     c3: [], c4: [{ n: 1, title: 'cards.query ⋈ ledger.query', sub: 'Tool result, 3 rows, this turn' }], c5: [{ n: 2, title: 'Travel policy v7.md', sub: 'Policy KB, section 4.3, score 0.94' }], c6: []
   };
 
+  // 1.7.0 (B-12301): "What you can do" on a new chat: the catalogue's entries for this profile, a few per category.
+  const DISCOVER = [
+    { cat: 'Documents', items: [{ kind: 'workflow', name: 'summarise-contract', desc: 'A one-page summary of a contract, clauses cited.', example: 'Summarise this contract for me' }, { kind: 'agent', name: 'Contract reviewer', desc: 'Lists the clauses that need a lawyer.', example: 'Review this NDA for unusual terms' }] },
+    { cat: 'Finance', items: [{ kind: 'workflow', name: 'quarterly-variance', desc: 'The variance note, drafted for sign-off.', example: 'Draft the Q3 variance note' }, { kind: 'agent', name: 'Data analyst', desc: 'Questions about the numbers, with sources.', example: 'How far over budget was travel in Q3?' }] },
+    { cat: 'Writing', items: [{ kind: 'skill', name: 'concise', desc: 'One sentence, the figure first.', example: 'What is the refund window?' }] }
+  ];
+  const TRIG = { workflow: '/', tool: '/', agent: '@', skill: '+' };
+  const composeOf = (it) => (it.kind === 'agent' ? '@' + it.name + ': ' + it.example : TRIG[it.kind] + it.name + ' ' + it.example);
+  // 1.7.0 (B-12303): POST /api/catalog/suggestions ranks these by the embedding profile's similarity to the draft.
+  const SUGGEST = [
+    { key: 'workflow:summarise-contract', kind: 'workflow', name: 'summarise-contract', words: ['summar', 'contract', 'agreement', 'msa'], example: 'Summarise this contract for me' },
+    { key: 'agent:Contract reviewer', kind: 'agent', name: 'Contract reviewer', words: ['contract', 'nda', 'review', 'clause'], example: 'Review this NDA for unusual terms' },
+    { key: 'workflow:quarterly-variance', kind: 'workflow', name: 'quarterly-variance', words: ['variance', 'budget', 'quarter', 'q3'], example: 'Draft the Q3 variance note' },
+    { key: 'tool:calculate', kind: 'tool', name: 'calculate', words: ['percent', 'sum', 'total', 'calculate'], example: 'What is 17.5% of 48,210?' }
+  ];
+  function suggestFor(st, convo, text) {
+    const t = text.toLowerCase(); const gone = (st.dismissed && st.dismissed[convo.id]) || [];
+    return SUGGEST.map((x) => ({ x, n: x.words.filter((w) => t.includes(w)).length })).filter((r) => r.n && gone.indexOf(r.x.key) < 0).sort((a, b) => b.n - a.n).slice(0, 3).map((r) => r.x);
+  }
+  function suggestHtml(st, convo) {
+    if (st.suggestOff) return '<div class="suggestrow muted" style="font-size:12px">Suggestions are off for profile ' + esc(st.profile || convo.profile) + '.</div>';
+    const list = st.suggestions || [];
+    if (!list.length) return '';
+    return '<div class="suggestrow" role="group" aria-label="Suggested for this message"><span class="muted" style="font-size:12px">Suggested:</span>' + list.map((x) => '<span class="schip"><button type="button" class="chip" data-usesug="' + esc(x.key) + '">' + UI.pill(x.kind, 'outline') + ' <span class="mono">' + esc(TRIG[x.kind] + x.name) + '</span></button><button type="button" class="iconbtn sm ghost" data-dismisssug="' + esc(x.key) + '" aria-label="Dismiss the suggestion ' + esc(x.name) + '">' + UI.icon('x', 12) + '</button></span>').join('') + '</div>';
+  }
+  function discoverHtml() {
+    return '<div class="discover panel"><div class="phead"><div class="eyebrow">What you can do</div><a href="#/catalog" data-gocat>See the whole catalogue</a></div>'
+      + '<div class="fg2" style="font-size:13px">Published to Finance Ops for you, through this profile. Pick one to fill the composer.</div>'
+      + DISCOVER.map((g) => '<div class="dcat"><div class="muted" style="font-size:12px;font-weight:600">' + esc(g.cat) + '</div>' + g.items.map((it) => '<button type="button" class="ditem" data-discover="' + esc(it.kind + ':' + it.name) + '"><span class="mono">' + esc(TRIG[it.kind] + it.name) + '</span><span class="desc">' + esc(it.desc) + '</span><span class="ex">"' + esc(it.example) + '"</span></button>').join('') + '</div>').join('')
+      + '</div>';
+  }
+
   App.register({
     id: 'chat', title: 'Chat', summary: 'Conversation list, thinking trace, citations, tools, agents, skills and workflows from the composer, approval and run cards, memory proposals',
     crumb: (st) => ['Chat', (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).title],
@@ -134,6 +166,10 @@
       { title: 'Workflow waiting on an approval', tone: 'info', text: '/workflow started vendor-onboarding v4; its sign-off is a card here, and approving it here resumes the chain. A call held anywhere in the chain is decided from this root too.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.wfDecided = {}; ctx.rerender(); } },
       { title: 'Skill for one turn', tone: 'neutral', text: '"One sentence" is on for this turn only; "Finance tone" is sticky. Removing a chip leaves its instructions out of the very next turn.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); } },
       { title: 'Hidden above the ceiling', tone: 'warn', text: 'The pickers never list an agent or skill whose ceiling is below the conversation\'s label; calling one by name is refused the same way.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = '@'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'What you can do on a new chat', tone: 'info', text: 'A new chat lists, by category, the workflows, agents and skills published to the workspace for you through this profile. Picking one fills the composer with its call and an example prompt.', apply(ctx) { ctx.state.convo = 'new'; ctx.rerender(); } },
+      { title: 'Suggestions while typing', tone: 'info', text: 'While you type, up to three entries whose description and examples match the draft show as chips, ranked by the embedding profile. No chat model is called.', apply(ctx) { ctx.state.convo = 'c2'; ctx.state.suggestOff = false; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = 'summarise this contract'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'Suggestion dismissed', tone: 'neutral', text: 'A dismissed suggestion stays away for the rest of this conversation, and comes back in another.', apply(ctx) { const st = ctx.state; st.convo = 'c2'; st.suggestOff = false; st.dismissed = st.dismissed || {}; st.dismissed.c2 = ['workflow:summarise-contract']; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = 'summarise this contract'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'Suggestions off for the profile', tone: 'neutral', text: 'A profile admin turned composer suggestions off for this profile; the pickers still work.', apply(ctx) { ctx.state.convo = 'c2'; ctx.state.suggestOff = true; ctx.rerender(); } },
       { title: 'Plan awaiting approval', tone: 'info', text: 'A plan-first profile drafts a plan (steps, tools, data) before any tool runs and shows it as a card. Approve it as drafted or edited, or decline it; write tools keep their own cards.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'awaiting' }; ctx.state.planEdited = false; ctx.rerender(); } },
       { title: 'Plan approved as edited', tone: 'ok', text: 'The answer ran under the edited plan: only the tools it names were offered, and the plan is recorded on the message and in the chain.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'approved' }; ctx.state.planEdited = true; ctx.rerender(); } },
       { title: 'Plan declined', tone: 'neutral', text: 'A declined plan ends the turn without running anything; the model is told on the next turn.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'declined' }; ctx.rerender(); } },
@@ -254,6 +290,10 @@
         + '.chat-plan ol{margin:4px 0 0;padding-left:20px;font-size:13px;line-height:1.5}.chat-plan li{margin:2px 0}'
         + '.chat-checked{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--fg2);padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}.chat-checked.ok{border-color:var(--ok-fg)}.chat-checked.warn{border-color:var(--warn-fg)}.chat-checked > span{flex:1 1 240px}'
         + '.chat-list{display:flex;flex-direction:column;gap:2px}'
+        + '.discover{display:flex;flex-direction:column;gap:10px}.discover .phead{display:flex;justify-content:space-between;align-items:center;gap:8px}.discover .dcat{display:flex;flex-direction:column;gap:4px}'
+        + '.ditem{all:unset;display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;cursor:pointer}.ditem:hover{background:var(--accent-tint)}.ditem:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.ditem .desc{font-size:12px;color:var(--fg2)}.ditem .ex{font-size:12px;font-style:italic;color:var(--muted);overflow-wrap:anywhere}'
+        + '.suggestrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.suggestrow .schip{display:inline-flex;align-items:center;gap:2px}'
+
         + '.chat-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto}'
         + '.msg.user{display:flex;justify-content:flex-end;align-items:flex-end;gap:6px}.msg.user .bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px}.msg.user .uactions{opacity:0}.msg.user:hover .uactions{opacity:1}'
         + '.msg.ai{display:flex;flex-direction:column;gap:10px;max-width:640px}'
@@ -282,12 +322,13 @@
         + '<div class="page tight" style="display:flex;flex-direction:column">'
         + '<div class="grow" style="overflow:auto"><div class="chat-thread" id="thread">'
         + (st.cold ? '<div class="coldbar">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(prof.id) + '</b> is loading on gpu-large-2, about 20 s. Your message will send when it is warm.</span><span class="skeleton" style="width:80px"></span></div>' : '')
-        + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })))
+        + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })) + discoverHtml())
         + (st.runWorkflow ? '<div class="panel" style="gap:8px"><div class="phead"><div class="eyebrow">Run workflow: video-to-notes v3</div>' + UI.pill('running', 'info') + '</div>' + UI.timeline([{ title: 'Extract frames', text: 'media worker, 48 frames', tone: 'ok' }, { title: 'Transcribe audio', text: 'whisper, 12 min of audio', tone: 'ok' }, { title: 'Summarise', text: 'analyst, thinking medium', tone: 'accent' }, { title: 'Guardrail check', text: 'waiting', tone: '' }]) + '<div>' + UI.btn('Open in Runs', { size: 'sm', attrs: 'data-goruns' }) + '</div></div>' : '')
         + '</div></div>'
         + (st.budget ? UI.notice('<b>Thinking budget' + (st.budget.spent ? ' spent.' : ' near its limit.') + '</b> ' + st.budget.used.toLocaleString('en-GB') + ' of ' + st.budget.limit.toLocaleString('en-GB') + ' thinking tokens today for <b>' + esc(st.budget.who) + '</b>. ' + (st.budget.spent ? 'Turns think at low until midnight UTC rather than being refused.' : 'At the limit, turns think at low rather than being refused.'), 'warn') : '')
         + '<div class="composer"><div class="inner"><div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + esc(prof.id) + (prof.agent ? '' : ' · ' + esc(prof.model.split(':')[0])), true, 'data-pick="profile"') + '</span><span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' Finance KB', true, 'data-pick="kb"') + '</span>' + UI.chip('Travel policy', true, 'data-toggle') + UI.chip(UI.icon('attach', 12) + ' q3-ledger.csv, scanned ' + UI.label('confidential', { sm: true }), true, 'data-attach') + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.level), false, 'data-pick="level"') + '</span></div>'
         + '<div class="skillchips" data-region="skills">' + skillChips(st, convo) + '</div>'
+        + '<div data-region="suggest">' + suggestHtml(st, convo) + '</div>'
         + '<div class="relative" data-region="picker">' + (st.picker ? pickerHtml(st, convo) : '') + '</div>'
         + '<label class="sr" for="composer">Message</label><textarea id="composer" placeholder="Ask something. Type / for a tool or workflow, @ for an agent, + for a skill." aria-describedby="composer-hint"></textarea>'
         + '<span id="composer-hint" class="sr">Slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
@@ -332,7 +373,14 @@
         else if (st.picker && open) st.picker.q = v.slice(1);
         else if (st.picker && !open) st.picker = null;
         const host = ctx.$('[data-region="picker"]'); if (host) host.innerHTML = st.picker ? pickerHtml(st, convo) : '';
+        // B-12303: suggestions after a pause in typing (debounced on the client), never while a picker is open.
+        clearTimeout(st.suggestTimer);
+        st.suggestTimer = setTimeout(() => { st.suggestions = st.picker || st.suggestOff || v.trim().length < 3 ? [] : suggestFor(st, convo, v); const r = ctx.$('[data-region="suggest"]'); if (r) r.innerHTML = suggestHtml(st, convo); }, 300);
       });
+      ctx.on('click', '[data-usesug]', (e, t) => { const x = SUGGEST.find((y) => y.key === t.dataset.usesug); const ta = ctx.$('#composer'); if (!x || !ta) return; ta.value = x.kind === 'agent' ? '@' + x.name + ': ' + ta.value : TRIG[x.kind] + x.name + ' ' + ta.value; st.suggestions = []; ctx.$('[data-region="suggest"]').innerHTML = ''; ta.focus(); ctx.toast((x.kind === 'agent' ? 'Enter starts a run of ' : x.kind === 'skill' ? 'Enter adds ' : 'Enter opens ') + esc(x.name) + ' with your text.'); });
+      ctx.on('click', '[data-dismisssug]', (e, t) => { st.dismissed = st.dismissed || {}; st.dismissed[convo.id] = (st.dismissed[convo.id] || []).concat([t.dataset.dismisssug]); st.suggestions = (st.suggestions || []).filter((x) => x.key !== t.dataset.dismisssug); ctx.$('[data-region="suggest"]').innerHTML = suggestHtml(st, convo); const ta = ctx.$('#composer'); if (ta) ta.focus(); ctx.toast('Dismissed for the rest of this conversation.'); });
+      ctx.on('click', '[data-discover]', (e, t) => { let it = null; DISCOVER.forEach((g) => g.items.forEach((x) => { if (x.kind + ':' + x.name === t.dataset.discover) it = x; })); const ta = ctx.$('#composer'); if (it && ta) { ta.value = composeOf(it); ta.focus(); } });
+      ctx.on('click', '[data-gocat]', (e) => { e.preventDefault(); ctx.navigate('catalog'); });
       ctx.on('keydown', '#composer', (e) => {
         if (!st.picker) return;
         const items = pickerItems(st, convo);
@@ -373,6 +421,9 @@
       ctx.on('click', '[data-jira]', (e) => { e.preventDefault(); ctx.toast('External links open after a confirmation because jira-internal is an allow-listed internal domain.'); });
       const th = ctx.$('#thread'); if (th) th.scrollTop = th.scrollHeight;
       if (ctx.params.convo) { delete ctx.params.convo; }
+      // B-12301: "Use in Chat" from the catalogue opens a new chat with the composer filled in.
+      if (st.fill) { const f = st.fill; st.fill = null; setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = f; ta.focus(); } }, 30); }
+      if (ctx.params.fill) delete ctx.params.fill;
     }
   });
 
