@@ -19,6 +19,8 @@ import type { Guardrails } from '../guardrails/types.js';
 import type { ImageBackend } from './backends.js';
 import type { ImageSafety, SafetyVerdict } from './safety.js';
 import { addText, isPng, readText } from './png.js';
+import { withoutManifest, type VerifyResult } from './c2pa.js';
+import type { C2paSummary, ContentCredentials } from './content-credentials.js';
 
 export interface ImageDeps {
   db: Db;
@@ -39,6 +41,8 @@ export interface ImageDeps {
   guardrails: () => Guardrails;
   /** KMS key that signs provenance manifests. */
   provenanceKey: string;
+  /** 1.6.0 (B-7901): C2PA content credentials, signed by the tenant CA; null when the feature is not wired. */
+  c2pa?: ContentCredentials | null;
 }
 
 export type ImageState = 'queued' | 'running' | 'succeeded' | 'withheld' | 'failed' | 'cancelled' | 'hidden';
@@ -65,6 +69,8 @@ interface ImageRow {
   label: Label;
   blob_key: string | null;
   provenance: string | null;
+  /** JSON `C2paSummary` (1.6.0, B-7901). */
+  c2pa?: string | null;
   job_id: string | null;
   node: string | null;
   error: string | null;
@@ -250,6 +256,7 @@ export class ImageService {
       label: r.label,
       prompt: clears(p.clearance, r.label) ? await this.d.keys.open(r.tenant_id, r.prompt, `imgprompt:${r.id}`) : null,
       provenance: prov ? { signed: true, createdAt: prov.createdAt, imageSha256: prov.imageSha256 } : null,
+      contentCredentials: r.c2pa ? (JSON.parse(r.c2pa) as C2paSummary) : null,
       error: r.error,
       createdAt: r.created_at,
       startedAt: r.started_at,
@@ -284,8 +291,16 @@ export class ImageService {
     const { signature, key, ...manifest } = provenance;
     const signed = await this.d.kms.verifyHmac(key, canonicalJson(manifest), signature).catch(() => false);
     const embedded = isPng(data) ? readText(data)[PROVENANCE_KEYWORD] : undefined;
-    const bytesMatch = sha(isPng(data) ? this.withoutProvenance(data) : data) === manifest.imageSha256;
+    const bytesMatch = sha(isPng(data) ? this.withoutProvenance(withoutManifest(data)) : data) === manifest.imageSha256;
     return { verified: signed && bytesMatch, signature: signed, bytesMatch, embedded: embedded != null, manifest };
+  }
+
+  /** 1.6.0 (B-7901): reads the C2PA manifest back from the stored bytes and checks it against the tenant's CA. */
+  async verifyContentCredentials(p: Principal, id: string): Promise<VerifyResult & { summary: C2paSummary | null }> {
+    const { data, row } = await this.image(p, id);
+    const summary = row.c2pa ? (JSON.parse(row.c2pa) as C2paSummary) : null;
+    if (!this.d.c2pa || !isPng(data)) return { present: false, verified: false, checks: { claimHashes: false, dataHash: false, signature: false, chain: false, anchor: null, certificateValid: false }, problems: ['The image carries no C2PA manifest.'], manifest: null, signer: null, summary };
+    return { ...(await this.d.c2pa.verify(row.tenant_id, data)), summary };
   }
 
   private withoutProvenance(png: Buffer): Buffer {
@@ -392,10 +407,17 @@ export class ImageService {
       };
       const signature = await this.d.kms.hmac(this.d.provenanceKey, canonicalJson(manifest));
       const sidecar = { ...manifest, signature, key: this.d.provenanceKey };
-      const stored = isPng(result.image) ? addText(result.image, PROVENANCE_KEYWORD, asciiJson(sidecar)) : result.image;
+      let stored = isPng(result.image) ? addText(result.image, PROVENANCE_KEYWORD, asciiJson(sidecar)) : result.image;
+      // 1.6.0 (B-7901): the C2PA manifest goes in last, over the file with its HMAC chunk, signed by the tenant CA.
+      let c2pa: C2paSummary | null = null;
+      if (this.d.c2pa) {
+        const out = await this.d.c2pa.sign(r.tenant_id, stored, { job: r.id, tenant: r.tenant_id, workspace: r.workspace_id, user: r.user_id, username: manifest.username, model: manifest.model, profile: null, backend: backend.id, seed: r.seed, steps: r.steps, width: r.width, height: r.height, promptSha256: r.prompt_hash, label: r.label, createdAt: manifest.createdAt });
+        stored = out.png;
+        c2pa = out.summary;
+      }
       const key = `images/${r.tenant_id}/${r.id}`;
       await this.d.blobs.put(key, Buffer.from(await this.d.keys.sealBytes(r.tenant_id, stored, `image:${r.id}`)));
-      await this.update(r, { state: 'succeeded', stage: 'Done', step: r.steps, gpu_ms: gpuMs, safety_score: verdict?.score ?? null, blob_key: key, provenance: JSON.stringify(sidecar), finished_at: Date.now() });
+      await this.update(r, { state: 'succeeded', stage: 'Done', step: r.steps, gpu_ms: gpuMs, safety_score: verdict?.score ?? null, blob_key: key, provenance: JSON.stringify(sidecar), ...(c2pa ? { c2pa: JSON.stringify(c2pa) } : {}), finished_at: Date.now() });
       return { state: 'succeeded', gpuMs };
     } catch (err) {
       const reason = String((ctx.signal.reason as Error | undefined)?.message ?? '');

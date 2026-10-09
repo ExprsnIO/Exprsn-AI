@@ -8,6 +8,7 @@ import { badRequest, conflict, forbidden, notFound } from '../http/problem.js';
 import { TOPICS } from '../platform/bus.js';
 import { loadPrincipal, workspacesFor } from '../http/middleware.js';
 import type { Services } from '../services.js';
+import type { ArtifactView } from './artifacts.js';
 import type { ConversationRow } from './service.js';
 
 /*
@@ -121,6 +122,8 @@ export interface Transcript {
   createdAt: number;
   updatedAt: number;
   messages: TranscriptMessage[];
+  /** 1.6.0 (B-8001): the artifacts whose versions come from the shown messages, with sandboxed render links. */
+  artifacts: ArtifactView[];
 }
 
 const num = (v: unknown): number | null => (v == null ? null : Number(v));
@@ -342,7 +345,8 @@ export class ConversationSharing {
         completedAt: num(m.completed_at)
       });
     }
-    return { id: c.id, title: c.title ? await keys.open(c.tenant_id, c.title, `title:${c.id}`) : null, label: c.label, owner: { id: c.user_id, name: owner?.display_name ?? null }, createdAt: c.created_at, updatedAt: c.updated_at, messages };
+    const artifacts = await this.s().chatArtifacts.forTranscript(c.id, messages.filter((m) => m.role === 'assistant' && SHOWN.has(m.state)).map((m) => m.id), clearance);
+    return { id: c.id, artifacts, title: c.title ? await keys.open(c.tenant_id, c.title, `title:${c.id}`) : null, label: c.label, owner: { id: c.user_id, name: owner?.display_name ?? null }, createdAt: c.created_at, updatedAt: c.updated_at, messages };
   }
 
   // ---------- exports ----------

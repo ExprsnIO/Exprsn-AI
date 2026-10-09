@@ -29,12 +29,12 @@ An admin permission is any permission outside the member baseline: a custom role
 
 | Permission | Admin | Routes | `system-admin` | `tenant-admin` | `identity-admin` | `model-admin` | `guardrail-admin` | `tool-admin` | `knowledge-curator` | `ml-admin` | `workflow-admin` | `connection-admin` | `flag-reviewer` | `member` | `legal-review` | `auditor` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `chat:read` | no | 26 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:read` | no | 28 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `chat:write` | no | 19 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `inference:invoke` | no | 17 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `images:generate` | no | 13 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
@@ -143,6 +143,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/report`
 - `POST /api/prompts/{id}/render`
 - `POST /api/shared-links/open`
+- `GET /api/conversations/{id}/artifacts`
+- `GET /api/conversations/{id}/artifacts/{aid}/versions/{n}`
 
 ### `chat:write`
 
@@ -208,6 +210,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/images/{id}/cancel`
 - `POST /api/images/{id}/vary`
 - `POST /api/images/report`
+- `GET /api/images/{id}/content-credentials`
 
 ### `tools:invoke`
 
@@ -1897,3 +1900,4 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `PUT /scim/v2/Groups/{id}`
 - `PATCH /scim/v2/Groups/{id}`
 - `DELETE /scim/v2/Groups/{id}`
+- `GET /api/public/artifacts/{vid}/raw`

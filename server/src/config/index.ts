@@ -349,6 +349,8 @@ const base = z.object({
     STRIPE_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
     /** Without an image-safety classifier, withhold generated images and sampled frames instead of marking them. */
     IMAGE_SAFETY_REQUIRED: bool.default(false),
+    /** 1.6.0 (B-7901): sign generated PNGs with a C2PA manifest from the tenant's content-credentials certificate (off: the HMAC manifest only). */
+    IMAGE_C2PA: z.enum(['on', 'off']).default('on'),
     /** An OCI runtime for script containers (runsc for gVisor); the runner passes --runtime and checks it exists. */
     SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
     // --- end Sprint 19 ---
@@ -469,6 +471,12 @@ const base = z.object({
     SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
     CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    /** 1.6.0 (B-8001): a fenced block in an answer becomes an artifact from this many characters. */
+    CHAT_ARTIFACT_MIN_CHARS: z.coerce.number().int().min(1).max(100_000).default(80),
+    /** 1.6.0 (B-8001): the largest artifact version kept, in bytes; longer blocks stay in the answer only. */
+    CHAT_ARTIFACT_MAX_BYTES: z.coerce.number().int().min(1024).max(8 * 1024 * 1024).default(262_144),
+    /** 1.6.0 (B-8001): how long a sandboxed artifact render link (the iframe's URL) stays valid. */
+    CHAT_ARTIFACT_RAW_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and

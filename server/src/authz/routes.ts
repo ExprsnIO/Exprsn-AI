@@ -1329,6 +1329,11 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/feed/posts/{id}/quote', 'feed:write'],
   // 1.6.0, Sprint 38a (B-7301, B-7302, B-7401, B-7402, B-7501): the AI inventory, analytics and prices, audit streaming and JSONL exports
   ['DELETE /api/admin/analytics/prices/{id}', ['tenant:manage', 'usage:read']],
+  // 1.6.0, Sprint 39a (B-7901, B-8001): content credentials and versioned artifacts.
+  ['GET /api/images/{id}/content-credentials', 'images:generate'],
+  ['GET /api/conversations/{id}/artifacts', 'chat:read'],
+  ['GET /api/conversations/{id}/artifacts/{aid}/versions/{n}', 'chat:read'],
+  ['GET /api/public/artifacts/{vid}/raw', 'public'],
   ['GET /api/admin/analytics/chargeback', 'usage:read'],
   ['GET /api/admin/analytics/daily', 'usage:read'],
   ['GET /api/admin/analytics/prices', 'usage:read'],

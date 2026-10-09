@@ -33836,6 +33836,71 @@
         }
       }
     },
+    "/api/conversations/{id}/artifacts": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "chat:read. B-8001: the conversation's artifacts (owner or share reader): {artifacts: [{id, key, kind: code|document|html, language, title, label, versions: [{id, version, messageId, bytes, sha256, createdAt, rawUrl}], createdAt, updatedAt}]}; rawUrl is a short-lived capability for the sandboxed render",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/conversations/{id}/artifacts/{aid}/versions/{n}": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "chat:read. B-8001: one version with its content: {id, key, kind, language, title, label, version, messageId, bytes, sha256, createdAt, content}; 404 for a version that does not exist, 403 above the reader's clearance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/conversations/{id}/exports": {
       "post": {
         "tags": [
@@ -38545,6 +38610,30 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/images/{id}/content-credentials": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "images:generate. B-7901: the image's C2PA manifest read back from the stored bytes and verified against the tenant CA: {present, verified, checks {claimHashes, dataHash, signature, chain, anchor, certificateValid}, problems, manifest {label, generator, instanceId, created, action, model, profile, tenant, tenantName, job}, signer {subject, issuer, fingerprint, notBefore, notAfter}, summary}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/images/{id}/download": {
@@ -48529,6 +48618,39 @@
         }
       }
     },
+    "/api/public/artifacts/{vid}/raw": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "public (no session). B-8001: the version's bytes for a sandboxed iframe, under the token minted with the artifact list (t); text/html for html artifacts, text/plain otherwise, with its own CSP (sandbox allow-scripts; default-src 'none'; frame-ancestors 'self'); 404 for a wrong or expired token",
+        "parameters": [
+          {
+            "name": "vid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "description": "the render token from rawUrl",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/public/channels/session": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -49095,9 +49217,6 @@
               }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Default"
-          },
           "202": {
             "description": "Accepted: held for review",
             "content": {
@@ -49127,6 +49246,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
           }
         }
       }

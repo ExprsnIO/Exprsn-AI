@@ -64,6 +64,7 @@ import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
+import { ContentCredentials } from './images/content-credentials.js';
 import { createBackends, type ImageBackend } from './images/backends.js';
 import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
@@ -85,6 +86,7 @@ import { TenantIntegrations } from './integrations/hosts.js';
 import { WebhookService } from './webhooks/service.js';
 import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
+import { ChatArtifacts } from './chat/artifacts.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -213,6 +215,10 @@ export interface Services {
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
   images: ImageService;
+  /** 1.6.0 (B-7901): C2PA content credentials for generated images. */
+  contentCredentials: ContentCredentials;
+  /** 1.6.0 (B-8001): versioned artifacts of chat answers. */
+  chatArtifacts: ChatArtifacts;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -506,7 +512,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
-  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  const images = new ImageService({ get c2pa() { return s.contentCredentials; }, db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
@@ -535,6 +541,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   agents.memoryExtract = (e) => memory.onRun(e);
   memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
+  // 1.6.0 (B-8001): fenced blocks in a finished answer become artifacts (or versions of them).
+  chat.answerListeners.push((e) => void s.chatArtifacts.onAnswer(e).catch((err: Error) => log.warn({ err: err.message, message: e.messageId }, 'artifact extraction failed')));
   const s: Services = {
     cfg,
     db,
@@ -604,6 +612,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS, endpointConcurrency: Math.max(1, Math.floor(cfg.JOB_CONCURRENCY / 2)) }),
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
+    chatArtifacts: new ChatArtifacts(() => s),
+    contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
