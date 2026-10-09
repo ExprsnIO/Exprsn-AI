@@ -20208,7 +20208,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "Saves a new version",
+        "summary": "Saves a new version; 1.7.0 (B-11702 to B-11704): thinkingBudget, planFirst, reflect, reflectProfile",
         "parameters": [
           {
             "name": "id",
@@ -33152,7 +33152,7 @@
         "tags": [
           "chains"
         ],
-        "summary": "agents:run, agents:manage, tools:manage or workflows:manage. B-4107: the chain as a tree of invocations with timing, usage, labels, typed errors, guardrail decisions, audit links, replay and held calls (its principal or an admin, within clearance)",
+        "summary": "agents:run, agents:manage, tools:manage or workflows:manage. B-4107: the chain as a tree of invocations with timing, usage, labels, typed errors, guardrail decisions, audit links, replay and held calls (its principal or an admin, within clearance) 1.7.0 (B-11703, B-11705): each node carries think, thinkingTokens and plan.",
         "parameters": [
           {
             "name": "id",
@@ -35616,7 +35616,7 @@
         "tags": [
           "chat"
         ],
-        "summary": "chat:write. B-4003: the owner (or a tool admin) approves or denies a card; an approved write tool runs, a destructive or always-confirm tool a rule flagged then waits for the reviewer too; denied and expired cards are recorded.",
+        "summary": "chat:write. B-4003: the owner (or a tool admin) approves or denies a card; an approved write tool runs, a destructive or always-confirm tool a rule flagged then waits for the reviewer too; denied and expired cards are recorded. 1.7.0 (B-11703): a plan card (kind plan) is approved as drafted or with edited steps ({decision, steps?: [{title, tools, data}]}, tools among the offered ones) and the answer runs under it, or denied and nothing runs.",
         "parameters": [
           {
             "name": "id",

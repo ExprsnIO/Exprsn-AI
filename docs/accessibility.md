@@ -478,6 +478,23 @@ dialogs.
   in the card above it. axe-core (WCAG 2.2 AA) passes with a tool turn, an approval card and an agent turn on
   screen (`e2e/tests/chat.spec.ts`), and the chat and runs reflow sweeps pass at 320 and 640 px.
 
+- **Profiles, Chat and Runs: thinking policy, budgets, plan first and reflection (B-11708, Sprint 41c).** Profiles:
+  the Thinking policy panel's scope (Tenant and each workspace) is a group of buttons with `aria-pressed`; who sees
+  thinking, retention, the exports checkbox and the workspace budget are labelled fields with hints, the notices that
+  say whether a workspace inherits are text, and Inherit from tenant confirms in a dialog. The profile's budget, plan
+  first, reflection and "Reflection by" are labelled fields (the last disabled until reflection is on), and the save
+  dialog lists their changes in words. Chat: the plan card is a region with a numbered list of steps (tools and data in
+  text), its state as a pill with text (awaiting, approved, denied, expired), and Approve, Edit and Decline as buttons;
+  Edit opens a dialog with one labelled field per step and returns focus on close; while a turn waits on its plan a
+  `role="status"` line says so. The "checked" badge is a `role="status"` region whose pill and sentence say the outcome
+  (checked, findings, revised) and list each finding with its kind in text, never colour alone; the budget notice and
+  the token-only thinking line are text. Runs: the plan step is a card like any step with its state in words ("draft,
+  waiting"); its inspector lists the plan as a numbered list with Approve plan, Edit and Decline buttons (each
+  decision confirms in a dialog); thinking steps and chain nodes name their level and thinking tokens in text, and a
+  node's plan is a numbered list. `e2e/tests/profiles.spec.ts`, `chat.spec.ts` and `runs.spec.ts` run axe-core with the
+  policy panel, a plan card, an approved plan with a finding on the badge, a run waiting on its plan and the chain view
+  on screen, and the accessibility and reflow sweeps (320 and 640 px) pass for the three screens.
+
 ## Screens made live in 1.7.0
 
 - **Import** (B-3807, Sprint 40b): a six-step wizard whose stepper is a list of buttons with `aria-current="step"` on

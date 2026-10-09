@@ -5594,3 +5594,94 @@ its labels from the model's `config.json` (`id2label`) and its files named by th
 revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
 classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
 eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.
+
+## Sprint 41c (1.7.0): thinking policy, budgets, plans and reflection (B-11701 to B-11706, B-11708)
+
+Migration `043c_thinking` (expand only): `thinking_policies`; `profiles.thinking_budget`, `plan_first`, `reflect`,
+`reflect_profile`; `messages.plan`, `checked` (both sealed JSON), `thinking_purge_at`; `agent_runs.plan` (sealed),
+`plan_state`; `chain_nodes.plan`, `think`, `thinking_tokens`; `usage_records.thinking_dropped`. Settings
+`THINKING_BUDGET_NOTICE_PERCENT` (80), `THINKING_PLAN_MAX_STEPS` (12), `THINKING_REFLECTION_MAX_CHARS` (12000).
+
+### The thinking policy (B-11701; `profiles:manage`)
+
+A policy per tenant and, optionally, per workspace (the workspace's own row wins; without one it inherits the
+tenant's; without either the defaults apply: the author sees thinking, it is kept as long as the answer, exports carry
+it, no budget). `visibility` is `author` (the conversation's owner), `reviewers` (holders of `flags:review`) or
+`nobody`; thinking is never shown above the viewer's clearance either way.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/thinking/policy?workspace=` | `{tenant, workspace, effective}`: the tenant's policy, the workspace's own row (`null` when it inherits) and the one in force, each `{scope: default \| tenant \| workspace, visibility, retentionDays, exports, budgetTokensPerDay}`. `workspace` defaults to the caller's |
+| `PUT /api/admin/thinking/policy` `{workspace: id \| null, visibility?, retentionDays?: 0..3650 \| null, exports?, budgetTokensPerDay?: 100.. \| null, reset?}` | Sets the tenant's policy (`workspace: null`) or a workspace's; fields left out keep their value; `reset: true` removes a workspace's row so it inherits. Returns the policy in force. Audited `thinking.policy.updated` |
+
+Under `nobody` the author's stream carries no `thinking` chunks and the stored message holds only
+`usage.thinkingTokens`. Under `reviewers` the thinking is stored but `GET /api/conversations/:id` returns
+`thinking: null` to a reader without `flags:review`; the same applies to a run's steps (`GET /api/runs/:id`,
+`steps[].detail.thinking`). `retentionDays` sets `thinking_purge_at` when an answer completes; the chat sweep (every
+15 minutes) drops the thinking past it, keeps the token count, and audits `thinking.purged` with the count. A
+conversation export (`POST /api/conversations/:id/exports`) carries `thinking` per message only when `exports` is on
+and the exporter may see it.
+
+### Budgets (B-11702)
+
+`profiles.thinkingBudget` (`POST|PATCH /api/admin/profiles`, 100 to 10^9 or `null`) and the policy's
+`budgetTokensPerDay` for a workspace are thinking tokens per UTC day, summed from `usage_records.thinking_tokens`. At
+`THINKING_BUDGET_NOTICE_PERCENT` of either the turn emits `chat.status` `{state: thinking-budget, dropped: false,
+level, limit: profile | workspace, used, max}`; once spent, the turn thinks at `low` instead (never refused; `off`
+stays off) with `dropped: true`, and the usage record has `thinking_dropped`. The quota view
+(`GET /api/admin/quotas`, and a tenant's on the Tenants screen) shows `thinkingTokensToday` and `thinkingDropsToday`. `/v1`
+`reasoning_effort` maps onto a level within the profile's ceiling and is dropped the same way; chat, `/v1` and agent
+steps meter their thinking tokens so all three count against the budgets.
+
+### Plan first (B-11703)
+
+A profile with `planFirst: true`: `POST /api/chat` (and a reply) answers `202 {..., state: planning, reason}`; the
+model drafts `{steps: [{title, tools, data}]}` from the conversation and the tools on offer (at most
+`THINKING_PLAN_MAX_STEPS`), and the plan is a card: `GET /api/conversations/:id/invocations` lists it with `kind:
+plan`, `state: awaiting`, `answerId` and `plan: {steps, tools, offered, edited}`, audited `chat.plan.proposed`.
+`POST /api/conversations/:id/invocations/:iid/decide` `{decision: approve | deny, steps?}` decides it: approved (as
+drafted, or as `steps` edited, whose tools must be among `offered`, else 400), the answer runs under the plan, with
+only the tools it names offered and write or destructive tools keeping their own cards (B-4003); the message carries
+`plan`. Declined, or expired after `CHAT_CARD_TTL_SECONDS`, the answer ends `stopped` with the reason and nothing ran.
+Audited `chat.plan.approved` (with `edited`) and `chat.plan.declined`. A draft the parser cannot read is logged, the
+turn emits `chat.status` `plan-skipped` and the answer runs without a plan.
+
+An agent with `definition.planFirst: true` drafts its plan as its first step (`lane: think`, `title: Plan`, `state:
+waiting`, `meta.plan: true`) and waits; `GET /api/runs/:id` carries `plan: {steps, tools, state: awaiting | approved |
+declined}`. `POST /api/runs/:id/plan` `{decision: approve | decline, steps?}` (the run's owner, or `agents:manage`):
+approved, the plan is the run's step list and a call to a tool outside it pauses as a step with `meta.deviation: true`
+until it is approved like any held call; declined, the run ends `cancelled`. Audited `agent.plan.drafted`,
+`agent.plan.approved`, `agent.plan.declined`. The approved plan is on the run's chain node (`plan: {steps: [{title,
+tools}], approvedBy}`).
+
+### Reflection (B-11704)
+
+A profile with `reflect: true` (and optionally `reflectProfile`, another profile by name) gets a second pass on every
+finished answer against its question, the passages it cited and its tool results (each cut to
+`THINKING_REFLECTION_MAX_CHARS`), with thinking off. The message gains `checked: {status: ok | findings | revised,
+findings: [{kind: unsupported | missing | contradiction | other, text}], revised, profile, model, at}`; a revised
+answer passes the `model-output` checkpoint (blocked or held: dropped; redacted: kept redacted) and rides in the badge
+beside the original answer. An unreadable verdict is a finding, never a pass. The pass is metered to the conversation
+under the reflecting profile; the stream emits `chat.status` `checking` then `chat.checked {conversationId,
+messageId, status, findings, revised}`; audited `chat.reflection.checked`.
+
+### Thinking on steps (B-11705)
+
+An agent's `definition.think` (`off | low | medium | high`) sets its level within its profile's ceiling (the
+registry's check "Thinking within the profile ceiling" names the ceiling); a workflow model step's `config.think`
+above its profile's ceiling is refused at publish (422, naming the ceiling). Thinking steps carry `meta.think` and
+`meta.thinkingTokens`; the chain view's nodes (`GET /api/chains/:id`) carry `think`, `thinkingTokens` and `plan`.
+
+### Evaluations (B-11706)
+
+Eval set cases take three more checks: `{kind: thinking-rubric, rubric, minScore}` (the set's `judgeProfile` scores
+the thinking; an answer without thinking fails), `{kind: plan-tools, must, mustNot}` (the model drafts a plan for the
+case's prompt; a named forbidden tool or a missing required one fails) and `{kind: reflection, maxFindings}` (a
+reflection pass on the answer). Results carry `thinking`, `plan` and `reflection`, sealed with the outputs; a gated set
+counts them like any check.
+
+### Console (B-11708)
+
+Profiles: the Thinking policy panel and the profile's budget, plan first and reflection fields. Chat: the plan card,
+the "checked" badge, the budget notice and the token-only thinking line. Runs: the plan step with its decisions, the
+level per step, and in the chain view each node's level, thinking tokens and plan.
