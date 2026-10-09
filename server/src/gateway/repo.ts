@@ -140,6 +140,13 @@ export interface ProfileRow {
    * datamarked inside its delimiters. On when unset (rows written before the column, test seeds).
    */
   trust_marking?: boolean;
+  /** 1.7.0 (B-11702): the profile's thinking-token budget per UTC day; null for none. */
+  thinking_budget?: number | null;
+  /** 1.7.0 (B-11703): the model drafts a plan the person approves before any tool runs. */
+  plan_first?: boolean;
+  /** 1.7.0 (B-11704): a second pass checks every answer, by this profile or `reflect_profile`. */
+  reflect?: boolean;
+  reflect_profile?: string | null;
   label: Label;
   status: 'draft' | 'published' | 'disabled';
   version: number;
@@ -189,6 +196,10 @@ export const profileFrom = (r: Record<string, unknown>): ProfileRow => ({
   agents: json<string[]>(r.agents, []),
   skills: json<string[] | null>(r.skills, null),
   trust_marking: r.trust_marking == null ? true : r.trust_marking === true || r.trust_marking === 1 || r.trust_marking === '1' || r.trust_marking === 't',
+  thinking_budget: r.thinking_budget == null ? null : Number(r.thinking_budget),
+  plan_first: r.plan_first === true || r.plan_first === 1 || r.plan_first === '1' || r.plan_first === 't',
+  reflect: r.reflect === true || r.reflect === 1 || r.reflect === '1' || r.reflect === 't',
+  reflect_profile: (r.reflect_profile as string | null) ?? null,
   version: Number(r.version),
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at)

@@ -27,7 +27,7 @@ const agentRef = z.string().trim().min(1).max(120);
  * B-4102, B-4104: `agents` the agent may delegate to (offered as `agent:<name>` tools) and `workflows` (by name, in the
  * run's workspace) it may start and await (offered as `workflow:<name>`), without publishing them as tools.
  */
-const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), agents: z.array(agentRef).max(16).default([]), workflows: z.array(z.string().trim().min(1).max(120)).max(16).default([]), handoffs: z.array(agentRef).max(8).default([]), budgets, memory: memoryPolicy.optional() });
+const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), agents: z.array(agentRef).max(16).default([]), workflows: z.array(z.string().trim().min(1).max(120)).max(16).default([]), handoffs: z.array(agentRef).max(8).default([]), budgets, memory: memoryPolicy.optional(), planFirst: z.boolean().optional(), think: z.enum(['off', 'low', 'medium', 'high']).optional() });
 /** B-4103: a skill lists the `skills` it builds on as well as the `tools` it needs. */
 const skillDef = z.object({ instructions: z.string().max(100_000), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]) });
 const scriptDef = z.object({ scriptId: z.string().length(26) });

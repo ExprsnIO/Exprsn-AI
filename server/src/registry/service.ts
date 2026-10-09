@@ -41,6 +41,10 @@ export interface AgentDefinition {
   workflows?: string[];
   /** 1.6.0 (B-7801): specialist agents this agent may hand the conversation to; the handed-to run's answer is the run's answer. */
   handoffs?: string[];
+  /** 1.7.0 (B-11703): the model drafts a plan before any tool runs; the run waits for the person to approve it. */
+  planFirst?: boolean;
+  /** 1.7.0 (B-11705): the thinking level of the run's model steps, within the profile's ceiling (unset: the profile's default). */
+  think?: 'off' | 'low' | 'medium' | 'high';
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;
@@ -266,6 +270,16 @@ export class RegistryService {
       ...(e.kind !== 'tool' ? { references: await this.referenceStatus(e.tenant_id ?? '', refs) } : {}),
       ...(e.kind === 'agent' ? { maxBudgets: MAX_BUDGETS } : {})
     });
+    // 1.7.0 (B-11705): an agent's thinking level stays within its profile's ceiling; the check names the ceiling.
+    if (e.kind === 'agent') {
+      const def = e.definition as { profile?: unknown; think?: unknown };
+      if (typeof def.think === 'string' && typeof def.profile === 'string') {
+        const prof = (await this.db('profiles').where({ tenant_id: e.tenant_id ?? '', name: def.profile }).first('think_ceiling')) as { think_ceiling: string } | undefined;
+        const levels = ['off', 'low', 'medium', 'high'];
+        const over = !!prof && levels.indexOf(def.think) > levels.indexOf(prof.think_ceiling);
+        out.push({ name: 'Thinking within the profile ceiling', ok: !over, detail: over ? `Thinking ${def.think} is above the ceiling of profile ${def.profile}, which is ${prof!.think_ceiling}.` : prof ? `Thinking ${def.think} is within profile ${def.profile}'s ceiling (${prof.think_ceiling}).` : `Profile ${def.profile} was not found; the ceiling is checked when it is.` });
+      }
+    }
     // B-8901: an HTTP tool's request: fixed host, placeholders from the schema, credentials only as vault references.
     if (e.impl === 'http') {
       const r = httpDefinitionSchema.safeParse(e.definition);

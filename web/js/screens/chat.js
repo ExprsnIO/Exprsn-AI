@@ -127,7 +127,8 @@
     live.handlers = {
       'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
       'attachment.state': guard(onAttachment), connect: guard(onReconnect), 'shared.revoked': guard(onSharedRevoked),
-      'chat.invocation': guard(onInvocation), 'run.step': guard(onRunEvent), 'run.state': guard(onRunEvent)
+      'chat.invocation': guard(onInvocation), 'run.step': guard(onRunEvent), 'run.state': guard(onRunEvent),
+      'chat.checked': guard(onChecked)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
   }
@@ -141,7 +142,9 @@
     if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
     if (m && d.state === 'held') m.heldLive = true;
-    if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
+    // 1.7.0 (B-11702): the budget notice stays with the message after the status moves on.
+    if (d.state === 'thinking-budget') { st.budgetNote = st.budgetNote || {}; st.budgetNote[d.messageId] = d; }
+    if (m && d.state !== 'queued' && d.state !== 'thinking-budget' && (m.state === 'queued' || m.state === 'planning')) m.state = 'streaming';
     if (m && d.profile) m.profile = d.profile;
     if (m && d.model) m.model = d.model;
     schedule();
@@ -153,7 +156,7 @@
     if (c.thinking) m.thinking = (m.thinking || '') + c.thinking;
     if (c.tool) m.tools.push(c.tool);
     m.seq = c.seq;
-    if (m.state === 'queued') m.state = 'streaming';
+    if (m.state === 'queued' || m.state === 'planning') m.state = 'streaming';
     return true;
   }
   function onChunk(st, d) {
@@ -299,6 +302,8 @@
       if (s.state === 'loading') return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
       return '<div class="ch-status">' + UI.icon('clock', 13) + ' Queued' + (s.position ? ', position ' + num(s.position) : '') + ' for ' + esc(s.profile || m.profile || '') + '</div>';
     }
+    // 1.7.0 (B-11703): a plan-first turn waits on its plan card before anything runs.
+    if (m.state === 'planning') return '<div class="ch-status" role="status">' + UI.icon('clock', 13) + ' Waiting for the plan to be approved. Nothing runs until then.</div>';
     if (m.state !== 'streaming') return '';
     if (s.state === 'loading' && !m.content && !m.thinking) return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
     if (m.thinking && !m.content) return '';
@@ -339,6 +344,11 @@
       h += '<button type="button" class="ch-thinkbar" data-think="' + esc(m.id) + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span>' + UI.icon('brain', 13) + ' ' + (streaming && !m.content ? 'Thinking at level ' + esc(m.think || '') + '…' : 'Thinking' + (m.think ? ' at level ' + esc(m.think) : '') + (u && u.thinkingTokens ? ', ' + num(u.thinkingTokens) + ' tokens' : '')) + '</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>'
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
+    // 1.7.0 (B-11701): the policy kept the thinking from this reader; the token count stays.
+    if (!m.thinking && !streaming && m.usage && m.usage.thinkingTokens > 0 && m.state === 'complete') h += '<div class="ch-thinkbar ch-thinkkept"><span>' + UI.icon('brain', 13) + ' Thought' + (m.think ? ' at level ' + esc(m.think) : '') + ', ' + num(m.usage.thinkingTokens) + ' tokens. The workspace\'s thinking policy keeps the trace from you.</span></div>';
+    // 1.7.0 (B-11702): the budget notice: near the limit, or the level dropped to low at it.
+    const bn = (st.budgetNote || {})[m.id];
+    if (bn) h += UI.notice('<b>Thinking budget ' + (bn.dropped ? 'spent.' : 'near its limit.') + '</b> ' + num(bn.used) + (bn.max ? ' of ' + num(bn.max) : '') + ' thinking tokens today for ' + (bn.limit === 'workspace' ? 'this workspace' : 'the profile') + '. ' + (bn.dropped ? 'This turn thought at ' + esc(bn.level) + ' instead; turns are not refused.' : 'At the limit, turns think at low rather than being refused.'), 'warn');
     h += toolsHtml(m);
     // A question held for review (Sprint 16): its answer waits, and says so; a rejection says it was not sent.
     if (m.state === 'awaiting') h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Waiting for review.</b> <span class="muted">A guardrail asked a reviewer to check your question before it goes to the model. The answer starts here once it is approved.</span></div>';
@@ -346,7 +356,10 @@
     if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
     if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
+    if (!streaming && m.checked) h += checkedHtml(m);
+    if (!streaming && m.plan && m.plan.steps && m.plan.steps.length) h += '<div class="ch-planran">' + UI.icon('check', 12) + ' Ran under the approved plan: ' + m.plan.steps.map((s) => esc(s.title)).join('; ') + '.</div>';
     if (!streaming) h += artifactChips(st, m.id);
+    h += planCardsHtml(st, m);
     if (!streaming) h += proposedCardsHtml(st, m);
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
@@ -448,7 +461,12 @@
   /** A card's own events: a decision, a run ending, a reviewer's call. Cards and the thread are read again. */
   function onInvocation(st, d) {
     if (!st.conv || d.conversationId !== st.conv.id) return;
-    Promise.all([loadCards(st), d.messageId ? loadConv(false) : Promise.resolve()]).then(() => { if (d.state === 'done' && d.kind === 'tool') App.toast(esc(d.name) + ' ran; its result is in the conversation.', 'ok'); schedule(); });
+    Promise.all([loadCards(st), d.messageId || d.kind === 'plan' ? loadConv(false) : Promise.resolve()]).then(() => { if (d.state === 'done' && d.kind === 'tool') App.toast(esc(d.name) + ' ran; its result is in the conversation.', 'ok'); schedule(); });
+  }
+  /** 1.7.0 (B-11704): the second pass finished: the message carries its "checked" badge or revised answer. */
+  function onChecked(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    loadConv(false).then(schedule);
   }
   function onRunEvent(st, d) {
     if (!st.conv || !d || !d.runId) return;
@@ -487,6 +505,31 @@
     } else if (m.state === 'failed') h += UI.notice('<b>' + esc(kind) + ' run failed.</b> ' + esc(m.error || ''), 'danger');
     else if (m.state === 'stopped') h += '<div class="fg2" style="font-size:13px">Cancelled from the chat' + (m.error ? ': ' + esc(m.error) : '.') + '</div>';
     return h + '</div>';
+  }
+  /** 1.7.0 (B-11703): the plan card under the turn that waits on it: steps, tools, data; approve as drafted or edited, or decline. */
+  function planCardsHtml(st, m) {
+    return cardsOf(st).filter((c) => c.answerId === m.id && c.kind === 'plan').map(planCardHtml).join('');
+  }
+  function planCardHtml(c) {
+    const plan = c.plan || { steps: [], tools: [], offered: [] };
+    const state = c.state === 'done' ? 'approved' : c.state;
+    let h = '<div class="ch-card ch-plan ' + esc(state) + '" data-card="' + esc(c.id) + '"><div class="hstack gap6 wrap">' + UI.icon('brain', 13) + '<b>Plan</b>' + UI.pill(state, state === 'approved' ? 'ok' : CARD_TONE[state] || '') + '<span class="muted" style="font-size:12px">proposed by the model before any tool runs</span></div>'
+      + '<ol>' + plan.steps.map((s) => '<li>' + esc(s.title) + ((s.tools || []).length ? ' <span class="mono fg2">' + esc(s.tools.join(', ')) + '</span>' : '') + ((s.data || []).length ? '<div class="muted" style="font-size:12px">needs ' + esc(s.data.join(', ')) + '</div>' : '') + '</li>').join('') + '</ol>';
+    if (state === 'awaiting') h += '<div class="fg2" style="font-size:12px">Approved, the answer runs under this plan and only the tools it names are offered; write tools keep their own cards. Declined, nothing runs.' + (c.expiresAt ? ' Expires ' + esc(ago(c.expiresAt).replace(' ago', '')) + '.' : '') + '</div>'
+      + (App.can('chat:write') ? '<div class="hstack gap6 wrap">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-planapprove="' + esc(c.id) + '"' }) + UI.btn('Edit', { size: 'sm', attrs: 'data-planedit="' + esc(c.id) + '"' }) + UI.btn('Decline', { kind: 'ghost', size: 'sm', attrs: 'data-plandecline="' + esc(c.id) + '"' }) + '</div>' : '');
+    else if (state === 'approved') h += '<div class="fg2" style="font-size:12px">' + UI.icon('check', 12) + ' Approved' + (plan.edited ? ' as edited' : ' as drafted') + '. The answer ran under it; the plan is on the message and in the chain.</div>';
+    else if (state === 'denied') h += '<div class="fg2" style="font-size:12px">' + UI.icon('x', 12) + ' Declined. Nothing ran; the model is told on the next turn.</div>';
+    else if (state === 'expired') h += '<div class="fg2" style="font-size:12px">The plan expired before it was decided. Nothing ran.</div>';
+    return h + '</div>';
+  }
+  /** 1.7.0 (B-11704): the "checked" badge: what the second pass found, or the revised answer it produced. */
+  function checkedHtml(m) {
+    const c = m.checked; const by = c.by || c.profile;
+    const tone = c.status === 'ok' ? 'ok' : 'warn';
+    const text = c.status === 'ok' ? 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ': the answer matches the question, its citations and tool results. No findings.'
+      : c.status === 'revised' ? 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ' revised the answer' + ((c.findings || []).length ? ' after ' + c.findings.length + ' finding' + (c.findings.length === 1 ? '' : 's') : '') + '; the revised text was screened like any answer.'
+        : 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ' found ' + (c.findings || []).length + ' problem' + ((c.findings || []).length === 1 ? '' : 's') + '.';
+    return '<div class="ch-checked ' + tone + '" role="status">' + UI.pill(c.status === 'ok' ? 'checked' : c.status, tone) + '<span>' + text + '</span>' + ((c.findings || []).length ? '<ul>' + c.findings.map((f) => '<li><span class="muted">' + esc(f.kind) + ':</span> ' + esc(f.text) + '</li>').join('') + '</ul>' : '') + (c.revised ? '<div class="ch-revised"><div class="eyebrow">Revised answer</div><div class="serif">' + esc(c.revised).replace(/\n/g, '<br>') + '</div></div>' : '') + '</div>';
   }
   /** B-4003: a card the model proposed during this answer, under it, with the owner's decision. */
   function proposedCardsHtml(st, m) {
@@ -751,6 +794,7 @@
         sent = await App.post(cUrl(st.convId) + '/messages', body);
       }
       if (sent && sent.state === 'awaiting') App.toast('<b>Your question is waiting for review.</b> ' + esc(sent.reason || '') + ' The answer starts when a reviewer approves it.', 'warn', 8000);
+      if (sent && sent.state === 'planning') App.toast('<b>The model is drafting a plan.</b> It shows as a card; nothing runs until you approve it.', '', 6000);
       st.draft = ''; if (ta) ta.value = '';
       st.pending = []; st.notice = null;
       await Promise.all([loadConv(false), loadList()]);
@@ -1125,6 +1169,8 @@
         + '.ch-user{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.ch-bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px;overflow-wrap:anywhere}'
         + '.ch-uact{display:flex;align-items:center;gap:4px;opacity:.55}.ch-user:hover .ch-uact,.ch-uact:focus-within{opacity:1}'
         + '.ch-ai{display:flex;flex-direction:column;gap:10px;max-width:680px}'
+        + '.ch-plan ol{margin:4px 0 0;padding-left:20px;font-size:13px;line-height:1.5}.ch-plan li{margin:2px 0}.ch-planran{font-size:12px;color:var(--fg2);display:flex;gap:6px;align-items:baseline}'
+        + '.ch-checked{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--fg2);padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}.ch-checked.ok{border-color:var(--ok-fg)}.ch-checked.warn{border-color:var(--warn-fg)}.ch-checked > span{flex:1 1 240px}.ch-checked ul{margin:0;padding-left:18px;flex-basis:100%}.ch-revised{flex-basis:100%;font-size:14px;color:var(--fg);overflow-wrap:anywhere}.ch-thinkkept{cursor:default}'
         + '.ch-thinkbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--fg2);cursor:pointer;font-family:inherit;text-align:left}.ch-thinkbar span{display:inline-flex;align-items:center;gap:6px}'
         + '.ch-trace{padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic;overflow-wrap:anywhere;max-height:260px;overflow:auto}'
         + '.ch-answer{font-size:16px;line-height:1.55;overflow-wrap:anywhere}.ch-answer p{margin:0 0 10px}.ch-answer p:last-of-type{margin-bottom:0}'
@@ -1224,6 +1270,18 @@
       ctx.on('click', '[data-approve], [data-deny]', async (e, t) => {
         const id = t.dataset.approve || t.dataset.deny; const decision = t.dataset.approve ? 'approve' : 'deny';
         try { const r = await App.post(cUrl(st.convId) + '/invocations/' + enc(id) + '/decide', { decision }); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'deny' ? 'Denied. Nothing ran; the model is told on the next turn.' : r.state === 'held' ? 'Your approval is recorded; the guardrail\'s approver decides next in the Flags queue.' : r.state === 'done' ? esc(r.name) + ' ran as you; its result is in the conversation.' : esc(r.name) + ' is ' + esc(r.state) + '.', decision === 'deny' ? '' : 'ok'); } catch (err) { handleError(err, 'Could not decide the card'); }
+      });
+      // 1.7.0 (B-11703): the plan card's decisions. Edit sends the steps back with the approval.
+      const decidePlan = async (id, decision, steps) => {
+        try { await App.post(cUrl(st.convId) + '/invocations/' + enc(id) + '/decide', Object.assign({ decision }, steps ? { steps } : {})); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'deny' ? 'Plan declined. Nothing ran; the model is told on the next turn.' : steps ? 'Plan approved as edited. The answer runs under it.' : 'Plan approved. The answer runs under it; only the tools it names are offered.', decision === 'deny' ? '' : 'ok'); } catch (err) { handleError(err, 'Could not decide on the plan'); }
+      };
+      ctx.on('click', '[data-planapprove]', (e, t) => decidePlan(t.dataset.planapprove, 'approve'));
+      ctx.on('click', '[data-plandecline]', (e, t) => decidePlan(t.dataset.plandecline, 'deny'));
+      ctx.on('click', '[data-planedit]', (e, t) => {
+        const c = cardById(st, t.dataset.planedit); const plan = (c && c.plan) || { steps: [], offered: [] };
+        ctx.modal({ title: 'Edit the plan', body: '<div class="vstack gap8">' + plan.steps.map((s, i) => UI.field('Step ' + (i + 1), UI.input(s.title, { attrs: 'data-ps="' + i + '" maxlength="200"' }), (s.tools || []).length ? 'tools: ' + esc(s.tools.join(', ')) : 'no tools')).join('') + '<div class="fg2" style="font-size:12px">Clear a step\'s title to drop it. A step keeps the tools it was drafted with; the plan can only name tools this conversation can call' + ((plan.offered || []).length ? ': ' + esc(plan.offered.join(', ')) : '') + '.</div></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Approve as edited', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(mEl) { mEl.querySelector('[data-ok]').addEventListener('click', () => { const steps = plan.steps.map((s, i) => ({ title: mEl.querySelector('[data-ps="' + i + '"]').value.trim(), tools: s.tools || [], data: s.data || [] })).filter((s) => s.title); App.closeOverlay(); if (!steps.length) { App.toast('A plan needs at least one step.', 'warn'); return; } decidePlan(c.id, 'approve', steps); }); } });
       });
       ctx.on('click', '[data-cancelrun]', async (e, t) => { try { await App.post(cUrl(st.convId) + '/invocations/' + enc(t.dataset.cancelrun) + '/cancel', {}); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast('Cancelled from the chat; the Runs screen shows what it reached.'); } catch (err) { handleError(err, 'Could not cancel'); } });
       ctx.on('click', '[data-wfapprove], [data-wfreject]', async (e, t) => {

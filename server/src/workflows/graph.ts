@@ -539,8 +539,8 @@ export interface Issue {
 export interface ValidationEnv {
   /** The label the run's input carries. */
   label: Label;
-  /** Published profiles by name: their label ceiling. Undefined when the profile does not exist or is not published. */
-  profile(name: string): { label: Label } | undefined;
+  /** Published profiles by name: their label ceiling and (1.7.0, B-11705) their thinking ceiling. Undefined when the profile does not exist or is not published. */
+  profile(name: string): { label: Label; thinkCeiling?: 'off' | 'low' | 'medium' | 'high' } | undefined;
   /** Registry tools callable from the workflow's workspace, or why a name is not (missing: "is a draft"). */
   tool?(name: string): ToolInfo | { missing: string } | undefined;
   /** Sprint 32: published workflows a sub step (or a map or loop item) may run, by name or id and optional pinned version. */
@@ -717,7 +717,12 @@ export function validateGraph(g: WfGraph, env: ValidationEnv): Validation {
       if (n.kind === 'model' && typeof n.config.profile === 'string') {
         const p = env.profile(n.config.profile);
         if (!p) errors.push({ code: 'config', nodeId: id, message: `${n.title}: profile ${n.config.profile} is not published.` });
-        else ceiling = ceiling && labelRank(ceiling) < labelRank(p.label) ? ceiling : p.label;
+        else {
+          ceiling = ceiling && labelRank(ceiling) < labelRank(p.label) ? ceiling : p.label;
+          // 1.7.0 (B-11705): a step's thinking level stays within its profile's ceiling.
+          const want = typeof n.config.think === 'string' ? n.config.think : null;
+          if (want && p.thinkCeiling && THINK.options.indexOf(want as 'off') > THINK.options.indexOf(p.thinkCeiling)) errors.push({ code: 'config', nodeId: id, message: `${n.title}: thinking ${want} is above the ceiling of profile ${n.config.profile}, which is ${p.thinkCeiling}.` });
+        }
       }
       if (ceiling && labelRank(label) > labelRank(ceiling)) {
         errors.push({ code: 'label', nodeId: id, message: `Blocked by label ceiling: ${n.title} has ceiling ${ceiling}; the data arriving is ${label}.` });

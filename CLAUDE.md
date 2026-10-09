@@ -379,16 +379,26 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   engine (B-3806: `config.model` names the staged files, `scoreImported` calls the worker at `CLASSIFIER_WORKER_URL`,
   `createImported`), and `registerClassifier` in `imports/service.ts` for a model import with `target: classifiers`.
   Fakes in `server/test/sprint40b-fakes.ts` (an open-data portal, a dataset hub, a classifier worker).
-- 1.7.0 Sprint 41b: `guardrails/drafts.ts` (B-9601: `draftRule`, the description through the `user-input` checkpoint and
-  a profile's model over `apps/ai.ts`'s `generate`, `normaliseDraft`, `validateDraft` and `freeId`, always shadow) behind
-  `POST /admin/guardrails/sets/:id/describe` in `routes/guardrails.ts`, which saves a valid draft into the set's open
-  draft with `save`; `fakeRuleDraft` and `isRuleDraftPrompt` in `server/test/fake-ollama.ts` answer the draft prompt.
-
 - 1.7.0 Sprint 41a: standing approvals in `mcp/server/service.ts` (B-12201: `StandingRow` in `mcp_standing_approvals`,
   `standingFor` consulted by `call` when no per-call approval was claimed, `grantStanding`, `writeTools` for the grant
   form, `standing` and `standingAll` views, `revokeStanding`, `expireStanding` from the chat sweep) behind
   `routes/mcp-access.ts`; `ToolCallContext.standing` in `registry/dispatch.ts` covers the side effect and a
   `confirm: always` tool but never a `require-approval` verdict.
+
+- 1.7.0 Sprint 41b: `guardrails/drafts.ts` (B-9601: `draftRule`, the description through the `user-input` checkpoint and
+  a profile's model over `apps/ai.ts`'s `generate`, `normaliseDraft`, `validateDraft` and `freeId`, always shadow) behind
+  `POST /admin/guardrails/sets/:id/describe` in `routes/guardrails.ts`, which saves a valid draft into the set's open
+  draft with `save`; `fakeRuleDraft` and `isRuleDraftPrompt` in `server/test/fake-ollama.ts` answer the draft prompt.
+
+- 1.7.0 Sprint 41c: `thinking/service.ts` (`s.thinking`: B-11701 `policyFor`, `policies`, `setPolicy`, `visibleTo`,
+  `purgeAt`, `purgeThinking` from the chat sweep; B-11702 `budget` summed from `usage_records.thinking_tokens` for the
+  UTC day, dropping to `low`; B-11703 `PLAN_PROMPT`, `parsePlan`, `normalizePlan`, `planMessages`, `planInstruction`;
+  B-11704 `REFLECTION_PROMPT`, `parseReflection`, `reflectionMessages`) behind `routes/admin/thinking.ts`. Chat:
+  `draftPlan` (state `planning`), plan cards in `chat/invocations.ts` (`createPlanCard`, `decidePlan`, kind `plan`),
+  `runPlan`, and `reflect` after a finished answer (`messages.checked`, event `chat.checked`). Agents: `decidePlan`
+  (`POST /api/runs/:id/plan`), the plan step and `meta.deviation` in the loop, `definition.think`/`planFirst`; chain
+  nodes carry `think`, `thinking_tokens`, `plan` (`chains.note`). Evals: `thinking-rubric`, `plan-tools`, `reflection`
+  checks. The e2e fake answers the plan and reflection prompts by their system text.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

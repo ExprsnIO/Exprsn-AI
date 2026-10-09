@@ -173,6 +173,10 @@ export async function chainTree(s: Services, p: Principal, id: string) {
       errorType: n.errorType,
       decision: n.decision,
       usage: { tokens: n.tokens, steps: n.steps, wallMs: n.wallMs, gpuMs: n.gpuMs },
+      // 1.7.0 (B-11703, B-11705): the node's thinking level and tokens, and the plan it ran under.
+      think: n.think,
+      thinkingTokens: n.thinkingTokens,
+      plan: n.plan,
       subtree,
       createdAt: n.createdAt,
       finishedAt: n.finishedAt,
