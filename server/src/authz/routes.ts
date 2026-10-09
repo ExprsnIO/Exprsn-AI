@@ -647,6 +647,7 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/admin/group-mappings', 'identity:manage'],
   ['POST /api/admin/guardrails/requests', 'guardrails:manage'],
   ['POST /api/admin/guardrails/sets', 'guardrails:manage'],
+  ['POST /api/admin/guardrails/sets/{id}/describe', 'guardrails:manage'],
   ['POST /api/admin/guardrails/sets/{id}/draft/approve', 'guardrails:manage'],
   ['POST /api/admin/guardrails/sets/{id}/draft/publish', 'guardrails:manage'],
   ['POST /api/admin/guardrails/sets/{id}/draft/submit', 'guardrails:manage'],

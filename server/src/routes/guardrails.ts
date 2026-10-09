@@ -11,6 +11,7 @@ import { POST_OBJECT as FEED_POST } from '../feed/service.js';
 import { HELD_OBJECT } from '../apps/forms-held.js';
 import { flagRef } from '../guardrails/flags.js';
 import { escapeLiteral } from '../guardrails/regex.js';
+import { draftRule, ruleDraftSchema } from '../guardrails/drafts.js';
 import { checkRule, diffRules, ruleSchema, rulesFromYaml, rulesToYaml, type Rule } from '../guardrails/rules.js';
 import type { RuleSetRow, VersionRow } from '../guardrails/sets.js';
 import { CHECKPOINTS, GUARD_ACTIONS, type Checkpoint } from '../guardrails/types.js';
@@ -261,6 +262,27 @@ export function guardrailRoutes(s: Services): Router {
     const d = await sets.saveDraft(set, working.map((x) => (x.id === rule.id ? { ...x, stage: 'enforce' as const } : x)), p.userId);
     await audit(req, 'guardrails.rule.promoted', { set: set.id, name: set.name, version: d.version, rule: rule.id }, { falsePositiveRate: fp.rate });
     res.json({ version: d.version, status: d.status, falsePositives: fp });
+  });
+
+  /**
+   * 1.7.0 (B-9601): a rule drafted from a description by a published profile's model. The description passes the
+   * `user-input` checkpoint; the draft is validated with the rule schema and comes back with a diff against the set's
+   * working rules; it is always in shadow. With `save`, a valid draft joins the set's open draft (still in shadow), so
+   * it records findings and changes nothing until it is promoted and published under the set's dual control.
+   */
+  r.post('/admin/guardrails/sets/:id/describe', manage, async (req, res) => {
+    const p = principalOf(req);
+    const set = await loadSet(req);
+    writable(p, set);
+    const body = parseBody(ruleDraftSchema.extend({ label: z.enum(LABELS).default('internal') }), req.body);
+    const working = await sets.workingRules(set);
+    const { save, label, ...input } = body;
+    const out = await draftRule(s, { principal: p, ip: ip(req), traceId: req.traceId }, set, working, input, label);
+    if (!save) return res.json({ ...out, saved: null });
+    if (!out.rule) throw new HttpProblem(422, 'Draft not usable', `The draft does not validate: ${out.problems.join('; ')}`, { extensions: { problems: out.problems } });
+    const d = await sets.saveDraft(set, [...working, out.rule], p.userId);
+    await audit(req, 'guardrails.rule.added', { set: set.id, name: set.name, version: d.version, rule: out.rule.id }, { source: 'description', stage: 'shadow', checkpoint: out.rule.checkpoint, mechanism: out.rule.mechanism.kind, action: out.rule.action });
+    res.json({ ...out, saved: { version: d.version, status: d.status } });
   });
 
   /** Shadow replay of a version (default: the draft) over recorded inputs, as a job. */

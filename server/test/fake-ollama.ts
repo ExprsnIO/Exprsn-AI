@@ -165,6 +165,37 @@ export function leakingReply(opts: { fallback?: string; resists?: string[] } = {
  * An Ollama stand-in speaking enough of its HTTP API for the gateway and chat: version, tags, ps, show, pull,
  * delete, generate (load and unload) and streamed chat. Replies come from `reply`, streamed word by word.
  */
+/** 1.7.0 (B-9601): the rule-draft prompt of `guardrails/drafts.ts` (its first sentence) is the system message. */
+export const isRuleDraftPrompt = (messages: Msg[]): boolean => messages.some((m) => m.role === 'system' && m.content.includes('You write one guardrail rule for an AI platform from a description.'));
+
+/**
+ * 1.7.0 (B-9601): a stand-in for a model drafting a guardrail rule from a description, as `guardrails/drafts.ts`
+ * asks: card numbers, bank accounts, emails and identity numbers become a `pii` rule, credentials a `secrets` rule,
+ * domains an `allow-list`, anything else a `pattern` on the quoted or last words; "hold", "block", "mask", "flag" and
+ * "warn" pick the action; "answer", "prompt", "tool", "memory" and "export" pick the checkpoint. The prompt's own
+ * checkpoint line wins. A description that says "garbage" answers prose, for the tests of an unusable draft.
+ */
+export function fakeRuleDraft(messages: Msg[]): string {
+  const system = messages.find((m) => m.role === 'system')?.content ?? '';
+  const text = String(messages[messages.length - 1]?.content ?? '');
+  const t = text.toLowerCase();
+  if (/garbage/.test(t)) return 'I cannot write that as a rule, sorry.';
+  const forced = /watches the "([a-z-]+)" checkpoint/.exec(system)?.[1];
+  const checkpoint = forced ?? (/\b(prompt|question|input)s?\b/.test(t) ? 'user-input' : /\btool/.test(t) ? 'tool-call' : /\bmemor/.test(t) ? 'memory' : /\bexport/.test(t) ? 'export' : 'model-output');
+  const action = /\b(hold|approv)/.test(t) ? 'require-approval' : /\b(block|refuse|withhold|stop)/.test(t) ? 'block' : /\b(redact|mask)/.test(t) ? 'redact' : /\bflag/.test(t) ? 'flag' : 'warn';
+  let mechanism: Record<string, unknown>;
+  let name: string;
+  if (/card number|credit card|payment card/.test(t)) { mechanism = { kind: 'pii', detectors: ['payment_card'], threshold: 0.8 }; name = 'Card numbers'; }
+  else if (/\biban|bank account/.test(t)) { mechanism = { kind: 'pii', detectors: ['iban'], threshold: 0.8 }; name = 'Bank accounts'; }
+  else if (/e-?mail/.test(t)) { mechanism = { kind: 'pii', detectors: ['email'], threshold: 0.8 }; name = 'Email addresses'; }
+  else if (/(api|access) key|password|credential|secret|private key|token/.test(t)) { mechanism = { kind: 'secrets', detectors: ['*'], threshold: 0.6 }; name = 'Credentials'; }
+  else if (/domain|host/.test(t)) { mechanism = { kind: 'allow-list', field: 'domains', values: (text.match(/[a-z0-9-]+\.[a-z]{2,}/gi) ?? ['example.com']).map((x) => x.toLowerCase()) }; name = 'Allowed domains'; }
+  else if (/bad regex|backreference/.test(t)) { mechanism = { kind: 'pattern', pattern: '(a)\\1' }; name = 'Repeated letter'; }
+  else { const quoted = /"([^"]+)"/.exec(text)?.[1] ?? text.split(/\s+/).slice(-2).join(' '); mechanism = { kind: 'pattern', pattern: quoted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }; name = `Mentions of ${quoted}`.slice(0, 60); }
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return JSON.stringify({ id, name, checkpoint, mechanism, action, severity: action === 'block' ? 'high' : 'medium', description: text.slice(0, 200) });
+}
+
 export class FakeOllama {
   version = '0.12.3';
   /** Models the "registry" can pull. */
@@ -317,7 +348,7 @@ export class FakeOllama {
     res.writeHead(200, { 'content-type': 'application/x-ndjson' });
     const messages = body.messages as Msg[];
     const images = messages.flatMap((x) => x.images ?? []).map((b) => Buffer.from(b, 'base64'));
-    const r = name.includes('guard') ? { content: this.guard(messages) } : m.system?.includes('<think>') ? this.templated(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name }) : images.length ? { content: this.vision(messages, images, name) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
+    const r = name.includes('guard') ? { content: this.guard(messages) } : isRuleDraftPrompt(messages) ? { content: fakeRuleDraft(messages) } : m.system?.includes('<think>') ? this.templated(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name }) : images.length ? { content: this.vision(messages, images, name) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
     const send = (o: unknown) => res.write(JSON.stringify(o) + '\n');
     const sleep = () => new Promise((x) => setTimeout(x, this.chatDelayMs));
     let evalCount = 0;

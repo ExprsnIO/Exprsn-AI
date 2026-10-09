@@ -48,7 +48,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `agents:manage` | yes | 35 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 22 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
-| `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `guardrails:manage` | yes | 20 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
@@ -504,6 +504,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/admin/guardrails/status`
 - `POST /api/admin/guardrails/requests`
 - `POST /api/admin/guardrails/sets`
+- `POST /api/admin/guardrails/sets/{id}/describe`
 - `POST /api/admin/guardrails/sets/{id}/draft/approve`
 - `POST /api/admin/guardrails/sets/{id}/draft/publish`
 - `POST /api/admin/guardrails/sets/{id}/draft/submit`

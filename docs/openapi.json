@@ -14403,6 +14403,78 @@
         }
       }
     },
+    "/api/admin/guardrails/sets/{id}/describe": {
+      "post": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "admin/guardrails"
+        ],
+        "summary": "guardrails:manage and inference:invoke. B-9601: a rule drafted from a description by a published profile's model, validated against the GuardrailRule schema and returned with a diff against the set's working rules, always in shadow; with save, a valid draft joins the set's open draft in shadow.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt",
+                  "profile"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 4000
+                  },
+                  "profile": {
+                    "type": "string"
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "description": "the checkpoint the description is about; the model's choice otherwise"
+                  },
+                  "save": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "label": {
+                    "type": "string",
+                    "default": "internal"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{rule, raw, yaml, valid, problems, diff, checkpoint, saved: null | {version, status}}"
+          },
+          "403": {
+            "description": "the platform baseline for a tenant admin, or no inference:invoke"
+          },
+          "422": {
+            "description": "the description refused by the content rules, or (with save) a draft that does not validate"
+          },
+          "503": {
+            "description": "the profile's model unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/guardrails/sets/{id}/diff": {
       "get": {
         "tags": [
