@@ -15,7 +15,7 @@ import { describeCron, nextCron } from '../training/calendar.js';
 import { auditData, matchesEvent } from '../webhooks/service.js';
 import { configOf, type WfGraph, type WfNode } from './graph.js';
 import type { RunRow, WorkflowRow } from './service.js';
-import { selfTrigger } from './trigger-config.js';
+import { matchesJobType, selfTrigger } from './trigger-config.js';
 import { ChainLimit, chainRefOf, chainScope, type ChainRef } from '../chain/context.js';
 
 /*
@@ -36,6 +36,8 @@ import { ChainLimit, chainRefOf, chainScope, type ChainRef } from '../chain/cont
  *     cause). An event caused by a chain is never delivered to a workflow already in it (so a workflow's own steps
  *     never start it again), events about a workflow's own runs never start it, and the event is dropped once the
  *     chain is WORKFLOW_EVENT_MAX_DEPTH workflows long.
+ *   - job type: a trigger on a job event that names a `jobType` (`training.package`, or `training.*`) is offered only
+ *     the events of matching jobs, checked before everything above, so other jobs' events cost nothing.
  * - `schedule` with `cron`: a five-field UTC cron. Each due time is claimed with one conditional update on
  *   `next_run_at`, and the firing row is unique per due time, so two instances start one run.
  *
@@ -64,6 +66,8 @@ export interface TriggerRow {
   version: number;
   kind: 'event' | 'schedule';
   event: string | null;
+  /** Live review 2026-10-09: on a job event, the job type or `prefix.*` group the event's `data.type` must match. */
+  job_type: string | null;
   cron: string | null;
   owner_id: string;
   enabled: boolean;
@@ -114,6 +118,7 @@ export const triggerView = (t: TriggerRow) => ({
   version: t.version,
   kind: t.kind,
   event: t.event,
+  jobType: t.job_type ?? null,
   cron: t.cron,
   schedule: t.cron ? describeCron(t.cron) : null,
   ownerId: t.owner_id,
@@ -220,7 +225,7 @@ export class WorkflowTriggers {
       }
     } else {
       const enabled = existing ? !!existing.enabled : true;
-      const fields = { version, kind: self.kind, event: self.kind === 'event' ? self.event : null, cron: self.kind === 'schedule' ? self.cron : null, owner_id: p.userId, workspace_id: w.workspace_id, next_run_at: self.kind === 'schedule' && enabled ? nextCron(self.cron, t) : null, updated_at: t };
+      const fields = { version, kind: self.kind, event: self.kind === 'event' ? self.event : null, job_type: self.kind === 'event' ? self.jobType : null, cron: self.kind === 'schedule' ? self.cron : null, owner_id: p.userId, workspace_id: w.workspace_id, next_run_at: self.kind === 'schedule' && enabled ? nextCron(self.cron, t) : null, updated_at: t };
       let id = existing ? String(existing.id) : ulid();
       if (existing) await this.db('workflow_triggers').where({ id }).update(fields);
       else {
@@ -232,7 +237,7 @@ export class WorkflowTriggers {
           await this.db('workflow_triggers').where({ id }).update(fields);
         }
       }
-      await this.audit(p, 'workflow.trigger.set', { workflow: w.id, trigger: id }, w.label, { version, kind: self.kind, event: fields.event, cron: fields.cron, enabled });
+      await this.audit(p, 'workflow.trigger.set', { workflow: w.id, trigger: id }, w.label, { version, kind: self.kind, event: fields.event, ...(fields.job_type ? { jobType: fields.job_type } : {}), cron: fields.cron, enabled });
     }
     await s.cache.invalidate({ tenantId: w.tenant_id, ns: 'workflow-triggers' });
   }
@@ -321,7 +326,9 @@ export class WorkflowTriggers {
    */
   async offer(tenantId: string, type: string, label: Label, eventId: string, data: Record<string, unknown>, _audit?: AuditEvent): Promise<number> {
     if (tenantId === PLATFORM_TENANT) return 0;
-    const triggers = (await this.eventTriggers(tenantId)).filter((t) => t.event && matchesEvent([t.event], type));
+    // A trigger narrowed to a job type sees only that type's job events: checked first, so the others never reach the
+    // rate limiter, a firing row or a job (live review 2026-10-09).
+    const triggers = (await this.eventTriggers(tenantId)).filter((t) => t.event && matchesEvent([t.event], type) && (!t.job_type || matchesJobType(t.job_type, data.type)));
     if (!triggers.length) return 0;
     const s = this.s();
     const workspace = eventWorkspace(data);

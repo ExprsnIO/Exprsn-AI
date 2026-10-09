@@ -9186,6 +9186,17 @@
               }
             ]
           },
+          "jobType": {
+            "description": "On a job event (job.succeeded, job.failed, job.cancelled, job.*): the job type, or a prefix.* group, the event's job must match; null for every job.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cron": {
             "anyOf": [
               {

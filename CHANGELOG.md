@@ -172,6 +172,14 @@
   cannot bring a null back. `POST` and `PATCH /api/admin/profiles` refuse a null (400, as before) and now also a tool
   name the profile does not already carry that is not a tool in the registry (400 `No such tool`); names it already
   carries are kept. The dispatcher skips non-string names.
+- Event triggers on job events take a job type. A workflow triggered on `job.succeeded` that filtered for
+  `training.package` in a branch step ran on every successful job (about 8,000 a day of ticks, schedules and sweeps),
+  held to about 2,000 runs a day only by the trigger rate limiter. A trigger on `job.succeeded`, `job.failed`,
+  `job.cancelled` or `job.*` may now name `jobType`, a job type (`training.package`) or a group (`training.*`); the
+  trigger service checks it against the event's `data.type` before the rate limiter and the enqueue, so other jobs'
+  events cost nothing (no firing row, no job). Publishing refuses `jobType` on any other trigger. Migration
+  `043e_trigger_job_type` adds `workflow_triggers.job_type`; `GET /api/workflows/:id/triggers` shows `jobType`. The
+  Workflows screen's trigger step has a "Job type" field for job events (prototype board first).
 
 ## 1.6.0
 

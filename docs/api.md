@@ -453,7 +453,7 @@ to, branch?: true|false|failure}], limits: {timeoutMs?, tokens?}}` (`retry` and 
 
 | Kind | Config | Output |
 | --- | --- | --- |
-| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, cron?}` (`event` and `cron`: Sprint 32b, below) | the run input (checked against `output`) |
+| `trigger` | `{source: manual\|api\|record\|schedule\|event, event?, jobType?, cron?}` (`event` and `cron`: Sprint 32b, below; `jobType`: on a job event only, below) | the run input (checked against `output`) |
 | `model` | `{profile, prompt, think?, format: text\|json}` | `{text}`, or the parsed JSON (checked against `output`) |
 | `transform` | `{fields: {name: template}}` | the fields |
 | `branch` | `{left, op: eq\|ne\|gt\|gte\|lt\|lte\|contains\|truthy\|exists, right?}` | input plus `{result}`; outgoing edges carry `branch` |
@@ -3808,7 +3808,11 @@ An action (map item or loop iteration) is a model prompt (`profile`, `prompt`, `
 catalogue event type such as `file.uploaded`, or a group such as `file.*`; not `*`) and `{source: schedule, cron}` (five
 fields, UTC; a `schedule` trigger without `cron` is still started by an app's schedule trigger). Publishing checks the
 event against the catalogue (`config`; a reserved type is a warning) and the cron expression, and writes the version's
-trigger; republishing with another source removes it. Runs start as the person who published the version (the
+trigger; republishing with another source removes it. An event trigger on `job.succeeded`, `job.failed`,
+`job.cancelled` or `job.*` may add `jobType`, a job type (`training.package`) or a group (`training.*`): only events whose
+job (`data.type`) matches start it, and the check comes before the rate limit, the firing row and the job, so other jobs'
+events cost nothing (live review 2026-10-09; migration `043e_trigger_job_type`, `workflow_triggers.job_type`). A
+`jobType` on any other trigger is refused at publish (`config`). Runs start as the person who published the version (the
 trigger's owner), with the roles, clearance and memberships they hold at that moment: an owner who is disabled, lost
 `agents:run`, left the workflow's workspace or is not cleared for the event gets a skip (`workflow.trigger.skipped`
 with the reason) instead of a run, as does an event for a version that is no longer the published one. An event run's
@@ -3829,7 +3833,7 @@ checked every `WORKFLOW_SCHEDULE_TICK_SECONDS`; each due time is claimed once ac
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
+| `GET /api/workflows/:id/triggers?limit` | `agents:run`. The trigger of the published version and its recent firings within the caller's clearance: `{workflowId, trigger: {id, workflowId, version, kind: event \| schedule, event, jobType, cron, schedule, ownerId, enabled, nextRunAt, lastFiredAt, lastRunId, lastResult, createdAt, updatedAt} \| null, firings: [{id, event, eventId, label, chain, state: queued \| starting \| started \| skipped, runId, reason, createdAt, finishedAt}]}` |
 | `PATCH /api/workflows/:id/triggers` `{enabled}` | `workflows:manage`. Turns the trigger off or on again (a schedule's next due time is recomputed); `404` without one |
 
 **Failure handling (B-3906).** A step may carry `retry: {max: 1-5, delayMs: 1000-3600000 (5000), backoff: fixed |
