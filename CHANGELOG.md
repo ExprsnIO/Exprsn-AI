@@ -128,6 +128,40 @@
   approved as edited, a reflection finding on the badge, a plan declined) and `runs.spec.ts` (a plan-first run
   approved, the level per step and per chain node) with axe-core, and the accessibility and reflow sweeps.
 
+### Finding what you can use (Sprint 41d, B-12301 to B-12304)
+
+- Migration `043d_discovery`: `registry_entries` and `workflows` gain `purpose`, `examples`, `category`;
+  `profiles.suggestions`; `catalog_notices`, `catalog_preferences`, `catalog_vectors`, `catalog_dismissals`. Settings
+  `DISCOVERY_EMBED_PROFILE` (`embed`), `DISCOVERY_SUGGEST_MIN_SCORE` (0.3), `REGISTRY_DISCOVERY_REQUIRED` (true).
+- The catalogue (B-12301): `GET /api/catalog` lists the workflows, agents, tools and skills the caller may use in the
+  current workspace through a profile, grouped by category, each with its description, purpose, example prompts and
+  how to call it (`/`, `@`, `+`). It is the workspace form of a conversation's capabilities
+  (`ChatInvocations.workspaceCapabilities`), not a second authority path; what a profile's allow-list hides is listed
+  as "not on this profile" with the profiles that offer it, and nothing above the caller's clearance is listed. A new
+  Catalogue screen (`#/catalog`) and a "What you can do" panel on Chat's empty state open the composer with the entry
+  filled in; Enter then starts the agent, adds the skill, or opens the workflow's or tool's form with the text in it.
+  Embedding-only profiles are no longer offered as chat profiles.
+- Publish notices (B-12302): an entry approved or offered to more workspaces, and a workflow published, notify the
+  members it reaches whose clearance reaches its label, once per person and entry, in-app with the entry's label and a
+  link to it in the catalogue; tools once a profile lists them. Each person chooses notices as they happen, a weekly
+  digest (`catalog.digest`) or none in Settings (`GET|PUT /api/me/catalog-notices`). Audited
+  `catalog.notices.sent`, `catalog.digest.sent`, `catalog.preferences.updated`.
+- Composer suggestions (B-12303): `POST /api/catalog/suggestions` ranks the entries a conversation may call by the
+  embedding profile's similarity to the draft (no chat-model call), up to three above the minimum score, entry vectors
+  cached per version; the console asks after a pause in typing and shows them as chips; a dismissed one stays away for
+  the conversation (`POST /api/conversations/:id/suggestions/dismiss`, audited `chat.suggestion.dismissed`); off per
+  profile (`suggestions`).
+- Entry quality (B-12304): the registry's submit refuses an entry offered in chat without a purpose, an example prompt
+  and a category (422 naming the missing field, audited `registry.submit.refused`); the reviewer sees the catalogue
+  card (`catalogCard`); `PUT /api/admin/registry/:id/discovery` and `PUT /api/workflows/:id/discovery` fill the fields
+  in any state, so published entries keep working without them and gain them without a new version.
+- Console: the Catalogue screen; Chat's "What you can do" panel, filled-in calls and suggestion chips; the Registry's
+  catalogue card with Edit and the fields on the entry form; Settings' notice choice; Profiles' composer suggestions
+  checkbox. Prototype boards first; `e2e/tests/catalog.spec.ts` (a member notified once, the new workflow with its call,
+  Chat filled in, nothing above the clearance, the digest choice), `chat.spec.ts` (the panel, a suggestion, a dismissal)
+  and `registry.spec.ts` (a submit refused naming the example prompt, the reviewer's card) with axe-core, and the
+  accessibility and reflow sweeps.
+
 ## 1.6.0
 
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)

@@ -553,6 +553,35 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
 - **Evaluations keep what they judged (B-11706).** Thinking, plans and reflections from an evaluation are sealed with
   the outputs; a thinking rubric is judged by the set's judge profile, which sees the thinking as data.
 
+## Finding what you can use (1.7.0, Sprint 41d)
+
+- **The catalogue is the same decision, not a new one (B-12301).** `GET /api/catalog` is the workspace form of a
+  conversation's capabilities (`ChatInvocations.workspaceCapabilities`, the code path `GET
+  /api/conversations/:id/capabilities` uses): the profile's tool list through the dispatcher, the runnable agents, the
+  profile's skill allow-list and the workspace's published workflows, for the caller's own principal and current
+  workspace, and only through a profile the caller may pick (404 otherwise). It grants nothing: every call still goes
+  through the conversation routes and their checks (the dispatcher, cards, guardrails, labels). On top of the
+  conversation's list it drops every entry whose label is above the caller's clearance, callable or not, so an entry
+  the caller may not see is never named, not even as "not on this profile"; the "not on this profile" entries are only
+  those another profile the caller may pick offers, resolved through the same dispatcher.
+- **A notice is sent once, within the label (B-12302).** Recipients are the active members of the workspaces the entry
+  is published to (every active user of the tenant for a tenant-wide entry) whose clearance reaches the entry's label;
+  the notification carries that label and only the entry's name, kind and description (no content), and links to the
+  catalogue, which re-checks everything when it opens. The (person, entry) row is claimed through a unique key before
+  anything is sent, so concurrent publishes or a later version never notify twice; a person's choice (each, weekly
+  digest, off) is theirs alone (`/api/me/catalog-notices`), audited. A digest carries the highest label of what it
+  lists.
+- **Suggestions call no chat model (B-12303).** The draft is embedded by the embedding profile only, refused when the
+  conversation's label is above that profile's, metered to the caller, and not stored; the candidates are exactly the
+  entries the conversation (or the workspace through the caller's profile) may call, within the caller's clearance.
+  Entry vectors are derived from the entries' public catalogue fields, cached per entry version and model in the
+  tenant, and recomputed when the text changes. A dismissal is the conversation owner's alone (another user gets 404),
+  audited. A profile admin turns suggestions off per profile.
+- **Catalogue fields are not part of the approval (B-12304).** Purpose, examples and category are shown text, kept
+  outside the schema hash, so filling them on a published entry does not change what was reviewed and approved; they
+  are escaped wherever they are shown. The submit check refuses an entry offered in chat without them (422 naming the
+  field, audited); entries published before keep working.
+
 ## Model servers and platform administration (1.6.0, Sprint 35)
 
 - **A server's model is the server's word (B-4301 to B-4307).** A `kind: openai` instance answers Chat Completions
@@ -682,6 +711,17 @@ filter, private `/tmp`, only the state directory writable.
   model's judgment: it can miss a problem or report one that is not there, and only the revised text is screened (the
   findings are shown as written, escaped). Policies have no unique key per tenant and workspace in the schema, so two
   first saves at the same moment can write two rows, of which one is read.
+- Finding what you can use (1.7.0, Sprint 41d). The catalogue lists entries as the caller's current workspace sees
+  them at the lowest label; inside a conversation with a higher label some may be hidden by their ceiling (the
+  composer pickers say why). Publish notices go out when an entry is approved, moved to more workspaces or a workflow
+  is published, not when a profile starts listing a tool, an entry is restored from deprecated, or a person joins a
+  workspace (the catalogue shows those). Suggestions rank by the embedding model's similarity only (no chat-model
+  re-ranking), so they are as good as the entries' descriptions and examples; their minimum score is one setting for
+  the whole deployment; the draft is sent to the embedding model on every pause in typing (the console waits 400 ms),
+  under the ordinary API rate limits only. A dismissal made before a new chat has a conversation is kept in the
+  browser until the conversation exists. "Offered in chat" for the submit check is an agent, a skill, or a tool a
+  published profile lists at submit time; a tool added to a profile later is not asked for its fields.
+  `REGISTRY_DISCOVERY_REQUIRED` is one switch for the deployment, not per tenant.
 - The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
   only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
   Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's

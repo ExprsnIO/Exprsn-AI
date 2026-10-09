@@ -5727,3 +5727,77 @@ counts them like any check.
 Profiles: the Thinking policy panel and the profile's budget, plan first and reflection fields. Chat: the plan card,
 the "checked" badge, the budget notice and the token-only thinking line. Runs: the plan step with its decisions, the
 level per step, and in the chain view each node's level, thinking tokens and plan.
+
+## Sprint 41d (1.7.0): finding what you can use (B-12301 to B-12304)
+
+Migration `043d_discovery` (expand only): `registry_entries.purpose`, `examples` (JSON), `category`; the same three on
+`workflows`; `profiles.suggestions` (on by default); `catalog_notices` (one row per person and entry, unique),
+`catalog_preferences`, `catalog_vectors` (an entry version's embedding per model, with the hash of its text) and
+`catalog_dismissals`. Settings `DISCOVERY_EMBED_PROFILE` (`embed`), `DISCOVERY_SUGGEST_MIN_SCORE` (0.3) and
+`REGISTRY_DISCOVERY_REQUIRED` (true). New permissions: none; every list is the caller's own capabilities.
+
+### The catalogue (B-12301; `chat:read`)
+
+The workspace form of a conversation's capabilities (`GET /api/conversations/:id/capabilities`, Sprint 40a): the same
+decision through the same dispatcher (the profile's tool list), the runnable agents, the profile's skill allow-list and
+the workspace's published workflows, with no conversation and at the lowest label a new conversation holds.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/catalog?profile=` | `{workspace: {id, name}, profile, profiles: [{name, displayName}], clearance, entries, categories: [{name, count}], counts: {available, notOnProfile}}` for the caller's current workspace through `profile` (a profile they may pick for chat; the first one when left out; 404 for one they may not). Each entry: `{key: <kind>:<name>, kind: workflow \| agent \| tool \| skill, id, name, version, description, purpose, examples, example, category, label, sideEffect, call, trigger: / \| @ \| +, compose, available, reason, profiles, missing}`. `call` is how to call it from the composer (`/name`, `@name`, `+name`), `compose` what the composer is filled with (the call and the first example). `available: false` with `reason: "not on this profile"` and `profiles` (the ones the caller may pick that offer it) is a tool on another profile's list or a skill outside this profile's allow-list. An entry whose label is above the caller's clearance is never returned, callable or not. Entries are sorted by category (an entry without one is under `Other`, last), then callable first, then name. Embedding-only profiles are not chat profiles and are not listed (also in `GET /api/chat/profiles`) |
+
+### Publish notices (B-12302)
+
+A registry entry approved (`POST /api/admin/registry/:id/review` with `approve`) or offered to more workspaces
+(`POST /api/admin/registry/:id/publish`), and a workflow published (`POST /api/workflows/:id/publish`), notify the
+members of the workspaces it reaches (every active user of the tenant for a tenant-wide entry, the workflow's
+workspace for a workflow) whose clearance reaches its label, except who published it (and a registry entry's owner,
+who has the review's own notice), once per person and entry: a later version or another workspace never notifies the
+same person again. A tool is announced only once a published profile lists it. The notification is `kind: catalog`,
+labelled with the entry's label, titled `<Kind> <name> is now available to you`, with the description as its body and
+the route `catalog?entry=<kind>%3A<name>`. Audited `catalog.notices.sent` (`{notified, digest, skipped}`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/catalog-notices` | `{notices: each \| digest \| off, lastDigestAt, pending}` (authenticated; `each` when never set) |
+| `PUT /api/me/catalog-notices` `{notices}` | Sets the caller's choice. Leaving `digest` for `each` delivers what the digest held at once (one notification); for `off` drops it. Audited `catalog.preferences.updated` |
+
+The `catalog.digest` job (scheduled hourly per tenant) sends each person on `digest` whose last digest (or choice) is a
+week old one notification for everything that waited, titled `This week: <n> new things you can use` (or the entry,
+for one), at the highest label among them, routed to the catalogue (or the entry). Audited `catalog.digest.sent`.
+
+### Composer suggestions (B-12303; `chat:write`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/catalog/suggestions` `{draft, profile?, conversationId?, dismissed?}` | Up to three entries the conversation (or, without one, the workspace through `profile`) may call whose name, description, purpose and examples are closest to the draft (up to 4,000 characters; nothing for fewer than 3), by cosine similarity of embeddings from the profile `DISCOVERY_EMBED_PROFILE` (its model must embed; no chat model is called), at or above `DISCOVERY_SUGGEST_MIN_SCORE`. `{suggestions: [{key, kind, name, description, example, call, compose, category, sideEffect, label, score}], off: null \| profile \| embedding, detail, dismissed}`: `off: profile` when the profile has suggestions off, `embedding` when there is no usable embedding profile or the conversation's label is above it. Entries the conversation dismissed, and the `dismissed` keys (for a new chat), are left out. Entry vectors are cached per entry version and model (`catalog_vectors`; a workflow's version is its published version) and recomputed when the text changes; the draft's embedding is metered to the caller and not stored |
+| `POST /api/conversations/:id/suggestions/dismiss` `{key}` | The conversation's owner keeps an entry away from its suggestions for the rest of the conversation. `{dismissed}`; audited `chat.suggestion.dismissed` |
+
+A profile's `suggestions` (`POST|PATCH /api/admin/profiles`, boolean, on by default) turns them off for it.
+
+### Entry quality for discovery (B-12304)
+
+`POST /api/admin/registry` and `PATCH /api/admin/registry/:id` take `purpose` (up to 500 characters), `examples` (up
+to five prompts of up to 300 characters) and `category` (up to 60 characters); every entry view carries them. They are
+not part of the schema hash. `POST /api/admin/registry/:id/submit` refuses an entry offered in chat (an agent, a skill,
+or a tool a published profile lists) without them when `REGISTRY_DISCOVERY_REQUIRED` is on: `422 Missing for the
+catalogue`, `detail` naming them (`Missing: example prompt.`), `missing: [purpose | examples | category]` and
+`errors: [{path, message}]`; audited `registry.submit.refused`. `GET /api/admin/registry/:id` carries `catalogCard`
+(the entry's catalogue card as the catalogue will show it, for the reviewer), `offeredInChat` and `discoveryRequired`.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/admin/registry/:id/discovery` `{purpose?, examples?, category?}` | Sets the card's fields in any state but retired (the entry's kind permission; platform entries are read-only), so a published entry gains them without a new version and its approval holds. Audited `registry.discovery.updated` |
+| `PUT /api/workflows/:id/discovery` `{purpose?, examples?, category?}` | The same for a workflow (`workflows:manage`); `GET /api/workflows` and `GET /api/workflows/:id` carry them. Audited `workflow.discovery.updated` |
+
+Entries published before these fields existed keep working and are listed with what they have.
+
+### Console
+
+A Catalogue screen (`#/catalog`, `chat:read`): the entries by category with each one's call, example and "Use in Chat",
+the "not on this profile" entries with the profiles that offer them, and an entry opened from a notice's link. Chat: the
+"What you can do" panel on a new chat, a call filled in from the catalogue, the panel or a suggestion (Enter starts the
+agent, adds the skill, or opens the workflow's or tool's form with the text in it), and the suggestion chips after a
+pause in typing. Registry: the catalogue card in the inspector with Edit, the fields on the entry form, and the submit
+refusal naming what is missing. Settings: "New things you can use" (as they happen, weekly digest, off). Profiles: the
+composer suggestions checkbox.

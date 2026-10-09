@@ -505,6 +505,20 @@ dialogs.
   policy panel, a plan card, an approved plan with a finding on the badge, a run waiting on its plan and the chain view
   on screen, and the accessibility and reflow sweeps (320 and 640 px) pass for the three screens.
 
+- **Chat, Registry, Settings and Profiles: finding what you can use (B-12301 to B-12304, Sprint 41d).** Chat: the
+  "What you can do" panel on a new chat is a region labelled by its heading, each category a level-3 heading and each
+  entry a button whose text is its call, description and example prompt, with a link to the catalogue; picking one
+  fills the composer and moves focus to it. Suggestion chips sit in a group labelled "Suggested for this message"; each
+  is a button naming the kind and the call (the description as its title), with a Dismiss button named after the
+  entry; they appear only after a pause in typing, never while a picker is open, and dismissing one returns focus to the
+  composer and is confirmed by a toast. Registry: the catalogue card is a heading and a card whose purpose, example,
+  call and category are text; Edit opens a dialog with labelled Purpose, Example prompts and Category fields, and the
+  same fields are on the entry form; a submit refused for missing fields is a problem panel that names them in words.
+  Settings: "New things you can use" is a group of three buttons with the current one marked and a sentence saying
+  what it means. Profiles: "Composer suggestions" is a labelled checkbox with a hint. `e2e/tests/chat.spec.ts` runs
+  axe-core with the panel and with suggestion chips on screen, `registry.spec.ts` with the reviewer's catalogue card,
+  and the accessibility and reflow sweeps (320 and 640 px) pass for Chat and Registry.
+
 ## Screens made live in 1.7.0
 
 - **Import** (B-3807, Sprint 40b): a six-step wizard whose stepper is a list of buttons with `aria-current="step"` on
@@ -524,6 +538,16 @@ dialogs.
   validate is a danger notice with the problems in text. The saved rule's note on the screen names the next steps.
   `e2e/tests/guardrails.spec.ts` runs axe-core on the open dialog with a draft and on the screen with the published
   rule, and the Guardrails accessibility and reflow sweeps pass at 320 and 640 px.
+- **Catalogue** (B-12301, Sprint 41d): the page heading "What you can do" and a level-2 heading per category over a
+  grid of cards; each card's name is a button in a level-3 heading that opens the entry's details in the inspector, its
+  kind, side effect and label are text pills, its example prompt and call are text, and "Use in Chat" carries the
+  entry's name in its accessible name; an entry the profile leaves out says "Not on this profile. Offered by ..." in
+  text, with a "Switch to <profile>" button. The profile picker is a labelled select, the kind filter a segmented
+  control, "Show what this profile leaves out" a switch, and the search field is labelled. The inspector repeats the
+  call, category, purpose, version and how to call it as a list of terms, and each example prompt has a Use button
+  named after it. Below 900 px the inspector is hidden and the grid becomes one column, with every control still on the
+  cards. `e2e/tests/catalog.spec.ts` runs axe-core and the in-page checker on the page as a member and as an admin and
+  the reflow checks at 320 and 640 px; the accessibility and reflow sweeps cover the screen and its states.
 
 ## How it was checked
 

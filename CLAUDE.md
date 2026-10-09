@@ -399,6 +399,18 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   (`POST /api/runs/:id/plan`), the plan step and `meta.deviation` in the loop, `definition.think`/`planFirst`; chain
   nodes carry `think`, `thinking_tokens`, `plan` (`chains.note`). Evals: `thinking-rubric`, `plan-tools`, `reflection`
   checks. The e2e fake answers the plan and reflection prompts by their system text.
+- 1.7.0 Sprint 41d: `discovery/service.ts` (`s.discovery`, B-12301 to B-12304: `catalog` over
+  `ChatInvocations.workspaceCapabilities`, the workspace form of `capabilities` (`capabilitiesAt` with no conversation,
+  returning the profile's allow-lists), plus the "not on this profile" entries and the clearance filter; `cardOf`,
+  `composeFor`, `missingOf`; `announce` (publish notices claimed once per person and entry in `catalog_notices`, called
+  from the registry's review and publish routes and the workflow publish route), `setPreferences`, `sendDigests` (the
+  `catalog.digest` job); `suggest` (cosine over `catalog_vectors` from the `DISCOVERY_EMBED_PROFILE` profile),
+  `dismiss`; `checkSubmit`, `offeredInChat`, `previewCard`) behind `routes/catalog.ts`, the dismiss route in
+  `routes/chat.ts` and the discovery routes on the registry and workflows. `registry_entries` and `workflows` carry
+  `purpose`, `examples`, `category` (outside the schema hash, `RegistryService.setDiscovery`,
+  `WorkflowService.setDiscovery`); `profiles.suggestions`. The console's `catalog.js` screen; Chat's panel, filled-in
+  calls (`sendCall`, `ensureConv`) and suggestion chips. `testConfig` turns `REGISTRY_DISCOVERY_REQUIRED` off for the
+  older suites; the e2e server seeds the `embed` profile.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

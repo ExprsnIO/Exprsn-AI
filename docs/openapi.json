@@ -20304,7 +20304,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "Saves a new version; 1.7.0 (B-11702 to B-11704): thinkingBudget, planFirst, reflect, reflectProfile",
+        "summary": "Saves a new version; 1.7.0 (B-11702 to B-11704): thinkingBudget, planFirst, reflect, reflectProfile; 1.7.0 (B-12303): suggestions",
         "parameters": [
           {
             "name": "id",
@@ -20913,7 +20913,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
+        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP 1.7.0 (B-12304): purpose, examples and category for the catalogue card.",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -20926,7 +20926,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "The entry with versions [{id, version, status, createdAt}], referencedBy (agents and skills using a tool), profiles (profiles listing it), workspaces (publish scope names)",
+        "summary": "The entry with versions [{id, version, status, createdAt}], referencedBy (agents and skills using a tool), profiles (profiles listing it), workspaces (publish scope names) 1.7.0 (B-12304): carries catalogCard (the reviewer's preview), offeredInChat and discoveryRequired.",
         "parameters": [
           {
             "name": "id",
@@ -20947,7 +20947,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Edits a draft (anything else takes a new version) and re-runs the checks",
+        "summary": "Edits a draft (anything else takes a new version) and re-runs the checks 1.7.0 (B-12304): purpose, examples and category for the catalogue card.",
         "parameters": [
           {
             "name": "id",
@@ -21040,7 +21040,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Changes the scope of a published entry",
+        "summary": "Changes the scope of a published entry 1.7.0 (B-12302): members of newly added workspaces are notified once.",
         "parameters": [
           {
             "name": "id",
@@ -21063,7 +21063,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "reject, note?, scope: tenant\\|workspace, workspaces?} | By someone other than the author (403 step: dual-control), cleared for the label. Approval needs every check passing (409 naming the failing ones), records the schema hash and the publ",
+        "summary": "reject, note?, scope: tenant\\|workspace, workspaces?} | By someone other than the author (403 step: dual-control), cleared for the label. Approval needs every check passing (409 naming the failing ones), records the schema hash and the publ 1.7.0 (B-12302): approving notifies the members it reaches within its label, once each.",
         "parameters": [
           {
             "name": "id",
@@ -21086,7 +21086,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Draft → in review, with fresh checks",
+        "summary": "Draft → in review, with fresh checks 1.7.0 (B-12304): an entry offered in chat without a purpose, an example prompt and a category is refused 422 naming the missing field (missing, errors).",
         "parameters": [
           {
             "name": "id",
@@ -35041,7 +35041,7 @@
         "tags": [
           "chat"
         ],
-        "summary": "Profiles the caller may pick: {id, name, displayName, description, aliasOf, model, label, thinkDefault, thinkCeiling, tools, vision, residency: loaded\\|cold, deprecated}",
+        "summary": "Profiles the caller may pick: {id, name, displayName, description, aliasOf, model, label, thinkDefault, thinkCeiling, tools, vision, residency: loaded\\|cold, deprecated} 1.7.0: embedding-only profiles are not listed.",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -56524,7 +56524,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "Publishes the draft as the next version; 422 with errors when it is invalid",
+        "summary": "Publishes the draft as the next version; 422 with errors when it is invalid 1.7.0 (B-12302): the workspace's members within the label are notified once.",
         "parameters": [
           {
             "name": "id",
