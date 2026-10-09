@@ -343,6 +343,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `resolveSession` for `exe_` bearers) behind `routes/apps-embed-public.ts` (`/embed/...` pages with their own CSP
   and `/api/public/embeds/*`, outside `/api`); `web/js/embed.js` is the pages' script. `server/test/sprint39d-helpers.ts`
   mints host tokens and builds a tenant CA without the signer.
+- 1.7.0 Sprint 40a: `chat/invocations.ts` (`s.chatInvocations`, B-4001 to B-4009: `capabilities`, tool calls from the
+  composer and the cards write tools wait on (`callTool`, `proposeFromModel`, `decide`, `resolveHold` for a flag's
+  decision, `expireCards` in the chat sweep), `@agent` runs and workflow runs bound to a conversation (`startAgent`,
+  `startWorkflow`, `runDone` from `onCallerDone` with caller kind `chat-turn`), skills on a conversation (`addSkill`,
+  `skillPrompt`, `dropOnceSkills`)); in `chat/service.ts` the turns these make (`appendTurn`, `completeTurn`, tool
+  turns in `historyRows`, `toolArgumentsFromText`, write tools and `agent:<name>` callees offered in `generate`,
+  `awaitHandedRun`); `AgentService.runFromChat` (a run the model started from a chat turn).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.7.0 (in progress)
+
+### Agents, tools, skills and workflows in chat (Sprint 40a, B-4001 to B-4009)
+
+- Migration `042_chat_invocation`: `chat_invocations` (the cards), `messages.turn` and `invocation_id`,
+  `conversations.skills`, `profiles.agents` and `profiles.skills`. Settings `CHAT_CARD_TTL_SECONDS` (1 day),
+  `CHAT_AGENT_WAIT_SECONDS` (45) and `CHAT_AGENT_CONTEXT_TURNS` (8).
+- What a conversation may call (B-4001): `GET /api/conversations/:id/capabilities` lists the published agents,
+  tools (with input schema and side-effect class), skills and workflows the caller may use there, within the
+  conversation's ceiling and the profile's lists; what is hidden carries its reason, and calling it by name is
+  refused the same way.
+- A person calls a tool (B-4002): `/tool` in the composer, with a form from the tool's input schema or free text
+  the profile's model turns into arguments, goes through the dispatcher and the tool-call guardrail; the call and
+  its result join the conversation as a tool turn the model sees next. A call a rule holds shows as held and runs
+  only when a reviewer approves it in the Flags queue.
+- Write and destructive tools in chat (B-4003): offered to the model and callable by the person, behind an in-chat
+  approval card; a write tool runs on the owner's approval, a destructive or always-confirm tool a rule flagged also
+  needs the guardrail's approver; denied and expired cards are recorded and leave a turn that says so.
+- `@agent` (B-4004): a run bound to the conversation with the message and, when the person allows it, the recent
+  turns within the agent's label; its steps stream into a run card; its answer is a turn attributed to the agent;
+  Runs shows it with a link back to the conversation; cancel from the chat stops it.
+- `+skill` (B-4005): a published skill's instructions join the system prompt, sticky or for one turn, as chips;
+  the profile's `skills` list restricts which apply; removing a skill leaves its instructions out of the very next
+  turn.
+- The model hands a turn to an agent (B-4006): agents on the profile's `agents` list are offered as `agent:<name>`
+  tools and run under the chat turn's chain within its depth and budgets; the answer waits a while for the run,
+  then adopts it as a turn of its own.
+- `/workflow` (B-4009): a published workflow started from a conversation, its approvals as cards in the
+  conversation (and the calls held in its chain, decided from the root), its outcome a turn.
+- Console (B-4007, B-4008): the Chat board and the live Chat screen get the `/`, `@` and `+` pickers
+  (keyboard-first), tool, approval and run cards, skill chips and their states; the Runs screen links a chat-started
+  run back to its conversation. `e2e/tests/chat.spec.ts` with axe-core; the chat and runs accessibility and reflow
+  sweeps pass.
+
 ## 1.6.0
 
 ### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)

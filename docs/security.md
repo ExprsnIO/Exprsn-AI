@@ -414,6 +414,36 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
   it ends with its key, with the app's settings turned off, or when the designers end it.
 
+## Tools, agents, skills and workflows called from chat (1.7.0, Sprint 40a)
+
+- **Nothing new decides what may run (B-4001).** The conversation's capabilities are the profile's tool list
+  resolved by the dispatcher at the conversation's label, the published agents the caller holds `agents:run` for,
+  the published skills within the profile's allow-list and the workspace's published workflows; every ceiling check
+  is the one the dispatcher, the agent service and the workflow service already make. What is hidden is named with
+  its reason, and a call by name meets the same refusal, so the list cannot be used to probe for more than it shows.
+- **A person's tool call is a model's tool call (B-4002).** It takes the same path: the input schema, the tool's
+  ceiling against the conversation's label, the tool-call guardrail with the same `meta`, the rate limit, the
+  chain (a `chat-turn` root), the output schema, the context and untrusted-content checkpoints on the result. A
+  held call waits in the Flags queue as a `chat-invocation` hold; the reviewer sees the tool and its arguments and
+  nothing else of the conversation; approving runs it as the owner, with the owner's clearance and workspace.
+- **Write and destructive tools wait for the person (B-4003).** The model is offered them in chat, but the
+  dispatcher holds every such call and the person decides on a card that acts as them and is audited; the model
+  only learns that the call waits. A destructive or `confirm: always` tool a rule also flagged needs the owner and
+  then the reviewer. Cards expire (`CHAT_CARD_TTL_SECONDS`) and a denied or expired card leaves a tool turn saying
+  so, so the model does not retry blindly. Only the owner or a tool admin decides a card.
+- **An agent started from a conversation is a normal run (B-4004, B-4006).** It runs as the owner (narrowed by the
+  agent's identity when it has one, B-7701), at the conversation's label, under a `chat-turn` chain root with the
+  chain's depth and budgets; the recent turns it may see are only those within the agent's label, and only when the
+  person asks. The answer joins the conversation attributed to the agent and is labelled at least at the run's
+  label; the answer listeners (memory, artifacts) treat it as an answer. Cancelling from the chat is the owner's
+  cancel in Runs.
+- **Skills are instructions, not grants (B-4005).** A skill on a conversation adds text to the system prompt; the
+  tools it names are not offered unless the profile lists them. The profile's allow-list bounds what a conversation
+  may add; a skill above the conversation's ceiling is never added.
+- **A workflow started from chat keeps its approvals (B-4009).** Its approvals are the workflow's own, decided by
+  the people the step names; the card only shows them to someone who may decide. Calls held in its chain are
+  decided from the chain root as before.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1571,3 +1601,10 @@ filter, private `/tmp`, only the state directory writable.
   leaf against the active intermediate only (no chain of several intermediates, no OCSP); ended sessions are purged
   by the next exchange's bookkeeping, not a schedule; the embed page lists at most six fields per record and keeps the
   session token in memory, so a reload needs a new host token.
+- Tools, agents, skills and workflows from chat (1.7.0, Sprint 40a). Free text becomes arguments through one model turn
+  and is taken as the model made them (the person sees the arguments on the turn, not before). A model-proposed card
+  waits for the owner only; the answer that proposed it has already finished, so the result lands as a later turn
+  the model sees on the next question. An agent the model handed the turn to is awaited for `CHAT_AGENT_WAIT_SECONDS`
+  with a poll, not a wake-up. The recent turns passed to `@agent` are filtered by message label, not re-screened by the
+  guardrails. A workflow's outcome turn holds the passed steps' outputs as JSON up to 64 KiB. Cards are expired by the
+  chat sweep (every 15 minutes), so a card may outlive its expiry until then; decide refuses it at once.
