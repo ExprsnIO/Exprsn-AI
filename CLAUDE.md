@@ -47,8 +47,8 @@ servers beyond Ollama, platform administration screens, groups depth, blob dedup
 tool kind, prompt-injection defence, SCIM, the MCP server, the AI inventory, analytics, audit export, red-team suites,
 agent identities, handoffs, policies, DLP, legal hold, content credentials, chat artifacts, app packages and promotion,
 data model drafts, AI field fills, outside tables, entity APIs and app embedding) made version `1.6.0` (B-5001,
-capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
-`Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 44 to 50 in `Backlog-2.0.0.md`.
+capability tokens, was dropped on 2026-10-07); Sprints 40 to 44 in
+`Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 45 to 51 in `Backlog-2.0.0.md`.
 Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
 `design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
 gaps in `docs/security.md` before starting work.

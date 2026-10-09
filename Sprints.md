@@ -51,10 +51,11 @@ from prototype data to live only when every control on it is backed by the serve
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Usage and audit, Profiles, Registry, Runs, Flags, Apps | **Done** |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Shared, Apps, Settings | **Done** |
 | 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | **Done** |
-| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Next |
-| 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, custom roles, group moderation, event extras, linked conversations (1.7.0) | Vault, Settings, Groups and events | Planned |
-| 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Jobs and queues, Plugins and events, AT-Protocol, Messages and feed | Planned |
-| 44–50 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.7.0, which ends at Sprint 43; Sprints 40 to 46 until 2026-10-07) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
+| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (1.7.0; re-planned by usage on 2026-10-09) | Profiles, Chat, Runs, Knowledge, Registry, Vault, Guardrails, MCP servers | Next |
+| 42 | The vault for signing keys and session tokens; Redis for multi-process installs; workflows calling listed public hosts; dynamic API-key leases (1.7.0) | Vault, Settings, Workflows | Planned |
+| 43 | Groups: the rest of nexus; groups as access subjects; skills from knowledge, second part (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Registry | Planned |
+| 44 | Held messages for review; evidence retention and legal hold; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Messages and feed, Moderation, Files, Jobs and queues, Plugins and events, AT-Protocol | Planned |
+| 45–51 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.7.0, which ends at Sprint 44; Sprints 40 to 46 until 2026-10-07 and 44 to 50 until 2026-10-09) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
 
 **End-to-end tests (owner, 2026-10-06).** During a sprint, each part runs only the Playwright specs of the screens
 it changes (with their accessibility and reflow checks); CI runs the full suite on every pull request. The full
@@ -86,12 +87,13 @@ tenant templates, blob deduplication, vault extras and image classification (gro
 industry and low-code gaps from the 2026-10-05 research (prompt-injection defence, red-teaming, MCP server and
 authorization, SCIM, an AI inventory, usage analytics, compliance export, DLP and eDiscovery, agent identities and
 handoffs, image provenance, versioned artifacts, row and field permissions, app environments and promotion, data model
-generation, AI field upgrades, outside database sync, entity APIs and app embedding). Sprints 40 to 43 are in the
-[1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, dataset import, and the rest of the exprsn-platform
+generation, AI field upgrades, outside database sync, entity APIs and app embedding). Sprints 40 to 44 are in the
+[1.7.0 backlog](Backlog-1.7.0.md): agents, tools and skills in chat, dataset import, thinking policy and plans, skills
+from knowledge, standing MCP approvals (re-planned by usage on 2026-10-09), and the rest of the exprsn-platform
 port the owner decided on 2026-10-06 (Redis for multi-process installs, the vault for signing keys and session tokens,
 held messages, evidence retention, groups features and groups as access subjects, workflows calling listed public
 hosts, API-key leases, a response cache, a guardrail rule builder, plugin UI surfaces, `did:exprsn` and cross-posting
-to the hosted PDS). Sprints 44 to 50 are in the [2.0.0 backlog](Backlog-2.0.0.md): cloud deployments and
+to the hosted PDS). Sprints 45 to 51 are in the [2.0.0 backlog](Backlog-2.0.0.md): cloud deployments and
 integrations.
 
 ---
