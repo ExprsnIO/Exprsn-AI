@@ -210,7 +210,8 @@ describe('MCP servers', () => {
       ollama.reply = (messages, opts) => {
         const last = messages[messages.length - 1]!;
         if (last.role === 'tool') return { content: `Found ${last.content}` };
-        expect((opts.tools as { function: { name: string } }[]).map((x) => x.function.name)).toEqual(['jira_search_issues']);
+        // 1.7.0 (B-4003): write tools are offered too; a call the dispatcher holds becomes an in-chat approval card.
+        expect((opts.tools as { function: { name: string } }[]).map((x) => x.function.name).sort()).toEqual(['jira_create_issue', 'jira_search_issues']);
         return { content: '', toolCall: { name: 'jira_search_issues', arguments: { q: 'travel' } } };
       };
       await localUser(h, 'mem', ['member'], 'confidential');

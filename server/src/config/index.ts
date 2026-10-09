@@ -477,6 +477,12 @@ const base = z.object({
     CHAT_ARTIFACT_MAX_BYTES: z.coerce.number().int().min(1024).max(8 * 1024 * 1024).default(262_144),
     /** 1.6.0 (B-8001): how long a sandboxed artifact render link (the iframe's URL) stays valid. */
     CHAT_ARTIFACT_RAW_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
+    /** 1.7.0 (B-4003): how long an in-chat approval card (a write or destructive tool call) waits before it expires. */
+    CHAT_CARD_TTL_SECONDS: z.coerce.number().int().min(60).max(7 * 86_400).default(86_400),
+    /** 1.7.0 (B-4006): how long a chat turn waits for an agent the model handed the turn to before the answer continues without it. */
+    CHAT_AGENT_WAIT_SECONDS: z.coerce.number().int().min(1).max(600).default(45),
+    /** 1.7.0 (B-4004): how many recent turns `@agent` may pass along when the person allows it. */
+    CHAT_AGENT_CONTEXT_TURNS: z.coerce.number().int().min(0).max(50).default(8),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and

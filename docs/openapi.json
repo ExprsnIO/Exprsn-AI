@@ -35328,6 +35328,30 @@
         }
       }
     },
+    "/api/conversations/{id}/agent-runs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write, agents:run. B-4004: @agent: starts a run bound to the conversation with the message (and the recent turns within the agent's label when allowed); its answer becomes a turn attributed to the agent.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/conversations/{id}/artifacts": {
       "get": {
         "tags": [
@@ -35393,6 +35417,30 @@
         "x-exprsn-since": "1.6.0"
       }
     },
+    "/api/conversations/{id}/capabilities": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:read. B-4001: the published agents, tools (with input schema and side-effect class), skills and workflows the caller may use in this conversation, and why others are hidden (above the conversation's ceiling, not on the profile's list).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/conversations/{id}/exports": {
       "post": {
         "tags": [
@@ -35414,6 +35462,94 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/conversations/{id}/invocations": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:read. B-4002 to B-4009: the conversation's cards: tool calls (awaiting the owner, held for a reviewer, done, denied, expired), agent runs and workflow runs with their live state, pending approvals and held calls in their chain.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/invocations/{iid}/cancel": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write. B-4004, B-4009: cancels the agent or workflow run a card started; the turn records it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/invocations/{iid}/decide": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write. B-4003: the owner (or a tool admin) approves or denies a card; an approved write tool runs, a destructive or always-confirm tool a rule flagged then waits for the reviewer too; denied and expired cards are recorded.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/conversations/{id}/knowledge": {
@@ -35734,6 +35870,110 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/conversations/{id}/skills": {
+      "put": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write. B-4005: +skill: adds a published skill's instructions to the conversation's system prompt, sticky or for one turn, within the profile's allow-list.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/skills/{name}": {
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write. B-4005: removes a skill from the conversation; the very next turn goes without its instructions.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/tool-calls": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write, inference:invoke. B-4002: a person calls a tool of the profile's list with arguments (or free text the model turns into arguments) through the dispatcher and the tool-call guardrail; the result joins the conversation as a tool turn, or the call waits on a card (write tools) or in the Flags queue (held by a rule).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/workflow-runs": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "chat:write, agents:run. B-4009: /workflow: starts a published workflow from the conversation; its approvals are cards here and its outcome a turn.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/eval-sets": {

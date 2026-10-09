@@ -368,6 +368,9 @@ export class AgentService {
    * the delegating run pauses (`ToolPending`) and continues with the answer when the child ends.
    */
   async runAsTool(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown> {
+    // 1.7.0 (B-4006): the model of a chat profile hands a turn to an agent on the profile's list: a run under the
+    // chat turn's chain (its depth and budgets apply), with the agent's own budgets; the chat service awaits it.
+    if (ctx.source?.kind === 'message') return this.runFromChat(ctx, entry, args);
     if (ctx.source?.kind !== 'agent-run') throw new Error(`Only an agent run can delegate to ${entry.name}.`);
     const parent = (await this.db('agent_runs').where({ tenant_id: ctx.principal.tenantId, id: ctx.source.id }).first()) as RunRow | undefined;
     if (!parent) throw new Error('The delegating run no longer exists.');
@@ -396,6 +399,22 @@ export class AgentService {
     }
     await this.audit.append({ tenantId: parent.tenant_id, action: 'agent.run.delegated', kind: 'system', actor: { service: 'agents', user: parent.user_id, agent: parent.agent_name }, target: { run: child.id, agent: child.agent, version: child.agentVersion }, label: child.label, detail: { parentRun: parent.id, parentAgent: parent.agent_name, budgets, chain: child.chain?.id ?? null } });
     throw new ToolPending({ kind: 'agent-run', id: child.id }, `${entry.name} is working on it as run ${child.id}. This run pauses and continues with its answer.`);
+  }
+
+  /** 1.7.0 (B-4006): a run the model started from a chat turn (`agent:<name>` on the profile's list). */
+  private async runFromChat(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown> {
+    const task = entry.input_schema ? JSON.stringify(args) : String(args.task ?? '').trim();
+    if (!task) throw new Error(`The task for ${entry.name} is empty.`);
+    let child;
+    try {
+      child = await this.start(ctx.principal, { agent: entry.id, input: task, label: ctx.label }, { chain: ctx.chain ?? null, caller: { kind: 'chat-turn', id: ctx.source!.id, node: ctx.chain?.node ?? '' } });
+    } catch (err) {
+      if (err instanceof ChainLimit) throw new Error(`chain_limit: ${err.message}`, { cause: err });
+      if (err instanceof HttpProblem) throw new Error(`tool_unavailable: ${entry.name}: ${err.detail ?? err.title}`, { cause: err });
+      throw err;
+    }
+    await this.audit.append({ tenantId: ctx.principal.tenantId, action: 'agent.run.delegated', kind: 'system', actor: { service: 'chat', user: ctx.principal.userId }, target: { run: child.id, agent: child.agent, version: child.agentVersion, message: ctx.source!.id }, label: child.label, detail: { from: 'chat-turn' } });
+    throw new ToolPending({ kind: 'agent-run', id: child.id }, `${entry.name} is working on it as run ${child.id}.`);
   }
 
   /**
@@ -648,7 +667,7 @@ export class AgentService {
     const ref = chainRefOfRun(r);
     if (ref && this.chains) await this.chains.finish(ref, state === 'budget' ? 'failed' : state === 'queued' ? 'running' : state, (upd.error as string | null | undefined) ?? null, state === 'budget' ? 'budget' : null);
     // B-3902: the workflow step awaiting this run picks up its end (a budget stop ends it for the step too).
-    if ((r.caller_kind === 'workflow-run' || r.caller_kind === 'redteam-run') && r.caller_id && ENDED.includes(state)) await this.onCallerDone?.(r.tenant_id, r.caller_kind, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the workflow run awaiting an agent run'));
+    if ((r.caller_kind === 'workflow-run' || r.caller_kind === 'redteam-run' || r.caller_kind === 'chat-turn') && r.caller_id && ENDED.includes(state)) await this.onCallerDone?.(r.tenant_id, r.caller_kind, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the workflow run awaiting an agent run'));
     // B-4102: the agent run that delegated to this one picks up its answer (or its typed error).
     if (r.caller_kind === 'agent-run' && r.caller_id && ENDED.includes(state)) await this.resumeAwaiting(r.tenant_id, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the agent run that delegated to this one'));
     if (state === 'failed' || state === 'succeeded') await this.audit.append({ tenantId: r.tenant_id, action: `agent.run.${state}`, kind: 'system', actor: { service: 'agents', user: r.user_id, agent: r.agent_name }, target: { run: r.id, agent: r.agent_name, version: r.agent_version }, label: r.label, detail: { error: upd.error ?? null, usage: extra.usage ?? null } });

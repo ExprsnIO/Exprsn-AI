@@ -582,6 +582,11 @@ export function guardrailRoutes(s: Services): Router {
           await s.apps.forms.held.resolve(p, flag.source_id, decision, body.reason ?? null, { ip: ip(req), traceId: req.traceId ?? null });
           return;
         }
+        // 1.7.0 (B-4002): a tool call held from a conversation runs when approved, or is recorded as rejected.
+        if (flag.source_kind === 'chat-invocation' && flag.source_id) {
+          conversationId = (await s.chatInvocations.resolveHold(p, flag.source_id, decision)).conversationId;
+          return;
+        }
         if (flag.source_kind !== 'message' || !flag.source_id) throw conflict(`${flagRef(flag)} has no answer attached.`);
         conversationId = (await s.chat.resolveHold(p, flag.source_id, decision)).conversationId;
       });
@@ -590,6 +595,7 @@ export function guardrailRoutes(s: Services): Router {
       else if (f.source_kind === HELD_OBJECT) {
         /* audited by the held submissions service as app.form.held.accepted or app.form.held.rejected */
       } else if (f.source_kind === FEED_POST) await audit(req, `feed.post.${decision}`, { flag: flagRef(f), post: f.source_id }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
+      else if (f.source_kind === 'chat-invocation') await audit(req, `chat.tool.hold.${decision}`, { flag: flagRef(f), invocation: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       else await audit(req, `chat.hold.${decision}`, { flag: flagRef(f), message: f.source_id, conversation: conversationId }, { reason: body.reason ?? null, rule: f.rule_id }, f.label);
       res.json(flags.view(f, p));
       return;
