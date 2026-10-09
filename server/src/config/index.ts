@@ -80,6 +80,8 @@ const base = z.object({
     /** SIEM stream: audit events are POSTed as NDJSON batches to this URL. */
     SIEM_URL: z.url().optional(),
     SIEM_TOKEN: z.string().optional(),
+    /** Audit streaming per tenant (1.6.0, B-7501): how many proposed or active SIEM destinations a tenant may have. */
+    SIEM_TENANT_MAX_DESTINATIONS: z.coerce.number().int().min(1).max(50).default(5),
 
     DIRECTORY_SYNC_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(60),
     AUDIT_CHECKPOINT_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(60),

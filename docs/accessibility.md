@@ -218,6 +218,24 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
+- **Models: the AI inventory tab** (B-7301, B-7302, Sprint 38a): a second tab in the ARIA tablist (Catalogue, AI
+  inventory), reachable with the arrow keys; a labelled segmented control filters by kind; every system is a table row
+  with a selected state, and the inspector is a form of labelled fields (owner as a select of the tenant's users,
+  oversight role, provenance, lineage note, known issues, impact assessment) with a Save button; the completeness
+  notice names what is missing in words, not by colour alone. The owner-requirement control is a `role="switch"` with
+  `aria-checked`, and the register exports are buttons whose names say the format. Toasts repeat the server's outcome.
+- **Analytics** (B-7401, B-7402, Sprint 38a): the chart is an SVG with `role="img"` and a label, each bar a focusable
+  list item with an accessible name (day and value) and a title, and a labelled segmented control picks the metric;
+  the dimension and period controls are labelled; the table has a Total row; cost cells that are withheld say "no
+  price" with a title explaining why. The price and chargeback dialogs are forms with labelled fields and hints, and
+  a refused save stays in the dialog with the server's words. Remove buttons name the price they remove.
+- **Usage and audit: JSONL exports and SIEM destinations** (B-7501, Sprint 38a): the export dialog's content select
+  swaps the hint text to explain the JSONL proof; the destinations table names the proposer and approver in each row;
+  state is a pill with words (awaits a second admin, active, disabled); the Approve button a proposer cannot use
+  carries a title saying why, and the refusal is a toast with the server's reason. Propose is a dialog of labelled
+  fields with hints (address forms, where the token goes). `e2e/tests/analytics.spec.ts` checks the screen with
+  axe-core and the in-page checker; `models.spec.ts` the inventory tab; `usage-audit.spec.ts` the export and the
+  dual-control flow with a second signed-in admin. The full sweeps run at the release (B-5101).
 - **Registry: HTTP tools and allowed hosts** (B-8904, Sprint 37a): the entry form's Kind select offers Tool (HTTP
   request), which swaps the fields inside the same dialog so focus stays in it. Every HTTP field is labelled with a
   hint (method, URL template, input schema, query parameters, headers, body, response mapping, cap and timeout); the

@@ -133,4 +133,40 @@ test.describe('Models', () => {
     await second.locator('[data-card]').click();
     await expect(second.locator('#overlay .drawer')).toContainText('Registered from the server');
   });
+
+  // 1.6.0, Sprint 38a (B-7301, B-7302): the AI inventory tab.
+  test('the AI inventory lists every system, an owner completes an entry, and the register exports', async ({ page }) => {
+    await open(page, 'models?tab=inventory');
+    await expectLive(page);
+    const main = page.locator('#main');
+    await expect(main).toContainText('Systems');
+    await expect(main.locator('tr[data-invsel^="model:"]').first()).toBeVisible();
+    await expect(main.locator('tr[data-invsel^="profile:"]').first()).toBeVisible();
+    await expect(main).toContainText('have no owner');
+    await expectAccessible(page, 'models inventory');
+    await expectAxeClean(page, 'aa', 'models inventory');
+
+    // Fill the register for one model: owner, oversight role and provenance make it complete.
+    await main.locator('tr[data-invsel^="model:"]').first().click();
+    await expect(main.locator('.inspector')).toContainText('Incomplete');
+    await main.locator('.inspector [data-invf="ownerId"]').selectOption({ label: 'Jon Lee' });
+    await main.locator('.inspector [data-invf="oversightRole"]').fill('Model admin reviews evaluations monthly');
+    await main.locator('.inspector [data-invf="provenance"]').fill('Ollama library, digest verified at import');
+    await main.locator('.inspector [data-invf="impactAssessment"]').fill('Minimal risk: internal assistants only.');
+    await main.locator('[data-invsave]').click();
+    await toast(page, /is complete/);
+    await expect(main.locator('tr[data-invsel^="model:"]').first()).toContainText('Jon Lee');
+
+    // The owner requirement switch, then the register as JSON (a download, audited).
+    await main.locator('[data-invrequire]').click();
+    await toast(page, /no longer published/);
+    await expect(main.locator('[data-invrequire]')).toHaveAttribute('aria-checked', 'true');
+    const [download] = await Promise.all([page.waitForEvent('download'), main.locator('[data-invexport="json"]').click()]);
+    expect(download.suggestedFilename()).toMatch(/^ai-inventory-.*\.json$/);
+    const file = await download.path();
+    const text = file ? (await import('node:fs')).readFileSync(file, 'utf8') : '';
+    expect(text).toContain('"impactAssessment": "Minimal risk: internal assistants only."');
+    await main.locator('[data-invrequire]').click();
+    await toast(page, /no longer needs an owner/);
+  });
 });

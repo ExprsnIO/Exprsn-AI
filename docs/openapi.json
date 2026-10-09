@@ -34,7 +34,7 @@
       "pluginToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A plugin handler run's scoped token (xpt_…), B-2004"
+        "description": "A plugin handler run's scoped token (xpt_\u2026), B-2004"
       },
       "davBasic": {
         "type": "http",
@@ -49,7 +49,7 @@
       "scimToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A SCIM token (exai_scim1_…) made under Identity for one SCIM store"
+        "description": "A SCIM token (exai_scim1_\u2026) made under Identity for one SCIM store"
       }
     },
     "schemas": {
@@ -10944,6 +10944,386 @@
           "totalResults",
           "Resources"
         ]
+      },
+      "InventoryItem": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "model",
+              "profile",
+              "agent",
+              "workflow",
+              "tool",
+              "mcp-server",
+              "dataset"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "issues": {
+            "type": "object",
+            "properties": {
+              "flags": {
+                "type": "integer"
+              },
+              "failedEvals": {
+                "type": "integer"
+              }
+            }
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "ownerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ownerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oversightRole": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provenance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineageNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "knownIssuesNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "impactAssessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status",
+          "lineage",
+          "issues",
+          "missing",
+          "complete"
+        ]
+      },
+      "InventorySettings": {
+        "type": "object",
+        "properties": {
+          "requireOwner": {
+            "type": "boolean"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requireOwner"
+        ]
+      },
+      "AnalyticsRow": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "integer"
+          },
+          "messages": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "users": {
+            "type": "integer"
+          },
+          "prompt": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "thinking": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "gpuMs": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "requests",
+          "messages",
+          "runs",
+          "users",
+          "tokens",
+          "gpuMs",
+          "cost"
+        ]
+      },
+      "UsagePrice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "model",
+              "pool"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "inputPerMillion": {
+            "type": "number"
+          },
+          "outputPerMillion": {
+            "type": "number"
+          },
+          "gpuHour": {
+            "type": "number"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "ref",
+          "currency",
+          "inputPerMillion",
+          "outputPerMillion",
+          "gpuHour"
+        ]
+      },
+      "SiemDestination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "https",
+              "syslog"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "hasToken": {
+            "type": "boolean"
+          },
+          "hasCa": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "active",
+              "rejected",
+              "disabled"
+            ]
+          },
+          "proposedBy": {
+            "type": "string"
+          },
+          "proposedAt": {
+            "type": "integer"
+          },
+          "approvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivered": {
+            "type": "integer"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "lastDeliveredAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "url",
+          "state",
+          "delivered",
+          "dropped",
+          "connection"
+        ]
       }
     },
     "responses": {
@@ -11356,6 +11736,417 @@
         }
       }
     },
+    "/api/admin/analytics/chargeback": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7402: the chargeback for one month per workspace and model, JSON (default) or CSV with a total line; audited analytics.chargeback.exported",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "description": "YYYYMM (default: this month)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "one workspace (default: every workspace)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "json or csv",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "integer"
+                    },
+                    "currency": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "total": {
+                      "type": "object"
+                    },
+                    "workspace": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "month",
+                    "rows",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/daily": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7401: per day over the range, zero-filled: messages, runs, tokens and GPU-seconds",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "first day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "last day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "days back from today (default 14)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "day": {
+                        "type": "string"
+                      },
+                      "messages": {
+                        "type": "integer"
+                      },
+                      "runs": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "integer"
+                      },
+                      "gpuSeconds": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/prices": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7402: the tenant's prices per model and per pool",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "prices": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsagePrice"
+                      }
+                    }
+                  },
+                  "required": [
+                    "prices"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read and tenant:manage. B-7402: set the price of a model or a pool (one currency per tenant); audited analytics.price.set",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "model",
+                      "pool"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "inputPerMillion": {
+                    "type": "number"
+                  },
+                  "outputPerMillion": {
+                    "type": "number"
+                  },
+                  "gpuHour": {
+                    "type": "number"
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "scope",
+                  "ref",
+                  "currency"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePrice"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/prices/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read and tenant:manage. B-7402: remove a price; audited analytics.price.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the price",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/summary": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7401: messages, tokens, users, runs, GPU time and cost by tenant (system admins), workspace, group, model, profile or user over a day range",
+        "parameters": [
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "description": "tenant, workspace, group, model, profile or user (default workspace)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "first day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "last day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "days back from today when from is absent (default 14)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one group's members",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "by": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AnalyticsRow"
+                      }
+                    },
+                    "total": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "by",
+                    "rows",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/atproto/accounts": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -11595,6 +12386,381 @@
         }
       }
     },
+    "/api/admin/audit/exports/jsonl": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read. B-7501: request a JSONL export of a time window of the chain with its signed proof (events above the requester's clearance redacted to their hashes); 202 with the export; audited audit.export.requested",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer",
+                    "description": "window start, epoch ms"
+                  },
+                  "to": {
+                    "type": "integer",
+                    "description": "window end, epoch ms"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read. B-7501: the tenant's SIEM destinations with their state and delivery counters, and the platform stream's status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "platform": {
+                      "type": "object"
+                    },
+                    "max": {
+                      "type": "integer"
+                    },
+                    "destinations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SiemDestination"
+                      }
+                    }
+                  },
+                  "required": [
+                    "platform",
+                    "destinations"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: propose a destination (https: NDJSON batches with an optional bearer token; syslog: host:port over TLS, optional private CA); a second admin approves it; audited audit.siem.proposed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "https",
+                      "syslog"
+                    ]
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "caPem": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "kind",
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: approve a proposed destination (someone other than the proposer); events flow from now on; audited audit.siem.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/disable": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: stop an active (or withdraw a proposed) destination; audited audit.siem.disabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: reject a proposed destination; audited audit.siem.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/test": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: send one test event now and report the outcome; audited audit.siem.tested",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/audit/stream": {
       "get": {
         "tags": [
@@ -11758,7 +12924,7 @@
         "tags": [
           "admin/billing"
         ],
-        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, …}]}",
+        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, \u2026}]}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -13219,7 +14385,7 @@
         "tags": [
           "admin/guardrails"
         ],
-        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt…}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
+        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt\u2026}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
         "parameters": [
           {
             "name": "id",
@@ -14330,6 +15496,268 @@
         }
       }
     },
+    "/api/admin/inventory": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: the AI system inventory: every model, profile, agent, workflow, tool, MCP server and dataset with owner, oversight role, provenance, lineage, issues and completeness",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InventoryItem"
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer"
+                        },
+                        "incomplete": {
+                          "type": "integer"
+                        },
+                        "withIssues": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "owners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "settings": {
+                      "$ref": "#/components/schemas/InventorySettings"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "counts"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/register": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7302: the register as CSV (default) or JSON, every system with its lineage and impact assessment; audited inventory.exported",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "csv or json",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/settings": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: whether publishing an agent needs an owner in the inventory",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: turn the owner requirement for publishing agents on or off; audited inventory.settings.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requireOwner": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requireOwner"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/{kind}/{id}": {
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: set a system's owner, oversight role, data provenance, lineage note, known issues and impact assessment; audited inventory.updated",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "description": "model, profile, agent, workflow, tool, mcp-server or dataset",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the system's id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ownerId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "oversightRole": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "provenance": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lineageNote": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "knownIssuesNote": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "impactAssessment": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/jobs": {
       "get": {
         "x-exprsn-since": "1.6.0",
@@ -15306,7 +16734,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated",
+        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft \u2192 evaluated",
         "parameters": [
           {
             "name": "id",
@@ -18976,7 +20404,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, …}",
+        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, \u2026}",
         "parameters": [
           {
             "name": "id",
@@ -19484,7 +20912,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Draft → in review, with fresh checks",
+        "summary": "Draft \u2192 in review, with fresh checks",
         "parameters": [
           {
             "name": "id",
@@ -22480,7 +23908,7 @@
         "tags": [
           "admin/users"
         ],
-        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({…, invited}; 409 without an email address",
+        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({\u2026, invited}; 409 without an email address",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -22814,7 +24242,7 @@
         "tags": [
           "admin/zones-cluster"
         ],
-        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH … application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
+        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH \u2026 application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -23349,7 +24777,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller’s, or tenant-wide (workspaceId null). Audited app.created",
+        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller\u2019s, or tenant-wide (workspaceId null). Audited app.created",
         "requestBody": {
           "required": true,
           "content": {
@@ -24371,7 +25799,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,…), q, limit, offset or cursor (keyset paging, B-3601)",
+        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,\u2026), q, limit, offset or cursor (keyset paging, B-3601)",
         "responses": {
           "200": {
             "description": "OK",
@@ -24999,7 +26427,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2208: the app’s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
+        "summary": "apps:design. B-2208: the app\u2019s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
         "responses": {
           "200": {
             "description": "OK",
@@ -25023,7 +26451,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. The app’s forms",
+        "summary": "records:read. The app\u2019s forms",
         "responses": {
           "200": {
             "description": "OK",
@@ -25319,7 +26747,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2206: the app’s record and schedule triggers",
+        "summary": "apps:design. B-2206: the app\u2019s record and schedule triggers",
         "responses": {
           "200": {
             "description": "OK",
@@ -27812,7 +29240,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=…, single use,",
+        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=\u2026, single use,",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -28012,7 +29440,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {…, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
+        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {\u2026, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -28141,7 +29569,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Effective-access matrix: users (and API keys) × workspaces × permissions, each cell policy.explain's decision",
+        "summary": "Effective-access matrix: users (and API keys) \u00d7 workspaces \u00d7 permissions, each cell policy.explain's decision",
         "parameters": [
           {
             "name": "workspaceId",
@@ -28331,7 +29759,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Role × permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
+        "summary": "Role \u00d7 permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
         "parameters": [
           {
             "name": "format",
@@ -29339,7 +30767,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller’s calendar: events of their groups and events they RSVPed to",
+        "summary": "The caller\u2019s calendar: events of their groups and events they RSVPed to",
         "parameters": [
           {
             "name": "from",
@@ -29402,7 +30830,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "An event with attendance and the caller’s RSVP",
+        "summary": "An event with attendance and the caller\u2019s RSVP",
         "parameters": [
           {
             "name": "id",
@@ -29756,7 +31184,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2503, moderators. The event’s reminders and their states",
+        "summary": "B-2503, moderators. The event\u2019s reminders and their states",
         "parameters": [
           {
             "name": "id",
@@ -29890,7 +31318,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller’s signed calendar feeds",
+        "summary": "The caller\u2019s signed calendar feeds",
         "responses": {
           "200": {
             "description": "OK",
@@ -29915,7 +31343,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller’s calendar",
+        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller\u2019s calendar",
         "requestBody": {
           "required": true,
           "content": {
@@ -32218,7 +33646,7 @@
         "tags": [
           "conversations"
         ],
-        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is …/#/shared?t=<token>; shares list anonymous: true",
+        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is \u2026/#/shared?t=<token>; shares list anonymous: true",
         "parameters": [
           {
             "name": "id",
@@ -34705,7 +36133,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4405: the tenant’s group categories in their order (managed under /api/admin/social/group-categories)",
+        "summary": "groups:read. B-4405: the tenant\u2019s group categories in their order (managed under /api/admin/social/group-categories)",
         "responses": {
           "200": {
             "description": "OK",
@@ -34779,7 +36207,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "The caller’s pending requests and invitations",
+        "summary": "The caller\u2019s pending requests and invitations",
         "responses": {
           "200": {
             "description": "OK",
@@ -35149,7 +36577,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 × shared members + 2 × joins + posts in the last 30 days; nearest first with near",
+        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 \u00d7 shared members + 2 \u00d7 joins + posts in the last 30 days; nearest first with near",
         "parameters": [
           {
             "name": "workspace",
@@ -35266,7 +36694,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4404: the trending groups of the caller’s workspaces as the groups.trending job last counted them (3 × joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
+        "summary": "groups:read. B-4404: the trending groups of the caller\u2019s workspaces as the groups.trending job last counted them (3 \u00d7 joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
         "parameters": [
           {
             "name": "workspace",
@@ -35373,7 +36801,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. The group with the caller’s role",
+        "summary": "groups:read. The group with the caller\u2019s role",
         "parameters": [
           {
             "name": "id",
@@ -35405,7 +36833,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel’s label is never below its group’s (422 step label-floor); raising a group’s label raises its channels below it",
+        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel\u2019s label is never below its group\u2019s (422 step label-floor); raising a group\u2019s label raises its channels below it",
         "parameters": [
           {
             "name": "id",
@@ -35660,7 +37088,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "B-2505, moderators. Flags on the group’s content from reports and moderation checks",
+        "summary": "B-2505, moderators. Flags on the group\u2019s content from reports and moderation checks",
         "parameters": [
           {
             "name": "id",
@@ -35705,7 +37133,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group’s readers, a private one by its members, a hidden one is known only to them)",
+        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group\u2019s readers, a private one by its members, a hidden one is known only to them)",
         "parameters": [
           {
             "name": "id",
@@ -35740,7 +37168,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group’s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
+        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group\u2019s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
         "parameters": [
           {
             "name": "id",
@@ -35833,7 +37261,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers. The group’s events in a window",
+        "summary": "Readers. The group\u2019s events in a window",
         "parameters": [
           {
             "name": "id",
@@ -36037,7 +37465,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. Invites a user of the group’s workspace; expires after GROUP_INVITE_DAYS",
+        "summary": "Moderators. Invites a user of the group\u2019s workspace; expires after GROUP_INVITE_DAYS",
         "parameters": [
           {
             "name": "id",
@@ -36221,7 +37649,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes a member’s group role (a group keeps one owner)",
+        "summary": "Owner. Changes a member\u2019s group role (a group keeps one owner)",
         "parameters": [
           {
             "name": "id",
@@ -36303,7 +37731,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Leave (own id) or remove a member; the member’s sockets leave the group room",
+        "summary": "Leave (own id) or remove a member; the member\u2019s sockets leave the group room",
         "parameters": [
           {
             "name": "id",
@@ -36464,7 +37892,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. The group’s requests and invitations (default pending)",
+        "summary": "Moderators. The group\u2019s requests and invitations (default pending)",
         "parameters": [
           {
             "name": "id",
@@ -36571,7 +37999,7 @@
         "tags": [
           "images"
         ],
-        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, …}",
+        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, \u2026}",
         "parameters": [
           {
             "name": "id",
@@ -37598,7 +39026,7 @@
             "name": "facet.<key>",
             "in": "query",
             "required": false,
-            "description": "A facet value to filter on (classification, licence, format, …); one per key",
+            "description": "A facet value to filter on (classification, licence, format, \u2026); one per key",
             "schema": {
               "type": "string"
             }
@@ -45629,7 +47057,7 @@
         "tags": [
           "pki"
         ],
-        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, …}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
+        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, \u2026}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
         "responses": {
           "201": {
             "description": "Created; hmacKey is shown once",
@@ -46576,7 +48004,7 @@
         "tags": [
           "prompts"
         ],
-        "summary": "deprecated \\| retired, version?} | Lifecycle draft → published → deprecated → retired; publishing names the version (default the latest)",
+        "summary": "deprecated \\| retired, version?} | Lifecycle draft \u2192 published \u2192 deprecated \u2192 retired; publishing names the version (default the latest)",
         "parameters": [
           {
             "name": "id",
@@ -51067,7 +52495,7 @@
         "tags": [
           "workflow-runs"
         ],
-        "summary": "{…, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
+        "summary": "{\u2026, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
         "parameters": [
           {
             "name": "id",
@@ -51149,7 +52577,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt…}] (waiting: runs paused on an approval)",
+        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt\u2026}] (waiting: runs paused on an approval)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -51321,7 +52749,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "{…, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
+        "summary": "{\u2026, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
         "parameters": [
           {
             "name": "id",
@@ -53308,7 +54736,7 @@
         "tags": [
           "oauth"
         ],
-        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:…\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
+        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:\u2026\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -53727,7 +55155,7 @@
         "tags": [
           "plugin-broker"
         ],
-        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_\u2026; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
         "security": [
           {
             "pluginToken": []
@@ -55989,7 +57417,7 @@
         "tags": [
           "v1"
         ],
-        "summary": "string[] (≤ 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
+        "summary": "string[] (\u2264 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -56506,7 +57934,7 @@
         "tags": [
           "atproto"
         ],
-        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (…*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
+        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (\u2026*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
         "parameters": [
           {
             "name": "uriPatterns",

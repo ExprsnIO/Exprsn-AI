@@ -86,6 +86,7 @@
       { title: 'Verification failed', tone: 'danger', text: 'The chain breaks at event 7a201f3d. Shows the last good checkpoint and who was notified. Nothing is auto-repaired.', apply(ctx) { ctx.state.chain = 'broken'; ctx.state.forceBreak = true; ctx.state.tab = 'audit'; ctx.state.sel = '7a201f3d'; ctx.state.inspect = 'event'; ctx.rerender(); } },
       { title: 'Export blocked', tone: 'warn', text: 'The export includes confidential events and the auditor is cleared to internal. Offers a filtered export.', apply(ctx) { ctx.state.exportBlocked = true; ctx.state.openExport = true; ctx.rerender(); } },
       { title: 'Corrections', tone: 'neutral', text: 'A correction is a new row linked to the row it corrects. The original is never edited.', apply(ctx) { ctx.state.tab = 'audit'; ctx.state.sel = '44c1e90a'; ctx.state.inspect = 'event'; ctx.state.showCorrection = true; ctx.rerender(); } },
+      { title: 'SIEM destination awaiting approval', tone: 'warn', text: 'A proposed destination sends nothing until a second tenant admin approves it; the proposer cannot.', apply(ctx) { ctx.state.tab = 'exports'; ctx.rerender(); } },
       { title: 'Bar hover', tone: 'neutral', text: 'Hovering a bar shows the day and exact token count. The table view carries the same values.', apply(ctx) { ctx.state.tab = 'usage'; ctx.state.chartTable = false; ctx.state.hover = 10; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -135,7 +136,33 @@
       } else {
         body = '<div class="hstack"><div class="eyebrow">Exports</div><span class="right">' + UI.btn('New export', { size: 'sm', icon: 'download', attrs: 'data-export' }) + '</span></div>'
           + UI.table(['File', 'Scope', { label: 'Rows', right: true }, 'Requested by', 'State', ''], st.exports.map((x) => [ '<span class="mono">' + esc(x.file) + '</span>', esc(x.scope), esc(x.rows), esc(x.by), UI.pill(x.state), x.state === 'ready' ? UI.btn('Download', { size: 'xs', kind: 'ghost', attrs: 'data-dl="' + esc(x.file) + '"' }) : '' ]), { clickable: false, minWidth: '640px' })
-          + UI.notice('Exports of <b>confidential</b> rows need auditor clearance at that level or above; otherwise the export is filtered to internal and below.', 'info');
+          + UI.notice('Exports of <b>confidential</b> rows need auditor clearance at that level or above; otherwise the export is filtered to internal and below.', 'info')
+          + siemPanel();
+      }
+
+      // ----- B-7501: audit streaming per tenant, under dual control -----
+      st.siem = st.siem || [
+        { id: 's1', name: 'Splunk HEC (SOC)', kind: 'https', url: 'https://hec.soc.northwind.example/services/collector/raw', token: true, state: 'active', by: 'Mara Okafor', approvedBy: 'Tomasz Wieczorek', delivered: '1,204,118', last: '14:02:19', connection: 'connected', error: null },
+        { id: 's2', name: 'Sentinel (syslog)', kind: 'syslog', url: 'siem-eu.northwind.example:6514', token: false, state: 'proposed', by: 'Mara Okafor', approvedBy: null, delivered: '0', last: null, connection: 'disabled', error: null },
+        { id: 's3', name: 'Old Logstash', kind: 'https', url: 'https://logstash.legacy.example:8443/', token: true, state: 'disabled', by: 'Tomasz Wieczorek', approvedBy: 'Mara Okafor', delivered: '88,301', last: '2 Sep', connection: 'disabled', error: 'SIEM answered 503' }
+      ];
+      function siemPanel() {
+        return '<div class="hstack" style="margin-top:12px"><div class="eyebrow">Streaming to a SIEM</div><span class="right">' + UI.btn('Propose destination', { size: 'sm', icon: 'plus', attrs: 'data-siempropose' }) + '</span></div>'
+          + UI.table(['Destination', 'Kind', 'Address', 'State', { label: 'Delivered', right: true }, 'Last', ''], st.siem.map((d) => ({ cells: ['<b>' + esc(d.name) + '</b>' + (d.token ? '<div class="muted" style="font-size:11px">bearer token sealed</div>' : ''), esc(d.kind === 'https' ? 'HTTPS, NDJSON' : 'syslog over TLS'), '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.url) + '</span>',
+              UI.pill(d.state === 'proposed' ? 'awaits a second admin' : d.state, d.state === 'active' ? 'ok' : d.state === 'proposed' ? 'warn' : 'neutral') + (d.state === 'active' ? ' ' + UI.pill(d.connection, d.connection === 'connected' ? 'ok' : d.connection === 'failing' ? 'danger' : 'neutral') : ''),
+              esc(d.delivered), esc(d.last || '-') + (d.error ? '<div class="muted" style="font-size:11px">' + esc(d.error) + '</div>' : ''),
+              '<span class="hstack gap6" style="justify-content:flex-end">' + (d.state === 'proposed' ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-siemapprove="' + d.id + '"' }) + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-siemreject="' + d.id + '"' }) : '') + (d.state !== 'rejected' ? UI.btn('Test', { size: 'xs', kind: 'ghost', attrs: 'data-siemtest="' + d.id + '"' }) : '') + (d.state === 'active' ? UI.btn('Disable', { size: 'xs', kind: 'ghost', attrs: 'data-siemdisable="' + d.id + '"' }) : '') + '</span>'],
+            attrs: 'data-siemrow="' + d.id + '"' })), { clickable: false, minWidth: '720px', emptyTitle: 'No destinations', emptyText: 'Propose an HTTPS or syslog-over-TLS destination; a second tenant admin approves it before anything is sent.' })
+          + UI.notice('<b>Dual control.</b> A destination streams this tenant\'s audit events only after a second tenant admin approves it. The proposer cannot approve. Tokens are sealed and never shown again; every decision and test is on the chain. The platform stream (SIEM_URL) stays the operator\'s.', 'info');
+      }
+      function siemProposeModal() {
+        ctx.modal({
+          title: 'Propose a SIEM destination',
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('Sentinel (syslog)', { attrs: 'data-sname' })) + UI.field('Kind', UI.select(['HTTPS, NDJSON batches', 'syslog over TLS (RFC 5424)'], 'syslog over TLS (RFC 5424)', 'data-skind')) + UI.field('Address', UI.input('siem-eu.northwind.example:6514', { attrs: 'data-surl' }), 'https://host/path, or host:port for syslog. Cloud metadata and unlisted internal addresses are refused.') + UI.field('Bearer token', UI.input('', { type: 'password', attrs: 'data-stoken', placeholder: 'HTTPS only; sealed, shown once' })) + UI.field('Private CA (PEM)', UI.textarea('', { attrs: 'data-sca', placeholder: 'Optional: the CA that signed the receiver\'s certificate' })) + '</div>'
+            + UI.notice('Nothing is sent until another tenant admin approves. Audited audit.siem.proposed.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Propose', { kind: 'primary', attrs: 'data-sgo' }),
+          onMount(m) { m.querySelector('[data-sgo]').addEventListener('click', () => { st.siem.unshift({ id: 's' + Date.now(), name: m.querySelector('[data-sname]').value || 'New destination', kind: /HTTPS/.test(m.querySelector('[data-skind]').value) ? 'https' : 'syslog', url: m.querySelector('[data-surl]').value, token: !!m.querySelector('[data-stoken]').value, state: 'proposed', by: 'Mara Okafor', approvedBy: null, delivered: '0', last: null, connection: 'disabled', error: null }); App.closeOverlay(); st.tab = 'exports'; ctx.rerender(); ctx.toast('Proposed. A second tenant admin can approve it now. Audited audit.siem.proposed.', 'ok'); }); }
+        });
       }
 
       // ----- inspector -----
@@ -182,11 +209,18 @@
         const blocked = !!st.exportBlocked;
         ctx.modal({
           title: 'Export CSV',
-          body: '<div class="formgrid">' + UI.field('Content', UI.select(['Audit events', 'Usage per user and model', 'Usage per tenant'], st.tab === 'usage' || st.tab === 'quotas' ? 'Usage per user and model' : 'Audit events', 'data-xcontent')) + UI.field('Scope', UI.select(['Finance Ops', 'Northwind, all workspaces', 'All tenants'], 'Finance Ops')) + UI.field('From', UI.input('2026-09-12', { type: 'date' })) + UI.field('To', UI.input('2026-09-19', { type: 'date' })) + '</div>'
+          body: '<div class="formgrid">' + UI.field('Content', UI.select(['Audit events', 'Audit events as JSONL with chain proof', 'Usage per user and model', 'Usage per tenant'], st.tab === 'usage' || st.tab === 'quotas' ? 'Usage per user and model' : 'Audit events', 'data-xcontent'), 'JSONL carries every event of the window with its hashes and a checkpoint signed at the window\'s end; it verifies offline with exprsn-ai audit:verify-export. Rows above your clearance are redacted to their hashes.') + UI.field('Scope', UI.select(['Finance Ops', 'Northwind, all workspaces', 'All tenants'], 'Finance Ops')) + UI.field('From', UI.input('2026-09-12', { type: 'date' })) + UI.field('To', UI.input('2026-09-19', { type: 'date' })) + '</div>'
             + (blocked ? UI.notice('<b>Export blocked.</b> The selection includes 212 confidential events and your auditor clearance is internal. You can export internal and below, or ask a tenant admin for a cleared export.', 'warn') : UI.notice('212 of 4,812 rows are labelled confidential. A warning is logged with the export.', 'info')),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + (blocked ? UI.btn('Export internal and below', { kind: 'primary', attrs: 'data-xfiltered' }) : UI.btn('Export', { kind: 'primary', attrs: 'data-xgo' })),
           onMount(m) {
-            const add = (filtered) => { App.closeOverlay(); st.exports.unshift({ file: 'audit-finance-ops-2026-09-19' + (filtered ? '-internal' : '') + '.csv', scope: 'Finance Ops, 12 to 19 Sep, ' + (filtered ? 'internal and below' : 'all labels'), rows: filtered ? '4,600' : '4,812', by: 'Mara Okafor', state: 'ready' }); st.tab = 'exports'; st.exportBlocked = false; ctx.rerender(); ctx.toast(filtered ? 'Filtered export ready: 4,600 rows, confidential rows omitted.' : 'Export ready: 4,812 rows. Logged to audit.', 'ok'); };
+            const add = (filtered) => {
+              const jsonl = /JSONL/.test(m.querySelector('[data-xcontent]').value);
+              App.closeOverlay();
+              if (jsonl) st.exports.unshift({ file: 'audit-finance-ops-2026-09-19.jsonl', scope: 'Audit JSONL with chain proof, 12 to 19 Sep, checkpoint signed at sequence 4,812' + (filtered ? ', 212 above internal redacted' : ''), rows: '4,812', by: 'Mara Okafor', state: 'ready' });
+              else st.exports.unshift({ file: 'audit-finance-ops-2026-09-19' + (filtered ? '-internal' : '') + '.csv', scope: 'Finance Ops, 12 to 19 Sep, ' + (filtered ? 'internal and below' : 'all labels'), rows: filtered ? '4,600' : '4,812', by: 'Mara Okafor', state: 'ready' });
+              st.tab = 'exports'; st.exportBlocked = false; ctx.rerender();
+              ctx.toast(jsonl ? 'JSONL export ready: 4,812 events, proof at sequence 4,812. Verify it offline with exprsn-ai audit:verify-export.' : filtered ? 'Filtered export ready: 4,600 rows, confidential rows omitted.' : 'Export ready: 4,812 rows. Logged to audit.', 'ok');
+            };
             const g = m.querySelector('[data-xgo]'); if (g) g.addEventListener('click', () => add(false));
             const f = m.querySelector('[data-xfiltered]'); if (f) f.addEventListener('click', () => add(true));
           }
@@ -212,6 +246,15 @@
       ctx.on('click', '[data-verify]', () => verify());
       ctx.on('click', '[data-export]', () => exportModal());
       ctx.on('click', '[data-dl]', (e, t) => ctx.toast('Downloading ' + esc(t.dataset.dl) + '. The download is logged to audit.'));
+      ctx.on('click', '[data-siempropose]', () => siemProposeModal());
+      ctx.on('click', '[data-siemapprove]', (e, t) => {
+        const d = st.siem.find((x) => x.id === t.dataset.siemapprove); if (!d) return;
+        if (d.by === 'Mara Okafor' && !st.secondAdmin) { ctx.toast('<b>Dual control.</b> You proposed this destination; another tenant admin must approve it.', 'danger', 5000); st.secondAdmin = true; return; }
+        d.state = 'active'; d.approvedBy = 'Tomasz Wieczorek'; d.connection = 'connected'; d.last = 'just now'; d.delivered = '1'; ctx.rerender(); ctx.toast('Approved by a second admin: the approval itself is the first event delivered. Audited audit.siem.approved.', 'ok');
+      });
+      ctx.on('click', '[data-siemreject]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemreject); if (d) { d.state = 'rejected'; ctx.rerender(); ctx.toast('Rejected. Audited audit.siem.rejected.'); } });
+      ctx.on('click', '[data-siemdisable]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemdisable); if (d) { d.state = 'disabled'; d.connection = 'disabled'; ctx.rerender(); ctx.toast('Disabled: nothing more is sent. Audited audit.siem.disabled.'); } });
+      ctx.on('click', '[data-siemtest]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemtest); if (!d) return; if (d.error) { ctx.toast('Test failed: ' + esc(d.error) + '. Audited audit.siem.tested.', 'danger'); } else { d.last = 'just now'; ctx.rerender(); ctx.toast('Test event delivered to ' + esc(d.name) + '. Audited audit.siem.tested.', 'ok'); } });
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('click', '[data-convo]', (e, t) => ctx.navigate('chat', { convo: t.dataset.convo }));
       ctx.on('click', '[data-editquota]', (e, t) => {

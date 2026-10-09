@@ -41,7 +41,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
-| `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `models:manage` | yes | 11 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 27 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
@@ -57,11 +57,11 @@ An admin permission is any permission outside the member baseline: a custom role
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `identity:manage` | yes | 59 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
-| `tenant:manage` | yes | 44 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
+| `tenant:manage` | yes | 51 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `platform:manage` | yes | 95 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `audit:read` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
-| `usage:read` | yes | 8 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
+| `audit:read` | yes | 18 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
+| `usage:read` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  |  | x |
 | `webhooks:manage` | yes | 11 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `prompts:manage` | yes | 4 | x | x |  |  |  |  | x |  |  |  |  |  |  |  |
 | `billing:read` | yes | 5 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -319,6 +319,11 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/models/{id}/evaluate`
 - `POST /api/admin/models/{id}/lifecycle`
 - `POST /api/admin/models/{id}/pull`
+- `GET /api/admin/inventory`
+- `GET /api/admin/inventory/register`
+- `GET /api/admin/inventory/settings`
+- `PUT /api/admin/inventory/settings`
+- `PATCH /api/admin/inventory/{kind}/{id}`
 
 ### `pools:manage`
 
@@ -702,6 +707,13 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/file-quota`
 - `PUT /api/admin/tenants/{tid}/workspaces/{wid}/quota`
 - `PUT /api/admin/tenants/{tid}/import-quota`
+- `DELETE /api/admin/analytics/prices/{id}`
+- `POST /api/admin/audit/siem`
+- `POST /api/admin/audit/siem/{id}/approve`
+- `POST /api/admin/audit/siem/{id}/disable`
+- `POST /api/admin/audit/siem/{id}/reject`
+- `POST /api/admin/audit/siem/{id}/test`
+- `PUT /api/admin/analytics/prices`
 - `GET /api/admin/cache` (or another permission)
 - `GET /api/admin/dead-letters` (or another permission)
 - `GET /api/admin/jobs` (or another permission)
@@ -849,6 +861,13 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/audit/checkpoints`
 - `POST /api/admin/audit/exports`
 - `POST /api/admin/audit/verify`
+- `GET /api/admin/audit/siem`
+- `POST /api/admin/audit/exports/jsonl`
+- `POST /api/admin/audit/siem`
+- `POST /api/admin/audit/siem/{id}/approve`
+- `POST /api/admin/audit/siem/{id}/disable`
+- `POST /api/admin/audit/siem/{id}/reject`
+- `POST /api/admin/audit/siem/{id}/test`
 - `GET /api/admin/exports` (or another permission)
 - `GET /api/admin/exports/{id}/download` (or another permission)
 
@@ -859,6 +878,12 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/admin/usage/storage`
 - `GET /api/admin/usage/summary`
 - `POST /api/admin/usage/exports`
+- `DELETE /api/admin/analytics/prices/{id}`
+- `GET /api/admin/analytics/chargeback`
+- `GET /api/admin/analytics/daily`
+- `GET /api/admin/analytics/prices`
+- `GET /api/admin/analytics/summary`
+- `PUT /api/admin/analytics/prices`
 - `GET /api/admin/exports` (or another permission)
 - `GET /api/admin/exports/{id}/download` (or another permission)
 - `GET /api/imports/quota` (or another permission)

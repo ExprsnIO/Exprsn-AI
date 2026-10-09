@@ -188,6 +188,8 @@
       // (firehose:manage), DID bindings (identity:manage) and the PDS (pds:manage)
       { id: 'atproto', label: 'AT-Protocol', icon: 'atproto', perm: ['pki:manage', 'labels:manage', 'firehose:manage', 'identity:manage', 'pds:manage'], live: true },
       { id: 'zones', label: 'Zones', icon: 'zones', perm: 'zones:manage', live: true }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit', perm: 'audit:read', live: true },
+      // 1.6.0, Sprint 38a (B-7401, B-7402): usage and cost analytics
+      { id: 'analytics', label: 'Analytics', icon: 'audit', perm: 'usage:read', live: true },
       // 1.6.0, Sprint 35c (B-4204, B-4205): Storage and Configuration, before Platform (design/platform-admin, Q13)
       { id: 'storage', label: 'Storage', icon: 'storage', perm: 'platform:manage', live: true }, { id: 'configuration', label: 'Configuration', icon: 'configuration', perm: 'platform:manage', live: true },
       // 1.6.0 (B-4203): Jobs and queues, beside Platform with the operator's screens
@@ -512,7 +514,7 @@
       const groups = [
         ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
         ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
-        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'directories', 'identity', 'zones', 'platform', 'settings', 'components']]
+        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'directories', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s && App.canOpen(id) ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
       App.modal({ cls: 'wide', title: 'Screen map', body: '<p class="fg2" style="margin:0">Every screen you can open. Screens marked as prototype data still show the design boards\' example content.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
