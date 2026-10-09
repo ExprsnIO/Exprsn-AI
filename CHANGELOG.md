@@ -211,6 +211,39 @@
   patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
   `e2e/tests/compliance.spec.ts`.
 
+
+### App packages, environments and promotion (Sprint 39b, B-8201 to B-8204)
+
+- Migration `041b_app_packages`: `app_packages`, `app_pipelines`, `app_deployments`. Settings `APPS_PACKAGE_MAX_BYTES`,
+  `APPS_DEPLOYMENT_HISTORY_DAYS`, `APPS_GIT_TIMEOUT_MS`, `APPS_GIT_ALLOW_FILE`. Job `apps.deploy`.
+- App packages (B-8201): `exprsn-app/2`, the whole of an app's design (entities with their fields, formulas and state
+  machines, forms, record and schedule triggers naming their workflows, the row and field policies, and the published
+  workflows the triggers name as signed workflow bundles), with the records when asked for, signed with the KMS key
+  over its canonical JSON, numbered per app and kept sealed. Import verifies the signature over exactly what arrived
+  before anything is read (`422 Package refused`, audited `app.import.refused`); the old bundle door takes a package
+  too. A package imports as a new app or applies to an app in place with entities, forms, triggers and policies
+  reconciled by name (an entity still holding records is kept and reported). `server/src/apps/packages.ts`.
+- Environments and promotion (B-8202): a pipeline names three apps as development, test and production and the
+  workflow whose approval step guards production. A promotion to test packages the development app now; a promotion
+  to production lands the exact package the last successful promotion to test landed (a stage cannot be skipped),
+  once a run of the approval workflow, started with the deployment as its input and caller, succeeds; a rejected,
+  failed or expired run rejects the deployment and tells the requester. `WorkflowService.start` takes a `caller`.
+  Audited `app.package.promotion.requested`, `app.package.promotion.approved`, `app.package.promotion.rejected`,
+  `app.package.promoted`. `server/src/apps/pipelines.ts`.
+- Backups, history and rollback (B-8203): every deployment first packages the target (`source: backup`); the history
+  keeps source, target, version, who, state and the report for `APPS_DEPLOYMENT_HISTORY_DAYS`; a rollback deploys the
+  backup onto the same stage as a deployment of its own, audited `app.package.rolled_back`; a failure is audited
+  `app.package.deployment.failed` and notified.
+- Git export and import (B-8204): a package pushed to a repository as one readable JSON file per object
+  (`package.json` with the signature, `app.json`, `entities/`, `forms/`, `triggers/`, `policies/`, `workflows/`,
+  `records/`) and read back from one, reassembled in signing order and verified like a pasted package; https only
+  (`file://` when `APPS_GIT_ALLOW_FILE`), a vault-held token answered to git through a credential helper. Audited
+  `app.package.pushed`.
+- Console (B-8201 to B-8204): the Apps screen's Deployments tab for designers: packages (make, download, push to git,
+  import, import from git), the pipeline's stages with promote, edit and delete, and the deployment history with
+  rollback; the page refreshes while a deployment is going. Prototype board first; `e2e/tests/apps-deployments.spec.ts`
+  with axe-core.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,

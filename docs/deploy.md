@@ -90,6 +90,9 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `VAULT_SHARE_MAX_DAYS` | `0` | 1.6.0 (B-4801): the longest a KV secret may be shared, in days (also the default expiry of a share); `0` lets shares run until revoked |
 | `DLP_MAX_TEXT_BYTES` | `1048576` | 1.6.0 (B-7601): how many characters of an answer, agent output or text upload DLP inspects; the rest keeps its label |
 | `COMPLIANCE_EXPORT_MAX_ROWS`, `COMPLIANCE_EXPORT_MAX_DAYS` | `100000`, `0` | 1.6.0 (B-7603): the most objects a compliance export writes (conversations count their messages; more fails the export) and the longest range it may cover in days (`0`: any) |
+| `APPS_PACKAGE_MAX_BYTES` | `8000000` | 1.6.0 (B-8201): the most bytes an app package may be (the design, and the records when asked for); a larger one is refused with 413 |
+| `APPS_DEPLOYMENT_HISTORY_DAYS` | `365` | 1.6.0 (B-8203): how long a pipeline's deployment history is kept |
+| `APPS_GIT_TIMEOUT_MS`, `APPS_GIT_ALLOW_FILE` | `300000`, `false` | 1.6.0 (B-8204): how long a git export or import waits for the repository, and whether `file://` repositories on this host are accepted beside `https://` (tests and air-gapped mirrors) |
 | `IDENTITY_SCIM_MAX_RESULTS`, `IDENTITY_SCIM_RATE_PER_MINUTE`, `IDENTITY_SCIM_TOKEN_MAX_DAYS` | `200`, `1200`, `365` | 1.6.0 (B-7201): SCIM 2.0 at `/scim/v2`: resources per list page, requests per minute per address, and the longest a SCIM token lives (`0`: until revoked) |
 | `SHARE_ANONYMOUS_PER_MINUTE` | `30` | Sprint 16: anonymous share links opened per client address per minute (anonymous links are off until a tenant admin allows them; set `TRUST_PROXY` correctly so the address is the client's) |
 | `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |

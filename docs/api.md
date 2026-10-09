@@ -5169,3 +5169,62 @@ counted (`omitted`); the export's label is the highest it carries. More than `CO
 | `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
 | `GET /api/compliance/exports/:id` | One export |
 | `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
+
+## Sprint 39b (1.6.0): app packages, environments, promotion, deployment history, git export (B-8201 to B-8204)
+
+Migration `041b_app_packages` (`app_packages`, `app_pipelines`, `app_deployments`). New settings: `APPS_PACKAGE_MAX_BYTES`
+(8 MB), `APPS_DEPLOYMENT_HISTORY_DAYS` (365), `APPS_GIT_TIMEOUT_MS` (5 min) and `APPS_GIT_ALLOW_FILE` (false). Job:
+`apps.deploy`. Every route below needs `apps:design`; the routes that name an app also need the app to be designable
+by the caller (its workspace, its label).
+
+### Packages (B-8201)
+
+A package (`format: exprsn-app/2`) is the whole of an app's design: `app` (name, title, description, label),
+`entities` (fields, formulas, state machines), `forms`, `triggers` (each naming its workflow by name), `policies`
+(B-81) and `workflows` (the published workflows the triggers name, each as a signed `exprsn-workflow/1` bundle), plus
+`records` when asked for (values without computed fields, label and state). It is signed with the same KMS HMAC key as
+`exprsn-app/1` bundles (`key`, `signature` over the canonical JSON of everything else) and numbered per app
+(`version`). The old `POST /api/apps/import` door takes a package as well as a bundle.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/packages` | `{packages: [{id, appId, appName, version, format, source: export \| promotion \| backup \| git \| rollback, hash, withData, size, note, createdBy, createdAt}], stage}`, newest first; `stage` is `{pipeline, name, stage}` when a pipeline names the app |
+| `POST /api/apps/:app/packages` `{withData?, note?}` | Builds, signs and stores the next version: `201` with the row and `package` (the signed document). `413` above `APPS_PACKAGE_MAX_BYTES`. Audited `app.package.created` |
+| `GET /api/apps/:app/packages/:id` | The row and the signed package, opened from its sealed copy and checked against its hash |
+| `POST /api/apps/packages/import` `{package, name?, workspaceId?}` | Verifies the signature over exactly what arrived (a package changed after signing, signed elsewhere, naming another key or unsigned is `422 Package refused`, audited `app.import.refused`), then creates the app and fills it: `201` with the app, `report` and `package`. Audited `app.imported` |
+
+The report an import or a deployment returns: `{entities: {created, updated, removed, kept}, forms: {created, updated,
+removed}, triggers: {created, removed, skipped: [{entity, workflow, reason}]}, policies: {created, removed}, workflows:
+{imported, existing, failed: [{name, reason}]}, records: {created, skipped: [{entity, reason}]}}`. Entities, forms,
+triggers and policies are reconciled by name; a workflow a trigger names is imported as a draft when none of that name
+exists in the scope (the trigger is then skipped until it is published); records go only into an entity that has none,
+with reference values re-pointed to the new ids; an entity the package no longer has is removed when empty and kept
+(and listed under `kept`) when it still holds records.
+
+### Pipelines and promotion (B-8202)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/pipelines` | `{pipelines: [{id, name, stages: {development, test, production: {id, name, title, label, workspaceId, scope}}, approvalWorkflow: {id, name} \| null, last: {test, production: deployment \| null}, activeDeployment, createdBy, createdAt, updatedAt}]}`; only pipelines whose three apps the caller can see |
+| `POST /api/apps/pipelines` `{name, development, test, production, approvalWorkflow?}` | Three different apps the caller may design (by id or name); `approvalWorkflow` is a published workflow with an approval step (`409` otherwise). `201`. Audited `app.pipeline.created` |
+| `GET /api/apps/pipelines/:id`, `PATCH` (any of the fields), `DELETE` | One pipeline; a delete takes its history and is `409` while a deployment is going. Audited `app.pipeline.updated`, `app.pipeline.deleted` |
+| `POST /api/apps/pipelines/:id/promote` `{to: test \| production, note?}` | `202` with the deployment. To test: the development app is packaged now (`source: promotion`, a new version) and deployed onto the test app by the job `apps.deploy`. To production: the exact package the last successful promotion to test landed (`409 Nothing has passed test yet` before one did; a stage cannot be skipped), after the approval workflow's run succeeds: the run starts with `{kind: app-deployment, deployment, pipeline, from, to, app, package: {id, version, hash}, note, requestedBy}` as input and the deployment as its caller (`caller_kind: app-deployment`), the deployment waits in `awaiting-approval`, and a failed, rejected, cancelled or expired run rejects it (the requester is notified). `409` while another deployment of the pipeline is going, or when no approval workflow is named. Audited `app.package.promotion.requested`, then `app.package.promotion.approved` or `app.package.promotion.rejected` |
+
+### Deployment history and rollback (B-8203)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/pipelines/:id/deployments?limit=` | `{deployments: [{id, pipelineId, kind: promotion \| rollback, from, to, packageId, version, sourceAppId, targetAppId, backupPackageId, state: awaiting-approval \| queued \| running \| succeeded \| failed \| rejected, approvalRunId, rollbackOf, report, error, createdBy, createdByName, createdAt, startedAt, finishedAt}]}`, newest first; rows older than `APPS_DEPLOYMENT_HISTORY_DAYS` are dropped on read |
+| `GET /api/apps/deployments/:id` | One deployment |
+| `POST /api/apps/deployments/:id/rollback` `{note?}` | Deploys the backup taken before a succeeded deployment onto the same stage, as a deployment of kind `rollback` (with its own backup). `202`. `409` when the deployment did not succeed, kept no backup, or another deployment is going. Audited `app.package.rollback.requested`, then `app.package.rolled_back` |
+
+Before a package is applied, the job packages the target app as it is (`source: backup`, a version of the target) and
+records it on the deployment; the deployment ends `succeeded` with its report, or `failed` with the reason (audited
+`app.package.deployment.failed`, the requester notified).
+
+### Git export and import (B-8204)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/packages/:id/git` `{url, ref?, path, message?, credential?, username?}` | Clones the repository (https; `file://` only with `APPS_GIT_ALLOW_FILE`; never a URL with credentials or a host at a link-local address), writes the package under `path` as one file per object (`package.json` with the format, version, key, signature and hash; `app.json`; `entities/<name>.json`; `forms/<name>.json`; `triggers/<n>-<entity>-<kind>.json`; `policies/<n>-<name>.json`; `workflows/<name>.json`; `records/<entity>.json` when the package carries data), pretty-printed with sorted keys, commits as Exprsn-AI and pushes to `ref` (started from the default branch when it does not exist yet): `{commit, files, path}`; no commit when nothing changed. `credential` is a `vault:path#key` reference resolved as the caller and handed to git through a credential helper, with `username` (default `x-access-token`). Audited `app.package.pushed` |
+| `POST /api/apps/packages/git-import` `{url, ref?, path, credential?, username?, name?, workspaceId?}` | Reads the files under `path`, reassembles the package in the order it was signed in, verifies it like a pasted package (`422 Package refused` for a changed file) and creates the app: `201` with the app, `report`, `package` (`source: git`) and `commit` |
