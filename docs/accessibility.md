@@ -191,6 +191,28 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   labelled forms (detectors and scopes as labelled checkboxes, the approver a labelled select of named people); every
   refusal (a pattern in use, dual control, an export above one's clearance) is a problem block with its trace id.
   `e2e/tests/compliance.spec.ts` runs axe-core on the tab.
+- **Apps: API tab** (B-8601 to B-8603, Sprint 39d): a tab for designers with three panels. The entity API is a table
+  (method as a pill with its word, path, the permission, what it does) and a `pre` with a curl to try; the OpenAPI
+  document and the client are links with `download` and buttons that say which file they fetch, with the schema
+  version and hash in a key-value list; the schema versions are a table whose change and source are pills with their
+  words. `e2e/tests/apps-api.spec.ts` runs axe-core on the tab.
+- **Apps: Embed tab** (B-8701, B-8702, Sprint 39d): a labelled form (the host sites as a labelled textarea, Public
+  pages, Signed embeds and Writes as switches with `role="switch"` and `aria-checked`, the claim as a labelled input
+  and select, the longest session as a labelled select, the entities as a labelled input) with a sentence of hint
+  each; the audience, page address and `frame-ancestors` in a key-value list. Keys, pages and sessions are tables whose
+  state is a pill with its word, with text buttons (Revoke, Snippet, Remove) labelled by the key or form. The key
+  dialog is a labelled form; an HS256 secret is a warning notice shown once with a Copy button. The snippet dialog is
+  a `pre`. Refusals are problem blocks with the trace id. axe-core runs on the tab in `apps-api.spec.ts`.
+- **The embed pages** (B-8701, B-8702, Sprint 39d): `/embed/<id>` and `/embed/app/<tenant>/<app>` reuse the console
+  stylesheet (its colours, focus outlines and dark theme) with `lang`, a viewport, one `h1` (the form or app title) and
+  a `main` with `aria-live="polite"` for loading and refusals. A public form is a labelled form (each field a `label`
+  bound to its control, hints as text, required fields marked for the browser, fields hidden by a visibility rule
+  with `hidden`), a status line read by assistive technology, and the thank-you as a notice. A signed embed shows the
+  entities as a tablist, a labelled search, a records table with headers, Next page and First page buttons, and a
+  labelled New record form when writes are allowed. axe-core runs on a submitted embed page in `apps-api.spec.ts`.
+- **Settings: a key limited to an app** (B-8601, Sprint 39d): the Create API key dialog gains a labelled select (Limit
+  to an app) and a labelled input (Entity) with a sentence of hint each; a key so limited is marked in the list with a
+  pill saying so. A scope the limit refuses is a toast naming the scopes allowed.
 - **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
   Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
   unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not

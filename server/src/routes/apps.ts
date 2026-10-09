@@ -12,6 +12,7 @@ import { formDefinitionSchema, formView } from '../apps/forms.js';
 import { aggregateSchema, filterSchema, sortSchema, type Filter, type Sort } from '../apps/query.js';
 import { entityDefinitionSchema, nameSchema } from '../apps/schema.js';
 import { PACKAGE_FORMAT, packageView } from '../apps/packages.js';
+import { appScopeGuard } from '../apps/key-scope.js';
 import { AppPolicies, policyInputSchema, policyView } from '../apps/policies.js';
 import { appView, entityView, type Actor } from '../apps/service.js';
 import type { Services } from '../services.js';
@@ -64,7 +65,8 @@ function filterParam(raw: unknown): Filter | undefined {
  */
 export function appRoutes(s: Services): Router {
   const r = Router();
-  r.use('/apps', noStore, requireAuth());
+  // 1.6.0 (B-8601, B-8702): a credential limited to one app or entity is refused beyond it, here as on the entity API.
+  r.use('/apps', noStore, requireAuth(), appScopeGuard(s));
   const read = requirePermission(s, 'records:read');
   const write = requirePermission(s, 'records:write');
   const design = requirePermission(s, 'apps:design');

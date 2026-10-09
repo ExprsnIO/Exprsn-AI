@@ -25823,6 +25823,236 @@
         }
       }
     },
+    "/api/apps/{app}/client.js": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/client.ts": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. A client generated from the same design: createClient({baseUrl, token, workspace?, fetch?}) with <entity>.list(q) / get(id, include) / create(values, label) / update(id, values, version) / delete(id) / transition(id, to, versi",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "The settings {publicEnabled, allowedHosts, signedEnabled, claimName, claimMatch (username \\| email \\| id), maxTtlSeconds, write, entities (null: every entity), audience, signedUrl, frameAncestors} with keys: [{id, kid, alg, publicKey, state",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Changes the settings. allowedHosts are origins (https://host[:port], at most 50); entities names entities of the app (400 otherwise). Audited app.embed.updated",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/keys": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "RS256 \\| EdDSA \\| HS256 \\| x5c, publicKey?, secret?} | 201 the key. ES256 (P-256), RS256 (2048 bits or more) and EdDSA take the public key (PEM, SPKI); HS256 takes a base64url secret of at least 32 bytes or generates one, answered once as s",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/keys/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Revokes the key and every session it opened. Audited app.embed.key.revoked",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/pages": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "201 {id, url, …}: the public form published as an embed page under a random id (the same page when one exists); 409 when the form has no public link. Audited app.embed.page.created",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/pages/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204. Audited app.embed.page.removed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/sessions/revoke": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Ends one or every embedded session of the app: {revoked}. Audited app.embed.sessions.revoked",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/entities": {
       "post": {
         "x-exprsn-since": "1.4.0",
@@ -27337,6 +27567,30 @@
         "x-exprsn-since": "1.6.0"
       }
     },
+    "/api/apps/{app}/openapi.json": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. An OpenAPI 3.1 document of the app's entity API, typed from the entity definitions (<Entity>Values, <Entity>Input, <Entity>, <Entity>Page, the transition states as an enum), info.version the schema version and x-exprsn-schema-",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/packages": {
       "get": {
         "tags": [
@@ -27555,6 +27809,352 @@
         "x-exprsn-since": "1.6.0"
       }
     },
+    "/api/apps/{app}/schema": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "{app, version, hash, changedAt, entities: [Entity], forms: [Form]}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204; 409 while another entity refers to it",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Creates the entity (201) or replaces its definition (200); the answer carries schema: {version, hash}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Adds a field (201); 409 when the name is taken or rev is behind; 400 for a reserved name or an invalid field",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields/{field}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Removes the field (records keep their stored values; the index drops it on reindex)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Changes a field's settings (the name and type stay); the whole field is checked again",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/states": {
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "null, rev?} | Sets or removes the state machine",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/forms/{form}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Creates (201) or replaces (200) a form",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/versions": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "{versions: [{version, kind, target, summary, change, hash, source, createdBy, createdAt}]}, newest first (100)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/versions/{version}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "One version",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/triggers": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -27724,6 +28324,224 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/apps/{app}/{entity}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. A page: {total, limit, offset, nextCursor, records}. filter is a record filter as JSON; where (repeatable) is field:op:value with the ops eq, ne, gt, gte, lt, lte, in, contains, startsWith, exists (in takes a comma-separated l",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. 201 the record. 400 on a value that fails its field, 403 step: policy outside the reader's policies",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. 204",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. The record (404 outside the reader's reach)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. The record; 409 when version is behind",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}/transition": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. The record in its new state; 409 on an illegal transition",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/atproto": {
@@ -49752,6 +50570,48 @@
         }
       }
     },
+    "/api/public/embeds/open": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public, rate-limited per address. The form's fields as /api/public/forms/open gives them, plus form",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/public/embeds/session": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public, APP_EMBED_SESSION_PER_MINUTE per address. Verifies the host token and opens an embedded session: {token (exe_…), expiresAt, app, user, write, entities: [{name, title, fields, states}]}. The token's kid names a key of the app and alg",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/public/embeds/submit": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public. The same path as a public link submission (per-address and per-form limits, the user-input checkpoint, 202 when held); the form's link token is never on the page",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/public/file-links/download": {
       "post": {
         "tags": [
@@ -55446,6 +56306,62 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/embed/app/{tenant}/{app}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "Public. The signed-embed page of an app (HTML, the same headers), 404 while signed embeds are off. The host site opens it with its token in the fragment (#token=<jwt>), never a query string",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/embed/{id}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "Public. The embed page of a public form (HTML), served with Content-Security-Policy: … frame-ancestors 'self' <allowed hosts>, no X-Frame-Options, X-Robots-Tag: noindex, nofollow; 404 when public pages are off, the form is no longer public,",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/federation/atproto/callback": {

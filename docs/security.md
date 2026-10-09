@@ -381,6 +381,39 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   refused write leaves the app as it was. The connection's own account decides what the writes may do; a read-only
   account makes writes fail with `502` and the app untouched.
 
+## Entity APIs and app embedding (1.6.0, Sprint 39d)
+
+- **The entity API is the records API with another shape (B-8601).** `/api/apps/:app/:entity` calls the same service
+  as the records routes: the reader's policies narrow the rows and mask the fields, labels and workspaces apply, every
+  write is audited as before, and `include=related` fetches each related record through the same read path, so a
+  record the reader may not read comes back as null. A key limited to one app or one entity (`api_keys.app_scope`)
+  holds at most `records:read` and `records:write`, is accepted under `/api/apps` alone (never `/v1`, the MCP server or
+  the rest of the API), and is refused by every apps router on another app or entity before any handler runs; the
+  owner's own app-limited key leaves `apps:design` out, so it reads masked like a member. The scope is checked on
+  ids, whatever the path names.
+- **Every design change leaves a version (B-8602).** The Apps screen, the schema API and a package import all end in
+  `AppService.createEntity`, `updateEntity`, `removeEntity` or the forms service, which record a row of
+  `app_schema_versions` with the SHA-256 of the whole design afterwards, under the audit event `app.schema.versioned`;
+  the version numbers are unique per app on the database. The OpenAPI document and the client are computed from the
+  design on each read and carry that version and hash (the `ETag`), so a stale document cannot be served and a client
+  knows the design it was built on.
+- **Embed pages are framed only where the designers said (B-8701).** A public form becomes an embed page under a
+  random 26-character id; the page is served with `frame-ancestors 'self' <allowed hosts>` and no `X-Frame-Options`,
+  so a browser frames it on those origins and refuses it elsewhere, and `noindex`. The page opens and submits the form
+  by the embed id through `/api/public/embeds`, on the public submission path (per-address and per-form limits, the
+  `user-input` checkpoint, held values queued), so the form's link token never reaches a host site; turning public
+  pages off, unpublishing the form or removing the page gives `404` at once.
+- **A signed embed is a credential the host site vouches for (B-8702).** The host signs a short JWT with a key the
+  app's designers registered: a public key (ES256, RS256, EdDSA), a shared secret (HS256, sealed with the tenant key,
+  shown once), or a certificate the tenant CA issued, carried as `x5c` and verified against the tenant's active
+  intermediate and its revocations. The `kid` picks the key and the `alg` must match it (no algorithm confusion); the
+  audience must be the app; `exp` is required and capped by the app's and the server's limit; `jti` is required and
+  accepted once per key, so a token cannot be replayed; the person is an active user named by a claim the designers
+  chose. The exchange is rate-limited per address and audited either way with the kid and the reason, never the token.
+  The embedded session is a bearer of its own, apart from console sessions: no cookie, so nothing cross-site and no
+  CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
+  it ends with its key, with the app's settings turned off, or when the designers end it.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1522,3 +1555,19 @@ filter, private `/tmp`, only the state directory writable.
   table that succeeds but whose local write then fails leaves the row outside ahead of the app until the next pull;
   CSV imports into a sourced entity write through row by row (slow, and partial on a refusal); records above the
   connection's label that the designer created locally are pushed to a table that carries no labels.
+
+- Entity APIs and app embedding (1.6.0, Sprint 39d). An entity named like one of the app's own route segments
+  (`entities`, `forms`, `policies`, `triggers`, `export`, `schema`, `embed`, `transfers`, `drafts`, `import`, `held`)
+  is reached only through `/entities/:entity/records`, not the entity API; `where` conditions are typed by their
+  text (a string that looks like a number is a number); `include=related` fetches each related record separately
+  (at most one call per distinct reference). A schema version holds the whole definition of a changed entity, not a
+  diff, and nothing restores an earlier version. The generated TypeScript client types values loosely (`json` as
+  `unknown`, formulas as `string | number | boolean`). An app-limited key is refused on `/v1` and the MCP server
+  outright rather than narrowed to its app's tools. The embed page's `frame-ancestors` names whole origins, not
+  paths; a public embed page is reachable by anyone who learns its random id (as a public form link is), and a
+  submission is `source: form`, by no one. A signed embed names the person by a claim the host asserts: the host site
+  is trusted for who is behind the browser, within what that person may do; the `host` recorded on a session is the
+  token's `iss`, not the framing page; HS256 secrets are shared with the host site; the tenant CA path checks the
+  leaf against the active intermediate only (no chain of several intermediates, no OCSP); ended sessions are purged
+  by the next exchange's bookkeeping, not a schedule; the embed page lists at most six fields per record and keeps the
+  session token in memory, so a reload needs a new host token.

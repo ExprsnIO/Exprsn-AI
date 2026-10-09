@@ -19,6 +19,8 @@ import { ModelDrafts } from './model-drafts.js';
 import { AppForms } from './forms.js';
 import { AppPackages, type GitOptions } from './packages.js';
 import { AppPipelines } from './pipelines.js';
+import { AppEmbeds } from './embeds.js';
+import { AppSchema, describeEntityChange } from './schema-api.js';
 import { AppPolicies, type Grant, type Mask } from './policies.js';
 import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, countRecords, pageRecords, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
 import {
@@ -116,6 +118,8 @@ export type RecordSource = 'api' | 'form' | 'import' | 'workflow' | 'plugin';
 export interface Actor {
   principal: Principal | null;
   source: RecordSource;
+  /** 1.6.0 (B-8602): the route that made a design change (`schema-api`, `package`), for the schema version's source. */
+  via?: string;
   ip?: string | null;
   traceId?: string;
   /** The service writing without a person (`apps.forms`). */
@@ -203,6 +207,10 @@ export class AppService {
   readonly sources: AppSources;
   /** 1.6.0 (B-8301): a whole data model drafted from a description, as a diff to accept. */
   readonly modelDrafts: ModelDrafts;
+  /** 1.6.0 (B-8602, B-8603): schema versions, the schema API's changes, the per-app OpenAPI document and client. */
+  readonly schema: AppSchema;
+  /** 1.6.0 (B-8701, B-8702): public embed pages and signed embeds of an app. */
+  readonly embeds: AppEmbeds;
 
   constructor(
     private readonly s: () => Services,
@@ -217,6 +225,8 @@ export class AppService {
     this.aiFills = new AppAiFills(s, this);
     this.sources = new AppSources(s, this);
     this.modelDrafts = new ModelDrafts(s, this);
+    this.schema = new AppSchema(s, this);
+    this.embeds = new AppEmbeds(s, this);
   }
 
   private get db() {
@@ -384,6 +394,7 @@ export class AppService {
       throw err;
     }
     await this.audit(actor, p.tenantId, 'app.entity.created', { app: app.id, entity: row.id, name: row.name }, label, { fields: input.definition.fields.length, states: input.definition.states?.states.length ?? 0 });
+    await this.schema.record(actor, app, 'entity.created', row.name, `Entity ${row.name} created with ${input.definition.fields.length} field${input.definition.fields.length === 1 ? '' : 's'}${input.definition.states ? ' and a state machine' : ''}`, { definition: input.definition });
     return { app, entity: row };
   }
 
@@ -426,6 +437,8 @@ export class AppService {
       reindex = job.id;
     }
     await this.audit(actor, p.tenantId, 'app.entity.updated', { app: app.id, entity: entity.id, name: entity.name }, label, { rev: after.rev, fields: def.fields.length, reindex });
+    const change = describeEntityChange(entity, after);
+    await this.schema.record(actor, app, change.kind, change.target, change.summary, change.change);
     return { app, entity: after, reindex };
   }
 
@@ -439,6 +452,7 @@ export class AppService {
       await trx('app_entities').where({ id: entity.id }).delete();
     });
     await this.audit(actor, app.tenant_id, 'app.entity.deleted', { app: app.id, entity: entity.id, name: entity.name }, entity.label, { records });
+    await this.schema.record(actor, app, 'entity.deleted', entity.name, `Entity ${entity.name} deleted (${records} record${records === 1 ? '' : 's'})`, null);
     return { app, entity, records };
   }
 

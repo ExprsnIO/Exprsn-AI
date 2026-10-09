@@ -543,6 +543,12 @@ const base = z.object({
     COMPLIANCE_EXPORT_MAX_ROWS: z.coerce.number().int().min(100).max(10_000_000).default(100_000),
     COMPLIANCE_EXPORT_MAX_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
     /**
+     * 1.6.0, Sprint 39d (B-8702): an embedded session lives at most APP_EMBED_MAX_TTL_SECONDS, whatever an app's own
+     * setting says; each address may exchange at most APP_EMBED_SESSION_PER_MINUTE host tokens for sessions a minute.
+     */
+    APP_EMBED_MAX_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+    APP_EMBED_SESSION_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
+    /**
      * 1.6.0, Sprint 37c (B-7201): SCIM 2.0 provisioning at /scim/v2. A list answers at most IDENTITY_SCIM_MAX_RESULTS
      * resources a page (ServiceProviderConfig `filter.maxResults`); each address is limited to
      * IDENTITY_SCIM_RATE_PER_MINUTE requests; new SCIM tokens expire after IDENTITY_SCIM_TOKEN_MAX_DAYS at most (0: a
