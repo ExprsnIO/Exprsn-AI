@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 (in progress)
+## 1.6.0
 
 ### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
 

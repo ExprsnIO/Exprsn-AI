@@ -42,8 +42,12 @@ server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1
 custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
 connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
 context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
-33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 38 are done and Sprint 39 is
-next in `Backlog-1.6.0.md` (B-5001, capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 39 (`Backlog-1.6.0.md`: model
+servers beyond Ollama, platform administration screens, groups depth, blob deduplication, image classification, the HTTP
+tool kind, prompt-injection defence, SCIM, the MCP server, the AI inventory, analytics, audit export, red-team suites,
+agent identities, handoffs, policies, DLP, legal hold, content credentials, chat artifacts, app packages and promotion,
+data model drafts, AI field fills, outside tables, entity APIs and app embedding) made version `1.6.0` (B-5001,
+capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
 `Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 44 to 50 in `Backlog-2.0.0.md`.
 Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
 `design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
