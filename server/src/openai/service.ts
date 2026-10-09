@@ -387,6 +387,7 @@ export class OpenAiService {
     let gpuMs = 0;
     let firstTokenMs: number | null = null;
     let thinkingDropped = false; // 1.7.0 (B-11702)
+    let thinkingChars = 0;
     let doneReason: string | undefined;
     let counted = false;
     let failed: Error | null = null;
@@ -428,7 +429,12 @@ export class OpenAiService {
         const splitter = thinkingMode(r.model) === 'template' ? new ThinkSplitter() : null;
         for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...thinkReq, ...(tools ? { tools } : {}), options }, signal)) {
           const msg = chunk.message;
-          if (msg?.content && splitter) msg.content = splitter.feed(msg.content).content; // a template model's <think> draft is not part of the answer
+          if (msg?.content && splitter) {
+            const sp = splitter.feed(msg.content); // a template model's <think> draft is not part of the answer
+            msg.content = sp.content;
+            thinkingChars += sp.thinking.length;
+          }
+          if (msg?.thinking) thinkingChars += msg.thinking.length; // 1.7.0 (B-11702): metered so the budgets count /v1
           if (msg && (msg.content || msg.thinking) && firstTokenMs == null) {
             firstTokenMs = Date.now() - started;
             if (lease.cold) s.gateway.noteResident(lease.instance.id, r.model.name);
@@ -448,7 +454,9 @@ export class OpenAiService {
           }
         }
         if (splitter) {
-          const rest = splitter.flush().content;
+          const flushed = splitter.flush();
+          thinkingChars += flushed.thinking.length;
+          const rest = flushed.content;
           if (rest) {
             content += rest;
             roundContent += rest;
@@ -500,7 +508,7 @@ export class OpenAiService {
       outputTokens = Math.ceil(content.length / 4);
     }
     if (promptTokens + outputTokens > 0) {
-      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs, thinkingDropped, ...(calcCalls ? { calcCalls } : {}) });
+      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs, thinkingDropped, thinkingTokens: thinkingChars ? Math.round((outputTokens * thinkingChars) / (thinkingChars + content.length || 1)) : 0, ...(calcCalls ? { calcCalls } : {}) });
     }
     if (failed) {
       if (signal.aborted) throw failed;

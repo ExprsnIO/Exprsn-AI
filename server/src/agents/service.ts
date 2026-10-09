@@ -273,6 +273,10 @@ export class AgentService {
     // 1.7.0 (B-4004): a run started from a conversation names it, so the Runs screen links back.
     const chatTurn = r.caller_kind === 'chat-turn' && r.caller_id ? ((await this.db('messages').where({ id: r.caller_id }).first('conversation_id')) as { conversation_id: string } | undefined) : undefined;
     const steps = await Promise.all(((await this.db('agent_steps').where({ run_id: r.id }).orderBy('n')) as StepRow[]).map((s) => this.stepView(r.tenant_id, s)));
+    // 1.7.0 (B-11701): the thinking policy decides whether this reader sees a step's thinking; its token count stays.
+    if (this.thinking && !this.thinking.visibleTo(await this.thinking.policyFor(r.tenant_id, r.workspace_id ?? null), p, r.user_id)) {
+      for (const s of steps) if (s.detail && typeof s.detail === 'object' && 'thinking' in s.detail) (s.detail as Record<string, unknown>).thinking = null;
+    }
     const lanes = { think: { steps: 0, tokens: 0 }, do: { calls: 0, ms: 0, waiting: 0, denied: 0 }, calc: { results: 0, ms: 0 } };
     for (const s of steps) {
       if (s.lane === 'think') {
@@ -793,7 +797,10 @@ export class AgentService {
       const { messages } = cp.state;
       let pending = cp.state.pending;
       // 1.7.0 (B-11705): the run's thinking level, within the profile's ceiling, noted on its chain node.
-      const level = capLevel(def.think ?? resolved.profile.think_default, resolved.profile.think_ceiling);
+      // 1.7.0 (B-11702): a spent profile or workspace thinking budget drops the level to low, as in chat.
+      const asked = capLevel(def.think ?? resolved.profile.think_default, resolved.profile.think_ceiling);
+      const budget = this.thinking ? await this.thinking.budget(run.tenant_id, run.workspace_id ?? null, resolved.profile, asked).catch(() => null) : null;
+      const level = budget?.level ?? asked;
       if (chain && this.chains) await this.chains.note(chain, { think: level }).catch(() => undefined);
       // 1.7.0 (B-11703): a plan-first run drafts its plan before anything runs and waits for the person's decision;
       // an approved plan bounds the tools the run may call without a new approval.
@@ -1029,7 +1036,7 @@ export class AgentService {
         usage.steps++;
         usage.tokens += tokens;
         usage.gpuMs += gpuNs / 1e6;
-        await this.quotas.record({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, kind: 'agent', profileId: resolved.profile.id, model: resolved.model.name, poolId: lease.pool.id, promptTokens: tokens, outputTokens: 0, gpuMs: gpuNs / 1e6 });
+        await this.quotas.record({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, kind: 'agent', profileId: resolved.profile.id, model: resolved.model.name, poolId: lease.pool.id, promptTokens: tokens, outputTokens: 0, gpuMs: gpuNs / 1e6, thinkingTokens, thinkingDropped: !!budget?.dropped });
         const toolCalls = calls.filter((c) => toolsOn && c?.function?.name);
         await this.addStep(run, n, {
           lane: 'think',

@@ -207,16 +207,21 @@ describe('Sprint 41c: thinking policy, budgets, plans and reflection', () => {
     await put(c.a, '/api/admin/thinking/policy', { workspace: ws, budgetTokensPerDay: 1000 }).expect(200);
     const b2 = await h.s.thinking.budget(h.tenantId, ws, { id: 'other', thinking_budget: null }, 'high');
     expect(b2).toMatchObject({ dropped: false, limit: null, workspace: { limit: 1000 } });
+    // A workspace at its budget: a profile with no budget of its own thinks at low there, and the drop names the workspace.
+    await h.s.quotas.record({ tenantId: h.tenantId, workspaceId: ws, userId: null, kind: 'chat', profileId: null, model: 'llama3.1:8b', thinkingTokens: 1000 });
+    const b3 = await h.s.thinking.budget(h.tenantId, ws, { id: 'other', thinking_budget: null }, 'high');
+    expect(b3).toMatchObject({ level: 'low', dropped: true, limit: 'workspace', workspace: { used: 1000, limit: 1000 } });
     // /v1: reasoning.effort high on the spent profile runs at low and is metered as dropped.
-    const keyRes = await post(c.m, '/api/me/api-keys', { name: 'k', scopes: ['inference:invoke', 'chat:write'] });
-    const key = keyRes.body as { secret?: string; key?: string; token?: string };
-    const res = keyRes.status === 201 ? await c.m.agent.post('/v1/chat/completions').set('authorization', `Bearer ${key.secret ?? key.key ?? key.token}`).send({ model: 'general', messages: [{ role: 'user', content: 'Hi' }], reasoning_effort: 'high' }) : { status: 0 };
-    if (res.status === 200) {
-      const last = ollama.requests.filter((x) => x.path === '/api/chat').at(-1)!.body as { think?: unknown };
-      expect(last.think).toBe(true);
-      const recs = await h.s.db('usage_records').where({ kind: 'api' }).orderBy('ts', 'desc').first();
-      expect(recs.thinking_dropped === true || recs.thinking_dropped === 1).toBe(true);
-    }
+    const mem = (await h.s.db('users').where({ tenant_id: h.tenantId, username: 'mem' }).first('id')) as { id: string };
+    const key = (await h.s.apiKeys.create({ tenantId: h.tenantId, userId: mem.id, name: 'k-thinking', scopes: ['inference:invoke', 'models:read', 'chat:read'] as never[], ttlDays: 30 })).key;
+    const res = await c.m.agent.post('/v1/chat/completions').set('authorization', `Bearer ${key}`).send({ model: 'general', messages: [{ role: 'user', content: 'Hi' }], reasoning_effort: 'high' });
+    expect(res.status).toBe(200);
+    const last = ollama.requests.filter((x) => x.path === '/api/chat').at(-1)!.body as { think?: unknown };
+    expect(last.think).toBe(true);
+    const recs = await h.s.db('usage_records').where({ kind: 'api' }).orderBy('ts', 'desc').first();
+    expect(recs.thinking_dropped === true || recs.thinking_dropped === 1).toBe(true);
+    // /v1's thinking is metered with the rest, so it counts against the budgets too.
+    expect(Number(recs.thinking_tokens)).toBeGreaterThan(0);
   });
 
   it('B-11703: a plan-first profile drafts a plan the person decides on; declined runs nothing; approved (edited) bounds the tools', async () => {
@@ -313,6 +318,16 @@ describe('Sprint 41c: thinking policy, budgets, plans and reflection', () => {
     expect(mcp.calls.map((x) => x.name)).toEqual(['lookup_invoice', 'create_issue']);
     const actions = (await h.s.db('audit_events').whereIn('action', ['agent.plan.drafted', 'agent.plan.declined', 'agent.plan.approved']).orderBy('seq')).map((x: { action: string }) => x.action);
     expect(actions).toEqual(['agent.plan.drafted', 'agent.plan.declined', 'agent.plan.drafted', 'agent.plan.approved']);
+    // B-11701 applies to runs: the steps carry their thinking for the author; with "nobody" only the token count stays.
+    const traced = (s: { lane: string; detail?: { thinking?: string | null } }) => s.lane === 'think' && s.detail?.thinking;
+    expect(v.steps.some(traced)).toBe(true);
+    await put(c.a, '/api/admin/thinking/policy', { visibility: 'nobody' }).expect(200);
+    v = (await c.m.agent.get(`/api/runs/${r2.id}`).expect(200)).body;
+    expect(v.steps.some(traced)).toBe(false);
+    expect(Number(v.steps.find((s: { lane: string; meta: { thinkingTokens?: number } }) => s.lane === 'think' && s.meta.thinkingTokens)!.meta.thinkingTokens)).toBeGreaterThan(0);
+    // Agent steps meter their thinking tokens with the rest, so the budgets count them.
+    expect(Number(((await h.s.db('usage_records').where({ kind: 'agent' }).sum({ t: 'thinking_tokens' })) as Record<string, unknown>[])[0]!.t)).toBeGreaterThan(0);
+    await put(c.a, '/api/admin/thinking/policy', { visibility: 'author' }).expect(200);
   });
 
   it('B-11704: the reflection pass gives a finding the badge names, or a revised answer that is screened', async () => {

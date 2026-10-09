@@ -18,7 +18,9 @@
     fbProfile: p.fallback ? p.fallback.profileId : '', fbWait: p.fallback ? String(p.fallback.afterQueueWaitMs / 1000) : '8',
     calculate: (p.tools || []).indexOf('calculate') >= 0,
     others: (p.tools || []).filter((t) => t !== 'calculate'),
-    trustMarking: p.trustMarking !== false
+    trustMarking: p.trustMarking !== false,
+    // 1.7.0 (B-11702 to B-11704): the daily thinking budget, plan first and reflection.
+    thinkingBudget: p.thinkingBudget == null ? '' : String(p.thinkingBudget), planFirst: !!p.planFirst, reflect: !!p.reflect, reflectProfile: p.reflectProfile || ''
   });
   const num = (v, what, int) => {
     if (String(v).trim() === '') return null;
@@ -33,7 +35,8 @@
     thinkDefault: f.thinkDefault, thinkCeiling: f.thinkCeiling, systemPrompt: f.systemPrompt.trim() ? f.systemPrompt : null,
     fallback: f.fbProfile ? { profileId: f.fbProfile, afterQueueWaitMs: Math.round((num(f.fbWait, 'Queue wait') || 0) * 1000) } : null,
     tools: (f.calculate ? ['calculate'] : []).concat(f.others || []),
-    trustMarking: !!f.trustMarking
+    trustMarking: !!f.trustMarking,
+    thinkingBudget: num(f.thinkingBudget, 'Thinking budget', true), planFirst: !!f.planFirst, reflect: !!f.reflect, reflectProfile: f.reflect && f.reflectProfile ? f.reflectProfile : null
   });
 
   function cur(st) { return (st.profiles || []).find((x) => x.id === st.sel) || null; }
@@ -287,6 +290,7 @@
           + '\ncanary: ' + (p.canary ? '{ model: ' + (p.canaryModel || '?') + ', percent: ' + p.canary.percent + ' }' : 'none')
           + '\ntools: [' + p.tools.join(', ') + ']'
           + '\ntrustMarking: ' + (p.trustMarking !== false ? 'on' : 'off')
+          + '\nthinking: { budget: ' + (p.thinkingBudget == null ? 'none' : p.thinkingBudget) + ', planFirst: ' + (p.planFirst ? 'on' : 'off') + ', reflect: ' + (p.reflect ? (p.reflectProfile || 'this profile') : 'off') + ' }'
           + '\nsystemPrompt: ' + (p.systemPrompt ? '|\n  ' + p.systemPrompt.split('\n').join('\n  ') : 'none');
 
         const statusBtns = (p.status !== 'published' ? UI.btn('Publish', { attrs: 'data-status="published"', disabled: dirty, title: dirty ? 'Save or reset your changes first' : '' }) : '')
@@ -311,6 +315,10 @@
           + UI.field('Max label', UI.select(labelOpts, f.label, 'data-f="label" data-key="label"'), 'Up to your clearance')
           + UI.field('Thinking default', UI.select(THINK, f.thinkDefault, 'data-f="thinkDefault" data-key="thinkDefault"'))
           + UI.field('Thinking ceiling', UI.select(THINK, f.thinkCeiling, 'data-f="thinkCeiling" data-key="thinkCeiling"'), 'Users may choose up to this level')
+          + UI.field('Thinking budget per day', UI.input(f.thinkingBudget, { placeholder: 'none', attrs: 'data-f="thinkingBudget" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Thinking tokens per UTC day; at the limit turns think at low rather than being refused')
+          + UI.field('Plan first', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Draft a plan before any tool runs', f.planFirst, 'data-f="planFirst" data-key="planFirst"') + '</div>', 'The plan is a card the person approves, edits or declines; agent runs wait on it as their first step')
+          + UI.field('Reflection', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Check every answer in a second pass', f.reflect, 'data-f="reflect" data-key="reflect"') + '</div>', 'Against the question, its citations and tool results; findings or a revised answer become the checked badge')
+          + UI.field('Reflection by', UI.select([{ value: '', label: 'this profile' }].concat((st.profiles || []).filter((x) => x.id !== p.id && !x.aliasOf).map((x) => ({ value: x.name, label: x.name }))), f.reflectProfile, 'data-f="reflectProfile" data-key="reflectProfile"' + (f.reflect ? '' : ' disabled')), 'Another profile may do the second pass; it is metered to the conversation')
           + UI.field('Fallback after queue wait', '<div class="hstack gap6">' + UI.select(fbOpts, f.fbProfile, 'data-f="fbProfile" data-key="fbProfile" style="flex:1;min-width:0"') + UI.input(f.fbWait, { attrs: 'data-f="fbWait" class="input mono" style="width:64px" inputmode="decimal" aria-label="Seconds of queue wait"' + (f.fbProfile ? '' : ' disabled') }).replace('class="input" ', '') + '<span class="muted">s</span></div>')
           + '</div>'
           + UI.field('System prompt', UI.textarea(f.systemPrompt, { placeholder: 'None: the model\'s own template applies', attrs: 'data-f="systemPrompt" maxlength="20000" spellcheck="false"', rows: 4 }))
@@ -326,7 +334,34 @@
             + '<div class="hstack wrap gap6">' + UI.btn(p.canary ? 'Change canary' : 'Start canary', { size: 'sm', icon: 'branch', attrs: 'data-canary', disabled: !p.model || dirty, title: dirty ? 'Save or reset your changes first' : '' }) + UI.btn('Promote', { size: 'sm', attrs: 'data-promote', disabled: !p.canary || dirty }) + UI.btn('Stop canary', { size: 'sm', kind: 'ghost', attrs: 'data-stopcanary', disabled: !p.canary || dirty }) + '</div>')
           + wsPanel(p, 'Your workspaces and this profile')
           + versionsPanel(p)
+          + thinkingPolicyPanel()
           + '</div><div class="pf-side">' + UI.panel('Saved version', '<pre class="pf-yaml" tabindex="0" aria-label="Saved version as YAML">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy' }) }) + '</div></div></div>');
+      }
+
+      /** 1.7.0 (B-11701, B-11702): the thinking policy per tenant and per workspace: who sees thinking, retention, exports, the workspace budget. */
+      function thinkingPolicyPanel() {
+        const me = App.me || {}; const wss = me.workspaces || [];
+        st.tpScope = st.tpScope || 'tenant'; st.tpForm = st.tpForm || {};
+        const wsId = st.tpScope === 'tenant' ? null : st.tpScope;
+        const key = wsId || 'tenant';
+        if (!st.tpLoaded || st.tpLoaded.key !== key) {
+          if (!st.tpLoading || st.tpLoading !== key) { st.tpLoading = key; App.get('/api/admin/thinking/policy' + (wsId ? '?workspace=' + enc(wsId) : '')).then((r) => { st.tpLoaded = { key, data: r }; }).catch((err) => { st.tpLoaded = { key, error: err }; }).finally(() => { st.tpLoading = null; later(); }); }
+          return UI.panel('Thinking policy', UI.notice('Loading…', 'info'), { attrs: 'id="pf-thinking-policy"' });
+        }
+        if (st.tpLoaded.error) return UI.panel('Thinking policy', UI.problem('The policy could not be loaded', st.tpLoaded.error.message, st.tpLoaded.error.problem && st.tpLoaded.error.problem.trace_id), { attrs: 'id="pf-thinking-policy"' });
+        const d = st.tpLoaded.data; const own = wsId ? d.workspace : d.tenant; const eff = d.effective;
+        const base = own || eff;
+        const f = Object.assign({ visibility: base.visibility, retentionDays: base.retentionDays == null ? '' : String(base.retentionDays), exports: base.exports, budgetTokensPerDay: base.budgetTokensPerDay == null ? '' : String(base.budgetTokensPerDay) }, st.tpForm[key] || {});
+        const VIS = [{ value: 'author', label: 'the author' }, { value: 'reviewers', label: 'reviewers only' }, { value: 'nobody', label: 'nobody' }];
+        return UI.panel('Thinking policy', UI.seg([{ id: 'tenant', label: 'Tenant' }].concat(wss.map((w) => ({ id: w.id, label: w.name }))), st.tpScope, 'data-tp-scope')
+          + (wsId && !own ? UI.notice('This workspace inherits the tenant\'s policy. Save a value to give it its own.', 'info') : wsId ? UI.notice('This workspace has its own policy; it wins over the tenant\'s. Inherit resets it.', 'info') : eff.scope === 'default' ? UI.notice('No policy is set yet: the author sees thinking, it is kept as long as the answer, exports carry it, there is no budget.', 'info') : '')
+          + '<div class="formgrid" style="--cols:2">'
+          + UI.field('Who sees thinking', UI.select(VIS, f.visibility, 'data-tp="visibility"'), 'Never above the viewer\'s clearance. With nobody, the stream carries none and the message keeps only the token count')
+          + UI.field('Keep thinking for (days)', UI.input(f.retentionDays, { placeholder: 'as the answer', attrs: 'data-tp="retentionDays" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Dropped apart from the answer by the sweep; the token count stays. 0 drops it right after the turn')
+          + UI.field('Exports', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Exports carry thinking', f.exports, 'data-tp-exports') + '</div>', 'Only for an exporter the visibility lets see it')
+          + UI.field('Workspace thinking budget per day', UI.input(f.budgetTokensPerDay, { placeholder: 'none', attrs: 'data-tp="budgetTokensPerDay" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Thinking tokens across every profile in the workspace; at the limit turns think at low')
+          + '</div><div class="muted" style="font-size:12px">Applied to chat, the OpenAI-compatible API (reasoning effort is mapped and capped the same way), agent runs and the chain view. Audited as thinking.policy.updated.</div>',
+          { attrs: 'id="pf-thinking-policy"', actions: UI.btn('Save policy', { kind: 'primary', size: 'sm', attrs: 'data-tp-save' }) + (wsId && own ? UI.btn('Inherit from tenant', { kind: 'ghost', size: 'sm', attrs: 'data-tp-reset' }) : '') });
       }
 
       root.innerHTML = '<style>'
@@ -420,13 +455,34 @@
         });
         ctx.on('change', 'select[data-key], input[type=checkbox][data-key]', (e, t) => { setF(t.dataset.key, t.type === 'checkbox' ? t.checked : t.value); ctx.rerender(); });
         ctx.on('click', '[data-reset]', () => { delete st.form[p.id]; ctx.rerender(); toast('Changes discarded.'); });
+        // 1.7.0 (B-11701): the thinking policy panel.
+        ctx.on('click', '[data-tp-scope] [data-seg]', (e, t) => { st.tpScope = t.dataset.seg; ctx.rerender(); });
+        const tpKey = () => (st.tpScope === 'tenant' ? 'tenant' : st.tpScope);
+        ctx.on('input', 'input[data-tp]', (e, t) => { st.tpForm[tpKey()] = Object.assign({}, st.tpForm[tpKey()], { [t.dataset.tp]: t.value }); });
+        ctx.on('change', 'select[data-tp]', (e, t) => { st.tpForm[tpKey()] = Object.assign({}, st.tpForm[tpKey()], { [t.dataset.tp]: t.value }); ctx.rerender(); });
+        ctx.on('change', '[data-tp-exports]', (e, t) => { st.tpForm[tpKey()] = Object.assign({}, st.tpForm[tpKey()], { exports: t.checked }); });
+        ctx.on('click', '[data-tp-save]', async () => {
+          const key = tpKey(); const wsId = key === 'tenant' ? null : key;
+          const d = st.tpLoaded && st.tpLoaded.key === key ? st.tpLoaded.data : null; if (!d) return;
+          const base = (wsId ? d.workspace : d.tenant) || d.effective;
+          const f = Object.assign({ visibility: base.visibility, retentionDays: base.retentionDays == null ? '' : String(base.retentionDays), exports: base.exports, budgetTokensPerDay: base.budgetTokensPerDay == null ? '' : String(base.budgetTokensPerDay) }, st.tpForm[key] || {});
+          let body;
+          try { body = { workspace: wsId, visibility: f.visibility, retentionDays: num(f.retentionDays, 'Retention', true), exports: !!f.exports, budgetTokensPerDay: num(f.budgetTokensPerDay, 'Budget', true) }; } catch (err) { toast(esc(err.message), 'danger'); return; }
+          try { await App.put('/api/admin/thinking/policy', body); delete st.tpForm[key]; st.tpLoaded = null; ctx.rerender(); toast('Thinking policy saved for ' + (wsId ? '<b>' + esc(((App.me || {}).workspaces || []).filter((w) => w.id === wsId).map((w) => w.name)[0] || 'the workspace') + '</b>' : 'the tenant') + '. It applies from the next turn.', 'ok', 5000); } catch (err) { App.fail(err); }
+        });
+        ctx.on('click', '[data-tp-reset]', async () => {
+          const key = tpKey(); if (key === 'tenant') return;
+          const ok = await ctx.confirm({ title: 'Inherit the tenant policy', tone: 'warn', ok: 'Inherit', body: '<div class="fg2">The workspace drops its own thinking policy and follows the tenant\'s from the next turn.</div>' });
+          if (!ok) return;
+          try { await App.put('/api/admin/thinking/policy', { workspace: key, reset: true }); delete st.tpForm[key]; st.tpLoaded = null; ctx.rerender(); toast('Policy reset; the workspace inherits the tenant\'s.', 'ok'); } catch (err) { App.fail(err); }
+        });
         ctx.on('click', '[data-copy]', () => { const text = root.querySelector('.pf-yaml').textContent; (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(() => toast('Copied the saved version.', 'ok'), () => toast('The browser did not allow copying.', 'warn')); });
 
         ctx.on('click', '[data-save]', () => {
           let body; let before;
-          try { body = bodyOf(f); before = bodyOf(formOf(p)); } catch (err) { toast(esc(err.message), 'danger'); return; }
-          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools', trustMarking: 'Untrusted content marking' };
-          const show = (k, v) => { if (k === 'trustMarking') return v ? 'on' : 'off'; if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
+          try { body = bodyOf(Object.assign({}, formOf(p), st.form[p.id] || {})); before = bodyOf(formOf(p)); } catch (err) { toast(esc(err.message), 'danger'); return; }
+          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', thinkingBudget: 'Thinking budget', planFirst: 'Plan first', reflect: 'Reflection', reflectProfile: 'Reflection by', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools', trustMarking: 'Untrusted content marking' };
+          const show = (k, v) => { if (k === 'trustMarking' || k === 'planFirst' || k === 'reflect') return v ? 'on' : 'off'; if (k === 'reflectProfile') return v || 'this profile'; if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
           const patch = {}; const kv = [];
           Object.keys(body).forEach((k) => { if (JSON.stringify(body[k]) !== JSON.stringify(before[k])) { patch[k] = body[k]; kv.push([LBL[k], esc(show(k, before[k])) + ' → <b>' + esc(show(k, body[k])) + '</b>']); } });
           if (!kv.length) { delete st.form[p.id]; ctx.rerender(); return; }
