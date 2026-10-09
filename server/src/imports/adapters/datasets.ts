@@ -1,6 +1,7 @@
 import { normaliseLicence, rowBucket } from '../formats.js';
+import { apiOf, type DatasetResource } from '../rows.js';
 import { NeedsCredential, SourceError, type CatalogItem, type ImportKind } from '../types.js';
-import { join, str, stripHtml, uniq, type AdapterContext, type RepositoryAdapter } from './types.js';
+import { join, str, stripHtml, uniq, type AdapterContext, type DatasetDetail, type RepositoryAdapter } from './types.js';
 
 /*
  * The dataset-oriented repository types (B-3801, B-3802): each harvests its catalogue into the snapshot with the
@@ -8,6 +9,47 @@ import { join, str, stripHtml, uniq, type AdapterContext, type RepositoryAdapter
  * file types, SDMX categorisations, OpenML task types, InvenioRDM resource types, Kaggle tags), and the ones with a
  * search API search live. Fetching the data itself is dataset import (B-3804).
  */
+
+// ---------- B-3804: what a dataset can be read from ----------
+
+const extOf = (name: string | null | undefined): string | null => {
+  const m = /\.([a-z0-9]{1,8})(\.gz)?$/i.exec(name ?? '');
+  return m ? m[1]!.toLowerCase() : null;
+};
+const FORMAT_ALIAS: Record<string, string> = { txt: 'other', tab: 'tsv', ndjson: 'jsonl', jsonlines: 'jsonl', 'application/json': 'json', 'text/csv': 'csv', 'text/tab-separated-values': 'tsv', xls: 'xlsx', geojson: 'json' };
+/** csv | tsv | json | jsonl | parquet | xlsx | zip | api | other, from a format word, a media type or a file name. */
+export const resourceFormat = (format: string | null | undefined, name?: string | null, url?: string | null): string => {
+  const raw = lower(format) ?? extOf(name) ?? extOf(url?.split('?')[0]) ?? 'other';
+  const f = FORMAT_ALIAS[raw] ?? raw;
+  return ['csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx', 'zip', 'api', 'sdmx', 'arff'].includes(f) ? f : 'other';
+};
+const splitOf = (name: string): string | null => {
+  const m = /(^|[/_.-])(train|test|validation|valid|dev|eval)([/_.-]|$)/i.exec(name);
+  return m ? m[2]!.toLowerCase().replace(/^valid$/, 'validation').replace(/^dev$/, 'validation') : null;
+};
+export const resource = (x: Partial<DatasetResource> & { id: string; name: string }): DatasetResource => ({
+  id: x.id,
+  name: x.name,
+  format: x.format ?? resourceFormat(null, x.name, x.url),
+  url: x.url ?? null,
+  api: x.api ?? apiOf({ url: x.url, format: x.format }),
+  bytes: x.bytes ?? null,
+  rows: x.rows ?? null,
+  config: x.config ?? null,
+  split: x.split ?? splitOf(x.name)
+});
+const detail = (x: Partial<DatasetDetail> & { itemId: string; name: string; resources: DatasetResource[] }): DatasetDetail => ({
+  revision: null,
+  licence: null,
+  licenceSource: 'the catalogue',
+  publisher: null,
+  description: null,
+  frequency: null,
+  configurations: x.configurations ?? [{ id: 'default', name: 'default', splits: uniq(x.resources.map((r) => r.split)) }],
+  landingPage: null,
+  data: {},
+  ...x
+});
 
 const opt = (ctx: AdapterContext, k: string): string | null => (typeof ctx.repo.options[k] === 'string' && (ctx.repo.options[k] as string).trim() ? (ctx.repo.options[k] as string).trim() : null);
 const lower = (v: string | null | undefined) => (v ? v.toLowerCase().trim() : null);
@@ -35,7 +77,7 @@ interface CkanPackage {
   organization?: { title?: string; name?: string } | null;
   groups?: { title?: string; display_name?: string; name?: string }[];
   tags?: { name?: string; display_name?: string }[];
-  resources?: { name?: string; format?: string; url?: string; size?: number | null; mimetype?: string }[];
+  resources?: { id?: string; name?: string; format?: string; url?: string; size?: number | null; mimetype?: string; datastore_active?: boolean }[];
   metadata_modified?: string;
   extras?: { key: string; value: string }[];
   frequency?: string;
@@ -76,6 +118,20 @@ async function ckanSearch(ctx: AdapterContext, q: string, rows: number, start: n
 }
 
 export const ckanAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId) {
+    const base = ckanBase(ctx.repo.baseUrl);
+    const { body } = await ctx.fetcher.json<{ success?: boolean; result?: CkanPackage }>(join(base, `/api/3/action/package_show?id=${encodeURIComponent(itemId)}`), ctx.access, { signal: ctx.signal });
+    if (!body.success || !body.result) throw new SourceError(`The CKAN portal has no package ${itemId}.`);
+    const p = body.result;
+    const it = ckanItem(p, opt(ctx, 'region'));
+    const resources = (p.resources ?? []).map((r, i) => {
+      const id = r.id ?? `r${i + 1}`;
+      // A datastore resource is read through datastore_search (paged); the file otherwise.
+      if (r.datastore_active) return resource({ id, name: r.name ?? id, format: 'api', url: join(base, `/api/3/action/datastore_search?resource_id=${encodeURIComponent(id)}`), api: 'ckan-datastore', bytes: r.size ?? null });
+      return resource({ id, name: r.name ?? id, format: resourceFormat(r.format ?? r.mimetype, r.name, r.url), url: r.url ?? null, bytes: r.size ?? null });
+    });
+    return detail({ itemId: it.itemId, name: it.name, revision: p.metadata_modified ?? null, licence: it.licence, licenceSource: 'the package (license_id)', publisher: it.publisher, description: it.description, frequency: it.facets.updates?.[0] ?? null, resources, landingPage: join(base, `/dataset/${encodeURIComponent(itemId)}`), data: it.data });
+  },
   async probe(ctx) {
     const r = await ckanSearch(ctx, '', 0, 0);
     return `Reachable; ${r.count.toLocaleString('en-US')} datasets.`;
@@ -161,7 +217,13 @@ function dcatItems(doc: unknown, region: string | null): { items: CatalogItem[];
       formats,
       updated: literal(prop(d, 'dct:modified')[0]),
       facets: { classification: themes, licence: [licence], format: formats, publisher: uniq([publisher]), updates: uniq([freq]), region: uniq([region]) },
-      data: { keywords: uniq(prop(d, 'dcat:keyword').map((k) => literal(k))).slice(0, 50), distributions: dists.length, landingPage: literal(prop(d, 'dcat:landingPage')[0]) }
+      data: {
+        keywords: uniq(prop(d, 'dcat:keyword').map((k) => literal(k))).slice(0, 50),
+        distributions: dists.length,
+        landingPage: literal(prop(d, 'dcat:landingPage')[0]),
+        // B-3804: the distributions a dataset import reads from (title, URL, format), at most 20.
+        files: dists.slice(0, 20).map((x) => ({ title: literals(prop(x, 'dct:title')) ?? literal(prop(x, 'dct:identifier')[0]), url: literal(prop(x, 'dcat:downloadURL')[0]) ?? literal(prop(x, 'dcat:accessURL')[0]), format: fileType(literal([...prop(x, 'dct:format'), ...prop(x, 'dcat:mediaType')][0])), bytes: Number(literal(prop(x, 'dcat:byteSize')[0])) || null }))
+      }
     }));
   }
   const pager = graph.find((n) => prop(n, 'hydra:next').length || prop(n, 'hydra:nextPage').length);
@@ -170,6 +232,14 @@ function dcatItems(doc: unknown, region: string | null): { items: CatalogItem[];
 }
 
 export const dcatAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId, cached) {
+    // The catalogue document is paged and large: a dataset's distributions come from the harvested snapshot.
+    const files = Array.isArray(cached?.files) ? (cached!.files as { title?: string | null; url?: string | null; format?: string | null; bytes?: number | null }[]) : [];
+    if (!files.length) throw new SourceError(`${itemId} has no distribution in the snapshot; refresh the repository's snapshot and try again.`);
+    const resources = files.map((f, i) => resource({ id: `d${i + 1}`, name: f.title ?? f.url?.split('/').pop() ?? `distribution ${i + 1}`, format: resourceFormat(f.format, f.title, f.url), url: f.url ?? null, bytes: f.bytes ?? null }));
+    void ctx;
+    return detail({ itemId, name: String(cached?.name ?? itemId), resources, landingPage: typeof cached?.landingPage === 'string' ? cached.landingPage : null, data: cached ?? {} });
+  },
   async probe(ctx) {
     const { body } = await ctx.fetcher.text(ctx.repo.baseUrl, ctx.access, { headers: { accept: 'application/ld+json' }, signal: ctx.signal });
     const { items } = dcatItems(JSON.parse(body), null);
@@ -241,6 +311,14 @@ async function sdmxFlows(ctx: AdapterContext): Promise<SdmxFlow[]> {
 }
 
 export const sdmxAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId, cached) {
+    const [agency, flow, version] = itemId.split(',');
+    const id = flow ?? itemId;
+    // SDMX 2.1 REST: /data/{flow}/all (Eurostat) or /data/{agency},{flow},{version}/all (ECB, the SDMX standard form).
+    const path = opt(ctx, 'dataPath') === 'full' ? `/data/${agency ?? 'all'},${id},${version ?? 'latest'}/all` : `/data/${id}`;
+    const resources = [resource({ id, name: `${id} (SDMX-CSV)`, format: 'api', url: join(ctx.repo.baseUrl, path), api: 'sdmx', config: id })];
+    return detail({ itemId, name: String(cached?.name ?? id), licence: normaliseLicence(opt(ctx, 'licence')), licenceSource: 'the repository', publisher: agency ?? null, frequency: 'monthly', configurations: [{ id, name: id, splits: [] }], resources, data: cached ?? { flow: id, agency, version } });
+  },
   async probe(ctx) {
     return `Reachable; ${(await sdmxFlows(ctx)).length.toLocaleString('en-US')} dataflows.`;
   },
@@ -286,6 +364,15 @@ interface OpenmlEntry {
 }
 
 export const openmlAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId) {
+    const { body } = await ctx.fetcher.json<{ data_set_description?: { did?: number | string; name?: string; version?: number | string; licence?: string; description?: string; file_id?: number | string; url?: string; format?: string; default_target_attribute?: string; upload_date?: string } }>(join(ctx.repo.baseUrl, `/api/v1/json/data/${encodeURIComponent(itemId)}`), ctx.access, { signal: ctx.signal });
+    const d = body.data_set_description;
+    if (!d) throw new SourceError(`OpenML has no dataset ${itemId}.`);
+    const resources: DatasetResource[] = [];
+    if (d.file_id != null) resources.push(resource({ id: `csv-${d.file_id}`, name: `${d.name ?? itemId}.csv`, format: 'csv', url: join(ctx.repo.baseUrl, `/data/get_csv/${d.file_id}/${encodeURIComponent(d.name ?? 'data')}.csv`) }));
+    if (d.url) resources.push(resource({ id: 'arff', name: d.url.split('/').pop() ?? 'data.arff', format: 'arff', url: d.url }));
+    return detail({ itemId, name: `${d.name ?? itemId}${d.version ? ` (v${d.version})` : ''}`, revision: d.upload_date ?? null, licence: normaliseLicence(d.licence ?? null), licenceSource: 'the dataset description', description: stripHtml(d.description), resources, landingPage: join(ctx.repo.baseUrl, `/d/${itemId}`), data: { target: d.default_target_attribute ?? null } });
+  },
   async probe(ctx) {
     await ctx.fetcher.json(join(ctx.repo.baseUrl, '/api/v1/json/data/list/limit/1'), ctx.access, { signal: ctx.signal });
     return 'Reachable.';
@@ -400,6 +487,15 @@ async function invenioSearch(ctx: AdapterContext, q: string, size: number, page:
 }
 
 export const invenioAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId) {
+    const { body: rec } = await ctx.fetcher.json<InvenioHit & { links?: { self_html?: string } }>(join(ctx.repo.baseUrl, `/api/records/${encodeURIComponent(itemId)}`), ctx.access, { signal: ctx.signal });
+    const it = invenioItem(rec);
+    if (!it) throw new SourceError(`${ctx.repo.baseUrl} has no record ${itemId}.`);
+    const { body: files } = await ctx.fetcher.json<{ entries?: { key?: string; size?: number; links?: { content?: string } }[] | Record<string, { key?: string; size?: number; links?: { content?: string } }> }>(join(ctx.repo.baseUrl, `/api/records/${encodeURIComponent(itemId)}/files`), ctx.access, { signal: ctx.signal });
+    const entries = Array.isArray(files.entries) ? files.entries : Object.values(files.entries ?? {});
+    const resources = entries.filter((f) => f.key).map((f) => resource({ id: f.key!, name: f.key!, format: resourceFormat(null, f.key), url: f.links?.content ?? join(ctx.repo.baseUrl, `/api/records/${encodeURIComponent(itemId)}/files/${encodeURIComponent(f.key!)}/content`), bytes: f.size ?? null }));
+    return detail({ itemId, name: it.name, revision: it.updated, licence: it.licence, licenceSource: 'the record (rights)', publisher: it.publisher, description: it.description, resources, landingPage: rec.links?.self_html ?? null, data: it.data });
+  },
   async probe(ctx) {
     const r = await invenioSearch(ctx, '', 1, 1);
     return `Reachable; ${r.total.toLocaleString('en-US')} records.`;
@@ -470,6 +566,11 @@ async function kaggleList(ctx: AdapterContext, q: string, page: number): Promise
 }
 
 export const kaggleAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId, cached) {
+    // Kaggle serves a dataset as one zip archive, which the row readers do not open: the import is refused at the
+    // format check until the archive's files are published individually.
+    return detail({ itemId, name: String(cached?.name ?? itemId), resources: [resource({ id: 'zip', name: `${itemId.split('/').pop()}.zip`, format: 'zip', url: join(ctx.repo.baseUrl, `/api/v1/datasets/download/${itemId}`) })], landingPage: join(ctx.repo.baseUrl, `/datasets/${itemId}`), data: cached ?? {} });
+  },
   async probe(ctx) {
     await kaggleList(ctx, '', 1);
     return 'Reachable; the recorded token works.';

@@ -29,7 +29,7 @@ const planBody = z
     revision: z.string().trim().min(1).max(100).nullable().optional(),
     variants: z.array(z.string().max(400)).max(20).optional(),
     files: z.array(z.string().max(400)).max(500).optional(),
-    target: z.literal('models').default('models'),
+    target: z.enum(['models', 'classifiers']).default('models'),
     label: z.enum(LABELS).default('internal'),
     licence: z.string().trim().min(1).max(120).nullable().optional(),
     attribution: z.string().trim().max(500).nullable().optional(),
@@ -186,6 +186,80 @@ export function importRoutes(s: Services): Router {
   r.post('/imports/plan', run, async (req, res) => {
     const plan = await im().plan(principalOf(req), parseBody(planBody, req.body));
     res.json({ ...plan, selected: plan.selected.map((f) => f.name) });
+  });
+
+  // ---------- dataset import (B-3804 to B-3806) ----------
+
+  const column = z.string().trim().min(1).max(200);
+  const datasetBody = z
+    .object({
+      repositoryId: id26,
+      item: itemId,
+      configuration: z.string().trim().min(1).max(200).nullable().optional(),
+      resources: z.array(z.string().trim().min(1).max(300)).max(50).optional(),
+      splits: z.array(z.string().trim().min(1).max(40)).max(10).optional(),
+      columns: z.array(column).max(200).optional(),
+      target: z.enum(['training', 'classifiers', 'knowledge', 'store']),
+      label: z.enum(LABELS).default('internal'),
+      licence: z.string().trim().min(1).max(120).nullable().optional(),
+      attribution: z.string().trim().max(500).nullable().optional(),
+      notes: z.string().trim().max(1000).nullable().optional(),
+      exception: z.object({ reason: z.string().trim().max(1000).nullable().optional() }).strict().nullable().optional(),
+      workspaceId: id26.nullable().optional(),
+      sample: z.number().int().min(1).max(50_000_000).nullable().optional(),
+      training: z
+        .object({
+          name: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          textColumn: column.nullable().optional(),
+          labelColumn: column.nullable().optional(),
+          splits: z.object({ train: z.number().int().min(0).max(100), val: z.number().int().min(0).max(100), test: z.number().int().min(0).max(100) }).strict().optional(),
+          conversationData: z.boolean().optional()
+        })
+        .strict()
+        .optional(),
+      classifiers: z
+        .object({
+          evalSet: z.string().trim().regex(/^[\w.-]{1,100}$/),
+          textColumn: column,
+          labelColumn: column,
+          classifier: z
+            .object({ mode: z.enum(['none', 'new', 'existing']), name: z.string().trim().min(1).max(100).nullable().optional(), ref: z.string().trim().min(1).max(100).nullable().optional(), engine: z.enum(['linear', 'llm', 'guard']).optional(), profile: z.string().trim().min(1).max(63).nullable().optional() })
+            .strict()
+            .nullable()
+            .optional(),
+          evaluate: z.boolean().optional()
+        })
+        .strict()
+        .optional(),
+      knowledge: z
+        .object({
+          kbId: id26.nullable().optional(),
+          name: z.string().trim().min(1).max(200).nullable().optional(),
+          embedModel: z.string().trim().min(1).max(200).nullable().optional(),
+          titleColumn: column.nullable().optional(),
+          textColumns: z.array(column).max(50).optional(),
+          metadataColumns: z.array(column).max(50).optional(),
+          groupBy: column.nullable().optional(),
+          schedule: z.enum(['15m', 'hourly', 'daily', 'weekly', 'monthly', 'manual', 'publisher']).optional(),
+          dropPii: z.boolean().optional(),
+          labelFloor: z.enum(LABELS).optional()
+        })
+        .strict()
+        .optional()
+    })
+    .strict();
+
+  r.get('/imports/repositories/:id/dataset', run, async (req, res) => {
+    const q = parseBody(z.object({ id: itemId }).strict(), req.query);
+    res.json(await im().datasets.inspect(principalOf(req), parseBody(id26, req.params.id), q.id));
+  });
+
+  r.post('/imports/dataset-plan', run, async (req, res) => {
+    res.json(await im().datasets.plan(principalOf(req), parseBody(datasetBody, req.body)));
+  });
+
+  r.post('/imports/datasets', run, async (req, res) => {
+    res.status(201).json(await im().datasets.request(principalOf(req), parseBody(datasetBody, req.body), trace(req)));
   });
 
   // ---------- the queue ----------

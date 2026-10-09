@@ -11,7 +11,7 @@ import type { InjectionDefence } from '../guardrails/injection.js';
 import { allowed as allowedObject, type ConnectionRow, type ConnectionService } from '../connections/service.js';
 import type { Gateway } from '../gateway/gateway.js';
 import type { Guardrails } from '../guardrails/types.js';
-import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
+import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import type { BlobStore } from '../platform/blob.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
@@ -33,11 +33,11 @@ import { complete } from '../guardrails/model.js';
 import type { ImageSafety } from '../images/safety.js';
 import { DESCRIBE_PROMPT, imageParts, indexedText, isImageType, parseDescription, VIEWABLE, type ImageDescription } from './images.js';
 
-export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web', 'folder'] as const;
+export const SOURCE_KINDS = ['upload', 's3', 'git', 'database', 'web', 'folder', 'dataset'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
-export const SCHEDULES = ['15m', 'hourly', 'daily', 'manual'] as const;
+export const SCHEDULES = ['15m', 'hourly', 'daily', 'weekly', 'monthly', 'manual'] as const;
 export type Schedule = (typeof SCHEDULES)[number];
-const SCHEDULE_MS: Record<Schedule, number> = { '15m': 15 * 60_000, hourly: 60 * 60_000, daily: 24 * 60 * 60_000, manual: 0 };
+const SCHEDULE_MS: Record<Schedule, number> = { '15m': 15 * 60_000, hourly: 60 * 60_000, daily: 24 * 60 * 60_000, weekly: 7 * 24 * 60 * 60_000, monthly: 30 * 24 * 60 * 60_000, manual: 0 };
 const EMBED_CACHE_MS = 30 * 24 * 60 * 60_000;
 
 export interface KbRow {
@@ -80,6 +80,24 @@ export interface IndexRow {
   built_at: number | null;
 }
 
+/** B-3805: how a `dataset` source maps rows to documents. */
+export interface DatasetSourceConfig {
+  importId: string;
+  repositoryId: string;
+  item: string;
+  configuration: string | null;
+  resources: string[];
+  titleColumn: string | null;
+  textColumns: string[];
+  metadataColumns: string[];
+  groupBy: string | null;
+  dropPii: boolean;
+  piiColumns: string[];
+  maxRows: number;
+  columns: string[];
+  frequency: string | null;
+}
+
 export interface SourceRow {
   id: string;
   tenant_id: string;
@@ -117,6 +135,8 @@ export interface SourceRow {
     roleMappings?: RoleMapping[];
     /** B-2405: a file store folder (and its subfolders). */
     folderId?: string;
+    /** 1.7.0 (B-3805): a dataset from an import repository, read again on every refresh; rows are documents. */
+    dataset?: DatasetSourceConfig;
   };
   /** B-1501: the sealed secret access key of the source's own S3-compatible endpoint. */
   secret_sealed?: string | null;
@@ -136,6 +156,8 @@ export interface SourceRow {
 export interface AddSourceInput {
   kind: SourceKind;
   location: string;
+  /** B-3805: the dataset mapping (kind `dataset`). */
+  dataset?: DatasetSourceConfig;
   labelFloor?: Label;
   schedule?: Schedule;
   ref?: string | null;
@@ -410,6 +432,8 @@ export function rowItem(cfg: SourceRow['config'], id: string, columns: string[],
  * builds a new index version by job and switches to it atomically.
  */
 export class KnowledgeService {
+  /** 1.7.0 (B-3805): the rows of a `dataset` source as documents (set by services.ts from the import service). */
+  datasetItems: ((s: SourceRow, ctx: Pick<JobContext, 'signal' | 'progress'>) => Promise<SourceItem[]>) | null = null;
   readonly terms: TermKeys;
   readonly replication: ReplicationManager;
   private readonly db: Db;
@@ -688,7 +712,11 @@ export class KnowledgeService {
     let location = input.location.trim();
     let config: SourceRow['config'] = {};
     let secret: string | null = null;
-    if (input.kind === 'upload') {
+    if (input.kind === 'dataset') {
+      // B-3805: a knowledge set; the import that made it checked the source and the mapping.
+      if (!input.dataset) throw badRequest('A dataset source needs its mapping.');
+      config = { dataset: input.dataset };
+    } else if (input.kind === 'upload') {
       const existing = (await this.sources(kb.id)).find((s) => s.kind === 'upload');
       if (existing) throw conflict('This knowledge base already has an upload source; upload files to it.');
       location = 'Uploads';
@@ -1580,6 +1608,13 @@ export class KnowledgeService {
       const kb = await this.kbRow(s.kb_id);
       const items = await this.folders.items(s.tenant_id, s.config.folderId!, highest(kb.label, s.label_floor), this.o.maxBytes);
       return { ...(await this.apply(s, items, true, ctx)), watermark: new Date().toISOString() };
+    }
+    if (s.kind === 'dataset') {
+      // B-3805: the rows are read from the source again; changed rows are re-indexed, missing ones removed, the rest
+      // keep serving, so a refresh swaps row by row with nothing offline.
+      if (!this.datasetItems) throw new Error('Dataset sources are not available on this instance.');
+      const items = await this.datasetItems(s, ctx);
+      return { ...(await this.apply(s, items, true, ctx, 'text/plain')), watermark: null };
     }
     if (s.kind === 'database' && s.config.roleMappings?.length) return this.syncAsRoles(s, ctx);
     if (s.kind === 'database') {

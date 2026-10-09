@@ -186,7 +186,8 @@ export interface ImportRow {
   item_id: string;
   item_name: string;
   revision: string | null;
-  target: 'models';
+  /** models | classifiers (a model import, B-3803, B-3806) or training | classifiers | knowledge | store (a dataset import, B-3804). */
+  target: 'models' | 'classifiers' | 'training' | 'knowledge' | 'store';
   mode: 'direct' | 'bundle';
   state: ImportState;
   stage: string | null;
@@ -205,6 +206,15 @@ export interface ImportRow {
   stored_bytes: number;
   job_id: string | null;
   model_id: string | null;
+  /** B-3804: what a dataset import produced (rows, hash, the destination's ids and warnings) and the ids themselves. */
+  result: Record<string, unknown> | null;
+  rows_total: number;
+  sample_rows: number | null;
+  dataset_id: string | null;
+  kb_id: string | null;
+  source_id: string | null;
+  classifier_id: string | null;
+  eval_set: string | null;
   error: string | null;
   requested_by: string;
   created_at: number;

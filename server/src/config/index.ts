@@ -808,6 +808,14 @@ const base = z.object({
     IMPORT_BUNDLE_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
     IMPORT_BACKOFF_MAX_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(360),
     IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500),
+    /**
+     * 1.7.0, Sprint 40b (B-3804, B-3806): a dataset import keeps at most IMPORT_DATASET_MAX_ROWS rows (a larger dataset is
+     * sampled); imported classifier engines are scored by the classifier worker at CLASSIFIER_WORKER_URL (none: such a
+     * classifier cannot score), each call within CLASSIFIER_WORKER_TIMEOUT_MS.
+     */
+    IMPORT_DATASET_MAX_ROWS: z.coerce.number().int().min(100).max(50_000_000).default(500_000),
+    CLASSIFIER_WORKER_URL: z.string().url().optional(),
+    CLASSIFIER_WORKER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
     // --- 1.6.0, Sprint 35c: storage and configuration (edit only inside this block) ---
     /**
      * B-4205: settings the Configuration screen may override from the database, each only after a second platform

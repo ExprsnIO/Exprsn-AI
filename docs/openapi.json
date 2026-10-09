@@ -40472,6 +40472,32 @@
         }
       }
     },
+    "/api/imports/dataset-plan": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/datasets": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/imports/exceptions": {
       "get": {
         "x-exprsn-since": "1.5.0",
@@ -41249,6 +41275,29 @@
               }
             }
           },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/imports/repositories/{id}/dataset": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
           }
