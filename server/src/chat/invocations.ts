@@ -112,8 +112,25 @@ export class ChatInvocations {
   }
 
   async capabilities(p: Principal, conversationId: string) {
+    const c = await this.s().chat.conversation(p, conversationId);
+    return (await this.capabilitiesAt(p, { label: c.label, profile: c.profile_id, active: this.skillsOf(c) })).out;
+  }
+
+  /**
+   * 1.7.0 (B-12301): the workspace form of `capabilities`, with no conversation: what the caller may call in their
+   * current workspace through `profile` (a name or id; null for none), at the lowest label a new conversation can
+   * hold. The same decision as a conversation's list (the profile's tool list through the dispatcher, the runnable
+   * agents, the profile's skill allow-list, the workspace's published workflows); `allow` is the profile's lists, so
+   * the catalogue can tell an entry the allow-list hides from one the caller may not use at all.
+   */
+  async workspaceCapabilities(p: Principal, profile: string | null) {
+    const r = await this.capabilitiesAt(p, { label: 'public', profile, active: [] });
+    return { ...r.out, allow: r.allow };
+  }
+
+  private async capabilitiesAt(p: Principal, at: { label: Label; profile: string | null; active: ConversationSkill[] }) {
     const s = this.s();
-    const c = await s.chat.conversation(p, conversationId);
+    const c = { label: at.label, profile_id: at.profile };
     const perms = effectivePermissions(p);
     const out: {
       label: Label;
@@ -124,13 +141,13 @@ export class ChatInvocations {
       skills: { name: string; version: string; description: string | null; label: Label; active: 'sticky' | 'once' | null }[];
       workflows: { id: string; name: string; description: string | null; label: Label; inputSchema: Record<string, unknown> | null }[];
       active: ConversationSkill[];
-    } = { label: c.label, profile: null, tools: [], hidden: [], agents: [], skills: [], workflows: [], active: this.skillsOf(c) };
+    } = { label: c.label, profile: null, tools: [], hidden: [], agents: [], skills: [], workflows: [], active: at.active };
     let profileTools: string[] = [];
     let profileAgents: string[] = [];
     let profileSkills: string[] | null = null;
     if (c.profile_id) {
       try {
-        const r = await this.profileOf(p, c);
+        const r = await s.chat.resolveProfileFor(p, c.profile_id, c.label);
         out.profile = r.profile.name;
         profileTools = r.profile.tools.filter((t) => t !== 'calculate');
         profileAgents = r.profile.agents ?? [];
@@ -177,7 +194,7 @@ export class ChatInvocations {
         out.workflows.push({ id: w.id, name: w.name, description: w.description, label: w.label, inputSchema: 'missing' in callee ? null : (callee.input_schema ?? null) });
       }
     }
-    return out;
+    return { out, allow: { tools: profileTools, calculate: out.tools.some((t) => t.name === 'calculate'), skills: profileSkills, profileResolved: out.profile !== null } };
   }
 
   // ---------- B-4002, B-4003: a person calls a tool; write tools behind a card ----------

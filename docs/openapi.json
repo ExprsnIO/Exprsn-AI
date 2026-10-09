@@ -20988,6 +20988,30 @@
         }
       }
     },
+    "/api/admin/registry/{id}/discovery": {
+      "put": {
+        "tags": [
+          "admin/registry"
+        ],
+        "summary": "Sets a registry entry's purpose, example prompts and category for the catalogue card (B-12304)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/admin/registry/{id}/lifecycle": {
       "post": {
         "tags": [
@@ -33242,6 +33266,34 @@
         }
       }
     },
+    "/api/catalog": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The catalogue of workflows, agents, tools and skills the caller may use in the current workspace through a profile (B-12301)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/catalog/suggestions": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Up to three catalogue entries whose description and examples match a composer draft, ranked by the embedding profile (B-12303)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/chains/{id}": {
       "get": {
         "x-exprsn-since": "1.5.0",
@@ -36100,6 +36152,30 @@
           },
           {
             "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/suggestions/dismiss": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Dismisses a composer suggestion for the rest of the conversation (B-12303)",
+        "parameters": [
+          {
+            "name": "id",
             "in": "path",
             "required": true,
             "schema": {
@@ -44304,6 +44380,32 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/me/catalog-notices": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's choice for publish notices (each, weekly digest, off) and what the digest holds (B-12302)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Sets the caller's choice for publish notices (B-12302)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/me/dav": {
@@ -56345,6 +56447,30 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/workflows/{id}/discovery": {
+      "put": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Sets a workflow's purpose, example prompts and category for the catalogue card (B-12301)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/workflows/{id}/draft": {

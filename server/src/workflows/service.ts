@@ -76,6 +76,10 @@ export interface WorkflowRow {
   updated_by: string | null;
   created_at: number;
   updated_at: number;
+  /** 1.7.0 (B-12301, B-12304): the catalogue card's purpose, example prompts and category (none on older workflows). */
+  purpose?: string | null;
+  examples?: string[] | string | null;
+  category?: string | null;
 }
 
 export interface RunRow {
@@ -236,7 +240,7 @@ const n0 = (v: unknown) => (v == null ? null : Number(v));
 const delegates = (n: WfNode) => n.kind === 'sub' || n.kind === 'agent' || ((n.kind === 'map' || n.kind === 'loop') && !!(n.config as { workflow?: unknown }).workflow);
 const runFrom = (r: Record<string, unknown>): RunRow => ({ ...(r as unknown as RunRow), tokens: Number(r.tokens ?? 0), locked_until: n0(r.locked_until), created_at: Number(r.created_at), started_at: n0(r.started_at), finished_at: n0(r.finished_at), version: n0(r.version), draft_rev: n0(r.draft_rev) });
 const stepFrom = (r: Record<string, unknown>): StepRow => ({ ...(r as unknown as StepRow), attempts: Number(r.attempts ?? 0), resume_at: n0(r.resume_at), started_at: n0(r.started_at), finished_at: n0(r.finished_at) });
-const wfFrom = (r: Record<string, unknown>): WorkflowRow => ({ ...(r as unknown as WorkflowRow), draft_rev: Number(r.draft_rev), published_version: n0(r.published_version), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+const wfFrom = (r: Record<string, unknown>): WorkflowRow => ({ ...(r as unknown as WorkflowRow), draft_rev: Number(r.draft_rev), published_version: n0(r.published_version), created_at: Number(r.created_at), updated_at: Number(r.updated_at), purpose: (r.purpose as string | null | undefined) ?? null, examples: json<string[] | null>(r.examples, null) ?? [], category: (r.category as string | null | undefined) ?? null });
 
 /** PortSchema to the JSON Schema Ollama takes as `format` for structured output. */
 function jsonSchema(s: PortSchema): Record<string, unknown> {
@@ -391,7 +395,18 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   private summary(w: WorkflowRow) {
-    return { id: w.id, name: w.name, description: w.description, label: w.label, draftRev: w.draft_rev, publishedVersion: w.published_version, workspaceId: w.workspace_id, createdBy: w.created_by, updatedBy: w.updated_by, createdAt: w.created_at, updatedAt: w.updated_at };
+    return { id: w.id, name: w.name, description: w.description, label: w.label, draftRev: w.draft_rev, publishedVersion: w.published_version, workspaceId: w.workspace_id, purpose: w.purpose ?? null, examples: Array.isArray(w.examples) ? w.examples : [], category: w.category ?? null, createdBy: w.created_by, updatedBy: w.updated_by, createdAt: w.created_at, updatedAt: w.updated_at };
+  }
+
+  /** 1.7.0 (B-12301): the catalogue card's purpose, example prompts and category; not part of the graph or a version. */
+  async setDiscovery(p: Principal, id: string, patch: { purpose?: string | null; examples?: string[]; category?: string | null }) {
+    const w = await this.workflow(p, id);
+    const upd: Record<string, unknown> = { updated_at: Date.now(), updated_by: p.userId };
+    if (patch.purpose !== undefined) upd.purpose = patch.purpose;
+    if (patch.examples !== undefined) upd.examples = JSON.stringify(patch.examples);
+    if (patch.category !== undefined) upd.category = patch.category;
+    await this.d.db('workflows').where({ id: w.id }).update(upd);
+    return this.view(p, w.id);
   }
 
   async view(p: Principal, id: string) {

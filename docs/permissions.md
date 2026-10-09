@@ -29,8 +29,8 @@ An admin permission is any permission outside the member baseline: a custom role
 
 | Permission | Admin | Routes | `system-admin` | `tenant-admin` | `identity-admin` | `model-admin` | `guardrail-admin` | `tool-admin` | `knowledge-curator` | `ml-admin` | `workflow-admin` | `connection-admin` | `flag-reviewer` | `member` | `legal-review` | `auditor` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `chat:read` | no | 30 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `chat:write` | no | 26 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:read` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:write` | no | 28 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `inference:invoke` | no | 18 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -44,10 +44,10 @@ An admin permission is any permission outside the member baseline: a custom role
 | `models:manage` | yes | 11 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `profiles:manage` | yes | 29 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 36 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `tools:manage` | yes | 19 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 37 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 22 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `workflows:manage` | yes | 23 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 20 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -141,6 +141,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/shared-conversations`
 - `GET /api/shared-conversations/{id}`
 - `GET /api/shared-conversations/{id}/messages/{mid}/stream`
+- `GET /api/catalog`
 - `POST /api/conversations/{id}/exports`
 - `POST /api/flags/report`
 - `POST /api/prompts/{id}/render`
@@ -160,6 +161,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/conversations/{id}/workflow-runs`
 - `PUT /api/conversations/{id}/skills`
 - `PATCH /api/conversations/{id}`
+- `POST /api/catalog/suggestions`
+- `POST /api/conversations/{id}/suggestions/dismiss`
 - `POST /api/chat`
 - `POST /api/compare`
 - `POST /api/conversations`
@@ -403,6 +406,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/runs` (or another permission)
 - `GET /api/runs/{id}` (or another permission)
 - `PATCH /api/admin/registry/{id}` (or another permission)
+- `PUT /api/admin/registry/{id}/discovery` (or another permission)
 - `POST /api/admin/registry` (or another permission)
 - `POST /api/admin/registry/{id}/checks` (or another permission)
 - `POST /api/admin/registry/{id}/lifecycle` (or another permission)
@@ -439,6 +443,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/agent-schedules/{id}` (or another permission)
 - `POST /api/admin/red-team/suites` (or another permission)
 - `POST /api/admin/red-team/run` (or another permission)
+- `PUT /api/admin/registry/{id}/discovery` (or another permission)
 - `POST /api/admin/registry` (or another permission)
 - `POST /api/admin/registry/{id}/checks` (or another permission)
 - `POST /api/admin/registry/{id}/lifecycle` (or another permission)
@@ -479,6 +484,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/workflow-dead-letters`
 - `GET /api/workflows/{id}/bundle`
 - `PATCH /api/workflows/{id}/triggers`
+- `PUT /api/workflows/{id}/discovery`
 - `POST /api/workflow-dead-letters/{id}/redrive`
 - `POST /api/workflows`
 - `POST /api/workflows/import`
@@ -1761,6 +1767,8 @@ These need a signed-in session or credential and no particular permission; the h
 - `GET /api/workflow-approvals`
 - `GET /api/workflow-runs/{id}`
 - `PATCH /api/me/preferences`
+- `GET /api/me/catalog-notices`
+- `PUT /api/me/catalog-notices`
 - `POST /api/auth/device`
 - `POST /api/auth/mfa/email`
 - `POST /api/auth/mfa/email/send`

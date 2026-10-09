@@ -6,6 +6,7 @@ import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } f
 import { entryView, SIDE_EFFECTS } from '../registry/service.js';
 import { graphSchema } from '../workflows/graph.js';
 import { rootHeld } from '../chain/view.js';
+import { discoveryFields } from '../discovery/service.js';
 import type { Services } from '../services.js';
 
 const name = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, 'Lower-case letters, digits and hyphens');
@@ -63,6 +64,14 @@ export function workflowRoutes(s: Services): Router {
     res.json(v);
   });
 
+  /** 1.7.0 (B-12301, B-12304): the catalogue card's purpose, example prompts and category (not part of the graph). */
+  r.put('/workflows/:id/discovery', manage, async (req, res) => {
+    const body = parseBody(z.object(discoveryFields).strict(), req.body);
+    const v = await wf.setDiscovery(principalOf(req), String(req.params.id), body);
+    await audit(req, 'workflow.discovery.updated', { workflow: v.id, name: v.name }, v.label, { changed: Object.keys(body) });
+    res.json(v);
+  });
+
   /** Validates a graph against the workflow's label and the tenant's profiles, without saving it. */
   r.post('/workflows/:id/validate', run, async (req, res) => {
     const p = principalOf(req);
@@ -78,6 +87,8 @@ export function workflowRoutes(s: Services): Router {
     try {
       const out = await wf.publish(p, w.id, body.note);
       await audit(req, 'workflow.published', { workflow: w.id, name: w.name }, w.label, { version: out.version, warnings: out.warnings.length });
+      // 1.7.0 (B-12302): the workspace's members (the tenant's, for a tenant-wide workflow) hear about it once.
+      await s.discovery.announce(w.tenant_id, { kind: 'workflow', name: w.name, version: `v${out.version}`, label: w.label, description: w.description, scope: w.workspace_id ? [w.workspace_id] : 'tenant', exclude: [p.userId] });
       res.json({ ...out, workflow: await wf.view(p, w.id) });
     } catch (err) {
       await audit(req, 'workflow.publish.refused', { workflow: w.id, name: w.name }, w.label, { detail: (err as Error).message.slice(0, 300) });

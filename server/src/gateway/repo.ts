@@ -147,6 +147,8 @@ export interface ProfileRow {
   /** 1.7.0 (B-11704): a second pass checks every answer, by this profile or `reflect_profile`. */
   reflect?: boolean;
   reflect_profile?: string | null;
+  /** 1.7.0 (B-12303): composer suggestions from the catalogue for this profile; on when unset. */
+  suggestions?: boolean;
   label: Label;
   status: 'draft' | 'published' | 'disabled';
   version: number;
@@ -200,6 +202,7 @@ export const profileFrom = (r: Record<string, unknown>): ProfileRow => ({
   plan_first: r.plan_first === true || r.plan_first === 1 || r.plan_first === '1' || r.plan_first === 't',
   reflect: r.reflect === true || r.reflect === 1 || r.reflect === '1' || r.reflect === 't',
   reflect_profile: (r.reflect_profile as string | null) ?? null,
+  suggestions: r.suggestions == null ? true : r.suggestions === true || r.suggestions === 1 || r.suggestions === '1' || r.suggestions === 't',
   version: Number(r.version),
   created_at: Number(r.created_at),
   updated_at: Number(r.updated_at)

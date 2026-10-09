@@ -150,6 +150,11 @@ export function chatRoutes(s: Services): Router {
   r.delete('/conversations/:id/skills/:name', write, async (req, res) => {
     res.json(await wrap(() => inv().removeSkill(principalOf(req), String(req.params.id), String(req.params.name)))(req));
   });
+  // 1.7.0 (B-12303): a dismissed composer suggestion stays away for the rest of the conversation.
+  r.post('/conversations/:id/suggestions/dismiss', write, async (req, res) => {
+    const body = parseBody(z.object({ key: z.string().trim().regex(/^(workflow|agent|tool|skill):.{1,200}$/, 'An entry key such as workflow:summarise-contract') }).strict(), req.body);
+    res.json(await wrap(() => s.discovery.dismiss(principalOf(req), String(req.params.id), body.key, { ip: ip(req), traceId: req.traceId }))(req));
+  });
 
   r.get('/conversations/:id/artifacts', read, async (req, res) => {
     res.json({ artifacts: await wrap(() => s.chatArtifacts.list(principalOf(req), String(req.params.id)))(req) });

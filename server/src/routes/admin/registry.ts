@@ -13,6 +13,7 @@ import { parseAllowList } from '../../mcp/hosts.js';
 import { toolAddressProblem } from '../../platform/egress.js';
 import { httpDefinitionProblems, httpDefinitionSchema, httpSideEffect, httpVaultRefs, parseHttpDefinition, type HttpDefinition } from '../../registry/http-tool.js';
 import { entryView, ENTRY_KINDS, ENTRY_STATUSES, MAX_BUDGETS, SIDE_EFFECTS, type EntryKind, type EntryRow } from '../../registry/service.js';
+import { discoveryFields } from '../../discovery/service.js';
 import type { Services } from '../../services.js';
 
 const semver = z.string().trim().regex(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/, 'A semantic version such as 1.2.0');
@@ -80,6 +81,27 @@ export function registryAdminRoutes(s: Services): Router {
     return def;
   };
 
+  /**
+   * 1.7.0 (B-12302): a published entry's notice to the members it is offered to (once each). A tool is announced only
+   * once a published profile lists it, since nobody can call it from chat before.
+   */
+  const announce = async (e: EntryRow, exclude: (string | null)[]) => {
+    if (!e.tenant_id || !(e.status === 'published' || e.status === 'deprecated') || !(await s.discovery.offeredInChat(e))) return;
+    await s.discovery.announce(e.tenant_id, { kind: e.kind, name: e.name, version: e.version, label: e.label, description: e.description, scope: e.publish_scope === 'workspace' ? e.publish_workspaces : 'tenant', exclude });
+  };
+
+  /**
+   * 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category, in any state but retired; they are
+   * not part of the schema hash, so an entry published before they existed can gain them without a new version.
+   */
+  r.put('/registry/:id/discovery', forKind(entryKind), async (req, res) => {
+    const b = parseBody(z.object(discoveryFields).strict(), req.body);
+    const e = await load(req);
+    const next = await reg.setDiscovery(e, b);
+    await audit(req, 'registry.discovery.updated', e, { changed: Object.keys(b) });
+    res.json(await view(next));
+  });
+
   r.get('/registry', read, async (req, res) => {
     const q = parseBody(z.object({ kind: z.enum(ENTRY_KINDS).optional(), status: z.enum(ENTRY_STATUSES).optional() }), req.query);
     const list = await reg.list(principalOf(req).tenantId, q);
@@ -98,35 +120,39 @@ export function registryAdminRoutes(s: Services): Router {
     const workspaces = e.publish_workspaces.length ? ((await s.db('workspaces').whereIn('id', e.publish_workspaces).select('id', 'name')) as { id: string; name: string }[]) : [];
     // B-8901: an HTTP tool's calls over the last day (the meter).
     const httpCalls = e.impl === 'http' ? await s.httpTools.stats(p.tenantId, e.id) : undefined;
-    res.json({ ...entryView(e, names), versions: versions.map((v) => ({ id: v.id, version: v.version, status: v.status, createdAt: v.created_at })), referencedBy, profiles, workspaces, ...(httpCalls ? { httpCalls } : {}) });
+    // 1.7.0 (B-12304): the reviewer's preview of the catalogue card, and whether the catalogue fields are asked for.
+    const offeredInChat = e.tenant_id ? await s.discovery.offeredInChat(e) : false;
+    res.json({ ...entryView(e, names), versions: versions.map((v) => ({ id: v.id, version: v.version, status: v.status, createdAt: v.created_at })), referencedBy, profiles, workspaces, ...(httpCalls ? { httpCalls } : {}), catalogCard: s.discovery.previewCard(e), offeredInChat, discoveryRequired: offeredInChat && s.cfg.REGISTRY_DISCOVERY_REQUIRED });
   });
 
   const createBody = z.discriminatedUnion('kind', [
     // B-8901: `impl: http` tools carry their request in the definition; script-backed tools name their script.
-    z.object({ kind: z.literal('tool'), impl: z.enum(['script', 'http']).default('script'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), sideEffect: z.enum(SIDE_EFFECTS).optional(), confirm: z.enum(['always', 'never']).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj, outputSchema: schemaObj.nullable().default(null), definition: z.record(z.string(), z.unknown()) }),
-    z.object({ kind: z.literal('skill'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), definition: skillDef }),
-    z.object({ kind: z.literal('agent'), name: z.string().trim().min(1).max(120), version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj.nullable().default(null), outputSchema: schemaObj.nullable().default(null), definition: agentDef })
+    z.object({ kind: z.literal('tool'), impl: z.enum(['script', 'http']).default('script'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), sideEffect: z.enum(SIDE_EFFECTS).optional(), confirm: z.enum(['always', 'never']).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj, outputSchema: schemaObj.nullable().default(null), definition: z.record(z.string(), z.unknown()), ...discoveryFields }),
+    z.object({ kind: z.literal('skill'), name: entryName, version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), definition: skillDef, ...discoveryFields }),
+    z.object({ kind: z.literal('agent'), name: z.string().trim().min(1).max(120), version: semver.default('0.1.0'), description: z.string().trim().max(2000).nullable().default(null), label: z.enum(LABELS).default('internal'), inputSchema: schemaObj.nullable().default(null), outputSchema: schemaObj.nullable().default(null), definition: agentDef, ...discoveryFields })
   ]);
 
   /** A new draft. Tools submitted here are script-backed; MCP tools come from the MCP servers screen. */
   r.post('/registry', forKind((req) => ((req.body as { kind?: string })?.kind === 'agent' ? 'agent' : 'tool')), async (req, res) => {
     const p = principalOf(req);
     const b = parseBody(createBody, req.body);
+    // 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category.
+    const card = { purpose: b.purpose ?? null, examples: b.examples ?? [], category: b.category ?? null };
     let e: EntryRow;
     if (b.kind === 'tool' && b.impl === 'http') {
       const def = await checkHttp(req, b.definition, b.inputSchema);
-      e = await reg.create(p, { kind: 'tool', name: b.name, version: b.version, description: b.description, impl: 'http', sideEffect: httpSideEffect(def.method, b.sideEffect), ...(b.confirm ? { confirm: b.confirm } : {}), ratePerHour: b.ratePerHour, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: def });
+      e = await reg.create(p, { kind: 'tool', name: b.name, version: b.version, description: b.description, impl: 'http', sideEffect: httpSideEffect(def.method, b.sideEffect), ...(b.confirm ? { confirm: b.confirm } : {}), ratePerHour: b.ratePerHour, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: def, ...card });
     } else if (b.kind === 'tool') {
       const { scriptId } = parseBody(scriptDef, b.definition);
       if (!b.sideEffect) throw badRequest('Declare the side-effect class: read, write or destructive.');
       const script = (await s.db('scripts').where({ tenant_id: p.tenantId, id: scriptId }).first()) as { id: string; name: string; version: number; language: string } | undefined;
       if (!script) throw notFound('Script');
-      e = await reg.create(p, { kind: 'tool', name: b.name, version: b.version, description: b.description, impl: 'script', sideEffect: b.sideEffect, ...(b.confirm ? { confirm: b.confirm } : {}), ratePerHour: b.ratePerHour, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: { scriptId: script.id, scriptName: script.name, version: script.version, language: script.language } });
+      e = await reg.create(p, { kind: 'tool', name: b.name, version: b.version, description: b.description, impl: 'script', sideEffect: b.sideEffect, ...(b.confirm ? { confirm: b.confirm } : {}), ratePerHour: b.ratePerHour, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: { scriptId: script.id, scriptName: script.name, version: script.version, language: script.language }, ...card });
     } else if (b.kind === 'skill') {
-      e = await reg.create(p, { kind: 'skill', name: b.name, version: b.version, description: b.description, impl: 'archive', sideEffect: null, label: b.label, inputSchema: null, outputSchema: null, definition: b.definition });
+      e = await reg.create(p, { kind: 'skill', name: b.name, version: b.version, description: b.description, impl: 'archive', sideEffect: null, label: b.label, inputSchema: null, outputSchema: null, definition: b.definition, ...card });
     } else {
       if (!(await s.gateway.repo.profileByName(p.tenantId, b.definition.profile))) throw notFound(`Profile ${b.definition.profile}`);
-      e = await reg.create(p, { kind: 'agent', name: b.name, version: b.version, description: b.description, impl: 'agent', sideEffect: null, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: b.definition });
+      e = await reg.create(p, { kind: 'agent', name: b.name, version: b.version, description: b.description, impl: 'agent', sideEffect: null, label: b.label, inputSchema: b.inputSchema, outputSchema: b.outputSchema, definition: b.definition, ...card });
     }
     await audit(req, 'registry.created', e, { impl: e.impl, checksPassed: e.checks.every((c) => c.ok) });
     res.status(201).json(await view(e));
@@ -135,7 +161,7 @@ export function registryAdminRoutes(s: Services): Router {
   r.patch('/registry/:id', forKind(entryKind), async (req, res) => {
     const p = principalOf(req);
     const e = await load(req);
-    const b = parseBody(z.object({ description: z.string().trim().max(2000).nullable().optional(), sideEffect: z.enum(SIDE_EFFECTS).optional(), confirm: z.enum(['always', 'never']).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().optional(), label: z.enum(LABELS).optional(), inputSchema: schemaObj.optional(), outputSchema: schemaObj.nullable().optional(), definition: z.record(z.string(), z.unknown()).optional() }).strict(), req.body);
+    const b = parseBody(z.object({ description: z.string().trim().max(2000).nullable().optional(), sideEffect: z.enum(SIDE_EFFECTS).optional(), confirm: z.enum(['always', 'never']).optional(), ratePerHour: z.number().int().min(1).max(100_000).nullable().optional(), label: z.enum(LABELS).optional(), inputSchema: schemaObj.optional(), outputSchema: schemaObj.nullable().optional(), definition: z.record(z.string(), z.unknown()).optional(), ...discoveryFields }).strict(), req.body);
     if (b.definition && e.kind === 'tool' && e.impl !== 'http') throw badRequest('A tool\'s implementation is fixed; create a new entry.');
     if (e.kind === 'tool' && e.impl === 'http') {
       // B-8901: a draft HTTP tool's request may change; it is checked like a new one, and GET stays read.
@@ -154,7 +180,17 @@ export function registryAdminRoutes(s: Services): Router {
   });
 
   r.post('/registry/:id/submit', forKind(entryKind), async (req, res) => {
-    const e = await reg.submit(await load(req));
+    const loaded = await load(req);
+    // 1.7.0 (B-12304): an entry offered in chat needs a purpose, an example prompt and a category; the refusal names them.
+    if (loaded.status === 'draft') {
+      try {
+        await s.discovery.checkSubmit(loaded);
+      } catch (err) {
+        if (err instanceof HttpProblem) await audit(req, 'registry.submit.refused', loaded, { missing: (err.extensions as { missing?: string[] } | undefined)?.missing ?? [] });
+        throw err;
+      }
+    }
+    const e = await reg.submit(loaded);
     await audit(req, 'registry.submitted', e, { checks: e.checks.map((c) => ({ name: c.name, ok: c.ok })) });
     res.json(await view(e));
   });
@@ -170,6 +206,7 @@ export function registryAdminRoutes(s: Services): Router {
     if (e.owner_id) {
       await s.notifications.notify({ tenantId: p.tenantId, userIds: [e.owner_id], kind: 'registry', title: `${e.name} ${e.version} ${b.decision === 'approve' ? 'published' : 'returned to draft'}`, ...(b.note ? { body: b.note } : {}), route: 'registry' });
     }
+    if (b.decision === 'approve') await announce(next, [p.userId, e.owner_id]);
     res.json(await view(next));
   });
 
@@ -178,6 +215,8 @@ export function registryAdminRoutes(s: Services): Router {
     const b = parseBody(z.object({ scope: z.enum(['tenant', 'workspace']), workspaces: z.array(z.string().length(26)).max(200).default([]) }), req.body);
     const next = await reg.publishTo(e, b.scope, b.workspaces);
     await audit(req, 'registry.scope.changed', e, { scope: next.publish_scope, workspaces: next.publish_workspaces });
+    // 1.7.0 (B-12302): newly offered to a workspace: its members who have not had the notice get it.
+    await announce(next, [principalOf(req).userId]);
     res.json(await view(next));
   });
 

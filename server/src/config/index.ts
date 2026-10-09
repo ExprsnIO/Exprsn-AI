@@ -491,6 +491,12 @@ const base = z.object({
     THINKING_PLAN_MAX_STEPS: z.coerce.number().int().min(1).max(50).default(12),
     /** 1.7.0 (B-11704): how much of the question, answer, citations and tool results the reflection pass reads, in characters each. */
     THINKING_REFLECTION_MAX_CHARS: z.coerce.number().int().min(1000).max(200_000).default(12_000),
+    /** 1.7.0 (B-12303): the embedding profile composer suggestions rank the catalogue with; no chat model is called. */
+    DISCOVERY_EMBED_PROFILE: z.string().trim().min(1).max(63).default('embed'),
+    /** 1.7.0 (B-12303): the lowest similarity (0 to 1) between a draft and an entry's description and examples at which the entry is suggested. */
+    DISCOVERY_SUGGEST_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.3),
+    /** 1.7.0 (B-12304): the registry's submit asks for a purpose, at least one example prompt and a category for any entry offered in chat. */
+    REGISTRY_DISCOVERY_REQUIRED: bool.default(true),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and
