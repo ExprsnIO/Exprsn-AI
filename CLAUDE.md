@@ -276,6 +276,14 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   and `routes/scim.ts` (`/scim/v2`, outside `/api`, and the token routes under Identity, B-7201, B-7202);
   `vault/shares.ts` (`s.vaultShares`, B-4801: a KV secret shared as a policy grant); the MongoDB lease engine in
   `vault/db-engines.ts` (B-4802); quotes and visibility in `feed/service.ts` (B-4901).
+- 1.6.0 Sprint 38b: `redteam/` (`attacks.ts` the built-in attack catalogue and the deterministic judge; `service.ts`
+  `s.redteam`, B-7001, B-7002: suites per target, runs as the job `redteam.run`, agent and workflow attacks as child
+  runs with `caller_kind: redteam-run`, a flag per successful attack, the gate `gateProfile` beside the evaluation
+  gate and `gateAgent` on approval) behind `routes/admin/redteam.ts`; `agents/identity.ts` (`s.agentIdentities`,
+  B-7701: an agent's roles, ceiling and keys, `narrow` the principal a run acts as, `Principal.agent` and
+  `actor.agent`, keys with `api_keys.agent_id` resolved in `authenticate`) behind `routes/admin/agent-identities.ts`;
+  handoffs in `agents/service.ts` (B-7801: `handoffs` offered through `resolveCallees`, the run ends with the
+  handed-to run's answer, `agent_runs.handed_to`). `leakingReply` in `server/test/fake-ollama.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

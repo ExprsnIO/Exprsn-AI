@@ -291,6 +291,20 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   Open and Copy link buttons sit beside the post's opening words. `e2e/tests/messages.spec.ts` runs both checkers in
   Standard and Enhanced on the feed with an unlisted post opened by link.
 
+- **Profiles: Red team** (B-7001, B-7002, Sprint 38b): the panel under the Evaluations tab repeats the evaluations
+  panel's structure: a notice states the gate in words (refused until, allowed) with its actions as buttons, the
+  suites and run history are tables with a header row, every result is a pill with its word (passed, failed, error)
+  beside the count, and Results opens a drawer whose outcome column says resisted or succeeded, never colour alone;
+  the flag of a successful attack is a link named by the flag. The suite modal labels every field with a hint, the
+  categories are labelled checkboxes with their attack counts, and errors land in a notice inside the modal.
+- **Registry: Identity and Red team** (B-7701, B-7001, Sprint 38b): both are modals opened from buttons on the agent
+  card, each with a title naming the agent; roles, ceiling and the on/off switch are labelled fields, keys are a
+  table whose state is a pill with its word, Mint key opens an inline labelled form, and the minted key is announced
+  in a notice marked as shown once. The handoffs field in the agent form is labelled with a hint like the delegates
+  field. Run and gate changes close the modal and confirm in a toast.
+- **Runs: handoffs** (B-7801, Sprint 38b): a run that handed off says who answered in its page head and in the list
+  entry (an arrow to the specialist's name), and a notice explains the handoff with a button to the specialist's run.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

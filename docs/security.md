@@ -223,7 +223,36 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
   MCP calls; tokens never enter model context.
 
-## Deployment hardening
+## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
+
+- **An adversarial gate beside the evaluations (B-7001).** A profile's or an agent's publish gate could require
+  passing evaluations, but nothing asked whether the model gives up its system prompt, follows an injected
+  instruction or reaches for an outside address. A red-team suite does, with the built-in attack categories (the
+  Sprint 37a corpus cases with a canary handed over as documents, jailbreaks, exfiltration through tools,
+  system-prompt extraction) and the tenant's own cases; every attack is judged deterministically (a canary, the
+  attack's address in the answer or in a tool call's arguments, eight consecutive words of the system prompt), so a
+  run's verdict does not depend on a judge model. A profile with a gated suite is published only once its settings
+  hash has a passing run, and no evaluation override opens that gate; an agent version is approved only once its
+  schema hash has one. Attacks against agents run as child runs under the agent's own budgets and approvals: a run
+  that pauses on an approval is cancelled and judged on what it reached for, so a red-team run never approves a
+  write.
+- **Every successful attack is reviewed (B-7002).** An attack that succeeded is a flag in the review queue (checkpoint
+  `red-team`, high severity for extraction and exfiltration), labelled as the suite and sealed like any excerpt; a
+  reviewer confirms it into an eval case or dismisses it. The flag names the attack, the target and the run, never
+  the suite's own cases beyond the one that succeeded.
+- **Agents as principals (B-7701).** A run used to act with everything its owner may do. With an identity, the run
+  acts within the identity's roles (as credential scopes, decided by the scope step of the policy pipeline) and the
+  lower of the owner's clearance and the identity's ceiling, so an agent granted no knowledge access cannot search
+  it even when an admin runs it, and a run labelled above the ceiling fails before it thinks. Audit events carry the
+  agent beside the user. Keys minted for an identity authenticate as the agent on the owner's behalf within the
+  identity's grants, the owner's and the key's scopes; they are refused the moment the identity is turned off, are
+  narrowed when the identity's roles are, and are never listed among the owner's personal keys. An identity's roles
+  never widen their author: every permission they grant, the author holds.
+- **Handoffs end the run (B-7801).** A handoff reuses the delegation path (a child run in the chain, within the
+  remaining budget, under the delegate's ceiling), so nothing an agent could not delegate to can be handed to; the
+  handed-to run's answer becomes the run's answer and the reader sees who answered.
+
+
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
 the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, empty capability set, system-call
@@ -1258,6 +1287,21 @@ filter, private `/tmp`, only the state directory writable.
   is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
   step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
   confidential data from reaching it).
+- Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b, B-7001, B-7002, B-7701, B-7801). The built-in
+  attacks are a fixed catalogue in English (plus the corpus's other languages); a model that resists them may fall to
+  phrasings it has not seen, and a tenant that does not add cases of its own measures only the catalogue. The judge is
+  deterministic: an attack whose canary comes back paraphrased, or a leak of fewer than eight consecutive words of the
+  system prompt, counts as resisted, and a benign answer that quotes the canary back ("I will not say FREEBIRD-01")
+  counts as a success for the attack. Exfiltration is judged on the address the attack names; a model that reaches
+  for another address is not caught. Workflow targets are judged on their step outputs with the attack in the first
+  string field of the trigger input, and their runs are not cancelled when they pause; workflow red-team runs are
+  finalised when their target is next read (there is no hook back from the workflow service). A red-team run of an
+  agent is metered to the person who started it, like an evaluation. The red-team gate covers profiles and agents;
+  workflows have suites and runs but no gate on publishing. Agent identities narrow by permission, not by object: an
+  identity granted `knowledge:read` reads every knowledge base its owner may, and a tool's own side-effect approvals
+  still apply. A key minted for an identity carries its owner's roles narrowed by the identity, so demoting the
+  owner demotes the key, but a different owner minting a key for the same identity gets their own narrowing. A
+  handoff hands the task the model wrote, not the run's messages; the specialist does not see the conversation.
 - Image classification in Knowledge (1.6.0, Sprint 36c, B-8801 to B-8805). The thumbnail is the stored image served as
   is: nothing is resized on the server, so a large image is sent whole (the console scales it). HEIC images have no
   thumbnail, since browsers do not show them. Only JPEG and 8-bit RGB or grey Flate images are taken out of PDFs
