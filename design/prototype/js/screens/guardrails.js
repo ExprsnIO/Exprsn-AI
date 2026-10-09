@@ -89,11 +89,31 @@
   const fpFor = (thr) => Math.max(0, Math.round((22 - (thr - 0.78) * 200) * 10) / 10);
   const wouldFor = (thr) => Math.max(0, Math.round(311 - (thr - 0.78) * 2000));
 
+  // 1.7.0 (B-9601): a rule drafted from a description. The prototype stands in for the profile's model: personal data
+  // becomes a PII detector, credentials a secrets detector, quoted words a pattern; hold, block, mask, flag and warn
+  // pick the action. The draft is always shadow; saving adds it to the draft version of the current profile.
+  const describeDraft = (text, cp) => {
+    const t = String(text || '').toLowerCase();
+    const action = /\b(hold|approv)/.test(t) ? 'require-approval' : /\b(block|refuse|withhold|stop)/.test(t) ? 'block' : /\b(redact|mask)/.test(t) ? 'redact' : /\bflag/.test(t) ? 'flag' : 'warn';
+    let mechanism, name, type, detail;
+    if (/card number|credit card|payment card/.test(t)) { mechanism = 'detector pii.payment_card'; name = 'Card numbers'; type = 'PII'; detail = 'detectors: [payment_card]\n  threshold: 0.8'; }
+    else if (/\biban|bank account/.test(t)) { mechanism = 'detector pii.iban'; name = 'Bank accounts'; type = 'PII'; detail = 'detectors: [iban]\n  threshold: 0.8'; }
+    else if (/e-?mail/.test(t)) { mechanism = 'detector pii.email'; name = 'Email addresses'; type = 'PII'; detail = 'detectors: [email]\n  threshold: 0.8'; }
+    else if (/(api|access) key|password|credential|secret|private key|token/.test(t)) { mechanism = 'detector secrets.*'; name = 'Credentials'; type = 'pattern'; detail = 'detectors: ["*"]\n  threshold: 0.6'; }
+    else { const q = /"([^"]+)"/.exec(String(text || '')); const words = q ? q[1] : String(text || '').trim().split(/\s+/).slice(-2).join(' '); mechanism = 're2 pattern'; name = 'Mentions of ' + words; type = 'pattern'; detail = "pattern: '" + words.replace(/'/g, "''") + "'"; }
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const yaml = 'id: ' + id + '\nname: ' + name + '\ncheckpoint: ' + cp + '\ntype: ' + type.toLowerCase() + '\nmechanism:\n  kind: ' + (type === 'PII' ? 'pii' : mechanism.indexOf('secrets') >= 0 ? 'secrets' : 'pattern') + '\n  ' + detail + '\naction: ' + action + '\nstage: shadow\nonError: closed\nseverity: ' + (action === 'block' ? 'high' : 'medium') + '\nenabled: true\ndescription: ' + String(text || '').trim();
+    return { id, name, cp, type, action, mechanism, yaml, description: String(text || '').trim(), diff: yaml.split('\n').map((l, i) => (i === 0 ? '+- ' : '+  ') + l).join('\n') };
+  };
+  const ruleFromDraft = (d) => ({ id: d.id, name: d.name, cp: d.cp, type: d.type, action: d.action, stage: 'shadow', triggers: '0.0%', fp: '0.0%', latency: '0.4 ms', onError: 'closed', mechanism: d.mechanism, threshold: d.type === 'PII' ? 0.8 : undefined, drafted: true, description: d.description });
+  const CARD_DESCRIPTION = 'hold answers that quote a card number';
+
   App.register({
     id: 'guardrails', title: 'Guardrails', summary: 'Profiles, rules, form and YAML editor, live test, shadow replay, approvals', section: 'admin',
     crumb: (st) => { const p = PROFILES.find((x) => x.id === st.profile) || PROFILES[0]; return ['Admin', 'Guardrails', p.name + ' v' + p.version]; },
     commands: [
       { label: 'Test a guardrail rule', sub: 'Guardrails', run(app) { const s = app.stateFor('guardrails'); s.focusTest = true; app.render(); } },
+      { label: 'Describe a rule', sub: 'Guardrails', run(app) { app.render(); setTimeout(() => { const b = document.querySelector('[data-describe]'); if (b) b.click(); }, 50); } },
       { label: 'Promote a rule to enforce', sub: 'Guardrails', run(app) { const s = app.stateFor('guardrails'); s.cp = 'model-output'; s.rule = 'no-legal-advice'; app.render(); setTimeout(() => { const b = document.querySelector('#main [data-promote]'); if (b) b.click(); }, 80); } }
     ],
     states: [
@@ -101,6 +121,7 @@
       { title: 'Baseline locked', tone: 'warn', text: 'A tenant admin cannot relax a platform baseline rule. It shows locked, with the owner and a request-change link.', apply(ctx) { const st = ctx.state; st.profile = 'finance-v12'; st.cp = 'model-output'; st.rule = 'safety'; st.view = 'form'; st.lockTried = true; ctx.rerender(); } },
       { title: 'Second approver', tone: 'info', text: 'Changes to the platform baseline wait for a second guardrail admin.', apply(ctx) { const st = ctx.state; st.profile = 'platform-v4'; st.cp = 'model-output'; st.rule = 'secrets-out'; st.pendingApproval = { rule: 'secrets-out', by: 'Mara Okafor', at: '19 Sep 14:20', change: 'threshold entropy 3.8 to 4.2' }; ctx.rerender(); } },
       { title: 'Poisoned page blocked', tone: 'danger', text: 'In block mode a crawled page that tries to instruct the model is left out of the context and counted; in annotate mode it reaches the model marked, with a warning.', apply(ctx) { const st = ctx.state; st.cp = 'untrusted-content'; st.rule = 'injection-untrusted'; st.injMode = 'block'; st.injBlocked = true; ctx.rerender(); } },
+      { title: 'Rule drafted from a description', tone: 'info', text: '"Hold answers that quote a card number" becomes a PII rule on model output, saved in shadow: it records what it would hold and changes nothing until it is replayed, promoted and published with a second approver.', apply(ctx) { const st = ctx.state; st.profile = 'finance-v13'; st.cp = 'model-output'; const d = describeDraft(CARD_DESCRIPTION, 'model-output'); if (!RULES.some((r) => r.id === d.id)) RULES.push(ruleFromDraft(d)); st.rule = d.id; st.draftNote = { id: d.id, text: CARD_DESCRIPTION }; ctx.rerender(); } },
       { title: 'Fail closed', tone: 'danger', text: 'While the guard model is down, confidential and tool-calling turns are held. Each fail-open decision elsewhere is flagged.', apply(ctx) { const st = ctx.state; st.guardDown = true; st.cp = 'model-output'; st.rule = 'safety'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -174,7 +195,8 @@
         + '<div class="gr-list">' + CHECKPOINTS.map((c) => { const n = RULES.filter((r) => r.cp === c.id && (profile.id !== 'platform-v4' || r.baseline)).length; return UI.listItem(esc(c.label), n + ' rule' + (n === 1 ? '' : 's'), { active: c.id === st.cp, attrs: 'data-cp="' + c.id + '"' }); }).join('') + '</div>'
         + '<div class="divider"></div>' + UI.btn('Add rule', { icon: 'plus', size: 'sm', cls: 'block', attrs: 'data-addrule' + (profile.locked ? ' disabled' : '') }) + '</div>'
         + '<div class="page">'
-        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('View diff', { attrs: 'data-diff' }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || stage === 'enforce' }))
+        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('Describe a rule', { attrs: 'data-describe' + (profile.locked ? ' disabled' : '') }) + UI.btn('View diff', { attrs: 'data-diff' }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || stage === 'enforce' }))
+        + (st.draftNote && rule && rule.id === st.draftNote.id ? UI.notice('<b>Drafted from a description</b> ("' + esc(st.draftNote.text) + '") and saved to ' + esc(profile.name) + ' v' + (profile.version + (profile.status === 'draft' ? 0 : 1)) + ' in shadow. It records what it would ' + esc(rule.action === 'require-approval' ? 'hold' : rule.action) + ' and changes nothing. Replay it over recent traffic below, then promote it; the version publishes under the usual dual control.', 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-draftok' })) : '')
         + (st.guardDown ? UI.notice('<b>Guard model down, failing closed.</b> llama-guard3:8b on gpu-small-1 has not answered since 14:02. Confidential and tool-calling turns are held; 12 turns elsewhere fell open under <span class="mono">onError: allow</span> and were flagged.', 'danger', '<a href="#" data-goflags>Flags</a> <a href="#" data-gopools>Pools</a>') : '')
         + reviewbar
         + '<div class="hstack"><div class="eyebrow">' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label) + ' checkpoint</div><span class="muted" style="font-size:12px">' + UI.pill(profile.status === 'published' ? 'v' + profile.version + ' published' : 'v' + profile.version + ' draft') + '</span><span class="right muted" style="font-size:12px">Precedence: platform baseline, tenant, workspace, agent. The most restrictive result wins.</span></div>'
@@ -213,6 +235,31 @@
       ctx.on('click', '[data-reqchange]', (e) => { e.preventDefault(); ctx.modal({ title: 'Request a change to the platform baseline', body: UI.field('Rule', UI.input(rule.name, { readonly: true })) + UI.field('Proposed change', UI.textarea('', { placeholder: 'What should change, and why. The owning admins see this with your workspace context.', rows: 3 })) + UI.notice('Platform guardrail admins own this rule. Tenant profiles can only add stricter rules on top of it.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send request', { kind: 'primary', attrs: 'data-sendreq' }), onMount(m) { m.querySelector('[data-sendreq]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Request sent to Platform guardrail admins.', 'ok'); }); } }); });
       ctx.on('click', '[data-approve]', () => { st.pendingApproval = null; ctx.rerender(); ctx.toast('Approved. Platform baseline v5 is published to every tenant.', 'ok'); });
       ctx.on('click', '[data-withdraw]', () => { st.pendingApproval = null; ctx.rerender(); ctx.toast('Change withdrawn. Platform baseline stays at v4.'); });
+      ctx.on('click', '[data-draftok]', () => { st.draftNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-describe]', () => ctx.modal({ cls: 'wide', title: 'Describe a rule for ' + esc(profile.name),
+        body: '<div class="formgrid" style="--cols:2">' + UI.field('Describe what the rule should do', UI.textarea('', { rows: 3, placeholder: 'for example: ' + CARD_DESCRIPTION, attrs: 'data-desc aria-label="Description"' }), 'The description passes the user-input guardrail, then the profile drafts one rule in the GuardrailRule schema.') + UI.field('Profile', UI.select(['general', 'analyst'], 'general', 'data-dprofile aria-label="Profile"'), 'A published profile on this tenant. The call is metered to you.') + UI.field('Checkpoint', UI.select(CHECKPOINTS.map((c) => ({ value: c.id, label: c.label })), st.cp, 'data-dcp aria-label="Checkpoint"')) + '</div>' + '<div data-result></div>',
+        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-draft' }) + UI.btn('Save in shadow', { kind: 'primary', attrs: 'data-savedraft disabled' }),
+        onMount(m) {
+          let d = null;
+          m.querySelector('[data-draft]').addEventListener('click', () => {
+            const text = m.querySelector('[data-desc]').value.trim();
+            if (text.length < 3) { ctx.toast('Describe the rule first.', 'warn'); return; }
+            d = describeDraft(text, m.querySelector('[data-dcp]').value);
+            const taken = RULES.some((r) => r.id === d.id);
+            m.querySelector('[data-result]').innerHTML = '<div class="eyebrow" style="margin-top:10px">Draft</div>' + UI.code(d.yaml, 'yaml')
+              + '<div class="eyebrow">Diff against ' + esc(profile.name) + ' v' + profile.version + '</div>' + UI.code(d.diff, 'diff')
+              + (taken ? UI.notice('A rule named ' + esc(d.id) + ' exists in this profile; the draft is saved as ' + esc(d.id) + '-2.', 'warn') : UI.notice('Validated against the GuardrailRule schema; the pattern compiles under RE2. Saved in <b>shadow</b>: it records findings and blocks nothing until it is promoted and the version is published.', 'info'));
+            if (taken) d.id = d.id + '-2';
+            m.querySelector('[data-savedraft]').disabled = false;
+          });
+          m.querySelector('[data-savedraft]').addEventListener('click', () => {
+            if (!d) return;
+            RULES.push(ruleFromDraft(d));
+            st.cp = d.cp; st.rule = d.id; st.draftNote = { id: d.id, text: d.description };
+            App.closeOverlay(); ctx.rerender();
+            ctx.toast(esc(d.name) + ' saved to ' + esc(profile.name) + ' v' + (profile.version + (profile.status === 'draft' ? 0 : 1)) + ' in shadow. Audit entry written.', 'ok', 5000);
+          });
+        } }));
       ctx.on('click', '[data-addrule]', () => ctx.modal({ title: 'Add rule to ' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label), body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example flag-customer-ids-on-transfer' })) + UI.field('Type', UI.select(['pattern', 'PII', 'topic policy', 'safety', 'prompt injection', 'grounding', 'budget'], 'PII')) + UI.field('Action', UI.select(['allow', 'log', 'warn', 'redact', 'flag', 'block', 'require-approval', 'reroute'], 'flag')) + UI.field('Severity', UI.select(['low', 'medium', 'high'], 'medium')) + '</div>' + UI.notice('New rules start as drafts in shadow mode. They enforce only after a test run and a replay.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { App.closeOverlay(); const id = 'new-' + Date.now(); RULES.push({ id, name: m.querySelector('input').value || 'New rule', cp: st.cp, type: m.querySelectorAll('select')[0].value, action: m.querySelectorAll('select')[1].value, stage: 'shadow', triggers: '0.0%', fp: '0.0%', latency: '0 ms', onError: 'allow', mechanism: 'detector pii.*', threshold: '0.80' }); st.rule = id; st.profile = 'finance-v13'; ctx.rerender(); ctx.toast('Draft rule created in Finance baseline v13. It runs in shadow.', 'ok'); }); } }));
       ctx.on('click', '[data-injmode]', async (e, t) => {
         const to = t.dataset.injmode;
