@@ -365,7 +365,7 @@
 
   function renderEntities(ctx, app, ent, design) {
     const st = ctx.state;
-    const list = '<div class="hstack wrap gap6">' + (app.entities.length ? UI.seg(app.entities.map((e) => ({ id: e.id, label: e.title || e.name })), ent ? ent.id : '', 'data-entityseg') : '') + (design ? UI.btn('New entity', { size: 'sm', icon: 'plus', attrs: 'data-newentity' }) + UI.btn('Draft with a model', { size: 'sm', icon: 'brain', attrs: 'data-draft' }) : '') + '</div>';
+    const list = '<div class="hstack wrap gap6">' + (app.entities.length ? UI.seg(app.entities.map((e) => ({ id: e.id, label: e.title || e.name })), ent ? ent.id : '', 'data-entityseg') : '') + (design ? UI.btn('New entity', { size: 'sm', icon: 'plus', attrs: 'data-newentity' }) + UI.btn('Draft the data model', { size: 'sm', icon: 'brain', attrs: 'data-draft' }) : '') + '</div>';
     ctx.on('click', '[data-entityseg] [data-seg]', (e, t) => { st.entity = t.dataset.seg; st.smProblem = null; st.record = null; st.filters = []; st.stateFilter = 'all'; resetPaging(st); st.selected = {}; ctx.rerender(); });
     ctx.on('click', '[data-newentity]', () => openEntityModal(ctx, app, null));
     ctx.on('click', '[data-draft]', () => openDraftModal(ctx, app));
@@ -436,7 +436,7 @@
       });
       ctx.on('click', '[data-deltrans]', (e, t) => { const def = clone(ent.definition); def.states.transitions.splice(+t.dataset.deltrans, 1); smSave(def, 'Transition removed.'); });
     }
-    return list + fieldsPanel + smPanel;
+    return list + fieldsPanel + smPanel + (design ? renderAiFills(ctx, app, ent) + renderSource(ctx, app, ent) : '');
   }
 
   function openEntityModal(ctx, app, ent) {
@@ -510,7 +510,7 @@
           const ex = tb.querySelector('[data-ff="expression"]');
           if (ex) { const out = tb.querySelector('[data-fcheck]'); const run = () => { const p = checkFormula(ex.value, fields); out.innerHTML = p ? '<span style="color:var(--danger-fg)">' + esc(p) + '</span>' : '<span style="color:var(--ok-fg)">Looks right; the server checks it on save.</span>'; }; ex.addEventListener('input', run); run(); }
           const pr = tb.querySelector('[data-ff="prompt"]');
-          if (pr) { const out = tb.querySelector('[data-pcheck]'); const run = () => { const ph = (pr.value.match(/\{\{\s*([a-z0-9_]+)\s*\}\}/g) || []).map((s) => s.replace(/[{}\s]/g, '')); const bad = ph.filter((n) => !fields.some((x) => x.name === n && !computed(x))); out.innerHTML = bad.length ? '<span style="color:var(--danger-fg)">Unknown placeholder ' + esc(bad.join(', ')) + '</span>' : ph.length ? '<span style="color:var(--ok-fg)">Reads ' + esc(ph.join(', ')) + '.</span>' : 'No placeholders yet.'; }; pr.addEventListener('input', run); run(); }
+          if (pr) { const out = tb.querySelector('[data-pcheck]'); const run = () => { const ph = (pr.value.match(/\{\{\s*([^}]+?)\s*\}\}/g) || []).map((s) => s.replace(/^\{\{\s*|\s*\}\}$/g, '')); const plain = fields.filter((x) => !computed(x)); const bad = ph.filter((n) => !(plain.some((x) => x.name === n) || !checkFormula(n, plain))); out.innerHTML = bad.length ? '<span style="color:var(--danger-fg)">Unknown placeholder ' + esc(bad.join(', ')) + '</span>' : ph.length ? '<span style="color:var(--ok-fg)">Reads ' + esc(ph.join(', ')) + '.</span>' : 'No placeholders yet.'; }; pr.addEventListener('input', run); run(); }
         };
         wire();
         m.querySelector('[data-ff="type"]').addEventListener('change', (e) => { tb.innerHTML = typeBody(e.target.value, {}); wire(); });
@@ -542,30 +542,134 @@
   }
 
   async function openDraftModal(ctx, app) {
+    // 1.6.0 (B-8301): a description becomes a draft of the app's whole data model, shown as a diff to accept or edit.
     const st = ctx.state;
     const profiles = await profilesList(ctx);
-    modal(ctx, { title: 'Draft an entity with a model', cls: 'wide', body: UI.notice('A local model, through the gateway and the named published profile, drafts a definition from your description. The draft is validated like a saved one and never saved on its own. Your description passes the user-input checkpoint first.', 'info')
-      + '<div class="formgrid">' + UI.field('Profile', profiles.length ? UI.select(profiles, profiles[0], 'data-dr-profile') : UI.input('', { attrs: 'data-dr-profile', placeholder: 'published profile name' })) + UI.field('Label', UI.select(LABELS.filter((l) => rank(l) <= rank(app.label) && rank(l) <= rank(clearance())), 'internal', 'data-dr-label')) + '</div>'
-      + UI.field('Describe it', UI.textarea('', { rows: 3, attrs: 'data-dr-prompt', placeholder: 'An insurance certificate per vendor: insurer, policy number (unique), cover amount in EUR, valid from and to.' })) + '<div data-dr-out aria-live="polite"></div>',
-    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-dr-go' }) + UI.btn('Save as entity', { attrs: 'data-dr-save', disabled: true }),
+    modal(ctx, { title: 'Draft the data model with a model', cls: 'wide', body: UI.notice('A local model, through the gateway and the named published profile, drafts entities, fields, relations, formulas, state machines and record triggers from your description. The draft is validated like a saved entity, compared with what the app already has, and never saved on its own: accept the diff, or edit the JSON first. Audited app.model.drafted.', 'info')
+      + '<div class="formgrid">' + UI.field('Profile', profiles.length ? UI.select(profiles, profiles[0], 'data-dr-profile') : UI.input('', { attrs: 'data-dr-profile', placeholder: 'published profile name' })) + UI.field('Label of the draft', UI.select(LABELS.filter((l) => rank(l) <= rank(clearance())), 'internal', 'data-dr-label')) + '</div>'
+      + UI.field('Describe the app', UI.textarea('', { rows: 3, attrs: 'data-dr-prompt', placeholder: 'A leave request app: employees submit requests for a date range with a reason; a manager approves or rejects them.' })) + '<div data-dr-out aria-live="polite"></div>',
+    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-dr-go' }) + UI.btn('Accept the diff', { attrs: 'data-dr-save', disabled: true }),
     onMount(m) {
       let draft = null;
       const out = m.querySelector('[data-dr-out]'); const save = m.querySelector('[data-dr-save]');
       m.querySelector('[data-dr-go]').addEventListener('click', async () => {
         const profile = m.querySelector('[data-dr-profile]').value.trim(); const prompt = m.querySelector('[data-dr-prompt]').value.trim();
-        if (!profile || prompt.length < 3) { out.innerHTML = UI.notice('Pick a profile and describe the entity.', 'warn'); return; }
+        if (!profile || prompt.length < 3) { out.innerHTML = UI.notice('Pick a profile and describe the app.', 'warn'); return; }
         out.innerHTML = '<div class="muted" style="font-size:12px">Asking ' + esc(profile) + '…</div>'; save.disabled = true;
         try {
-          const r = await App.post('/api/apps/drafts', { kind: 'entity', prompt, profile, label: m.querySelector('[data-dr-label]').value });
-          draft = r.valid ? r.draft : null;
-          out.innerHTML = UI.code(JSON.stringify(r.draft, null, 2), 'json') + (r.valid ? UI.notice('<b>Draft is valid.</b> Review it, then save it as an entity of ' + esc(app.title || app.name) + '.', 'ok') : UI.notice('<b>Draft is not valid.</b> ' + esc((r.problems || []).join('; ')), 'warn'));
-          save.disabled = !r.valid;
+          const r = await App.post(A(app.id) + '/model/draft', { prompt, profile, label: m.querySelector('[data-dr-label]').value });
+          draft = r.draft;
+          const rows = r.diff.map((d) => [ '<span class="mono">' + esc(d.entity) + '</span>', UI.pill(d.change, d.change === 'new' ? 'ok' : d.change === 'changed' ? 'accent' : 'outline'), d.addedFields.map((f) => UI.pill('+ ' + f, 'ok')).join(' ') || '<span class="muted">none</span>', d.changedFields.map((f) => UI.pill('~ ' + f, 'warn')).join(' ') || '<span class="muted">none</span>', d.removedFields.length ? d.removedFields.map((f) => UI.pill(f, 'outline')).join(' ') + ' <span class="muted">kept</span>' : '<span class="muted">none</span>', d.states ? UI.pill('state machine ' + d.states, 'accent') : '<span class="muted">none</span>', d.problems.length ? '<span style="color:var(--danger-fg)">' + esc(d.problems.join('; ')) + '</span>' : '' ]);
+          const trig = (r.triggers || []).map((t) => '<li><span class="mono">' + esc(t.entity) + '</span> on ' + esc(t.events.join(', ')) + ' → workflow <span class="mono">' + esc(t.workflow) + '</span> ' + (t.ok ? UI.pill('exists', 'ok') : UI.pill(t.problem || 'skipped', 'warn')) + '</li>').join('');
+          out.innerHTML = (rows.length ? UI.table(['Entity', 'Change', 'Fields added', 'Fields changed', 'Fields the draft omits', 'States', 'Problems'], rows, { clickable: false, minWidth: '0' }) : UI.notice('The model drafted no entity.', 'warn'))
+            + (trig ? '<p class="fg2" style="margin:8px 0 0">Triggers</p><ul class="fg2" style="margin:4px 0 0 18px">' + trig + '</ul>' : '')
+            + '<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Draft JSON (edit before accepting)</summary>' + UI.textarea(JSON.stringify(draft, null, 2), { rows: 10, attrs: 'data-dr-json spellcheck="false"' }) + '</details>'
+            + (r.valid ? UI.notice('<b>Draft is valid.</b> Accepting creates the new entities (after what they reference), adds the drafted fields and state machines to existing ones (nothing is removed) and creates the triggers whose workflow exists, in one request. Audited <span class="mono">app.model.applied</span>.', 'ok') : UI.notice('<b>Draft is not valid.</b> ' + esc(r.problems.join('; ')) + ' Edit the JSON and accept, or draft again.', 'warn'));
+          save.disabled = !draft || !draft.entities || !draft.entities.length;
         } catch (err) { draft = null; out.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); }
       });
       save.addEventListener('click', async () => {
         if (!draft) return;
-        try { const e = await App.post(A(app.id) + '/entities', Object.assign({ name: draft.name, definition: draft.definition }, draft.title ? { title: draft.title } : {})); st.entity = e.id; st.tab = 'entities'; afterChange(ctx, {}); ctx.toast('Entity ' + esc(draft.title || draft.name) + ' created from the draft. Audited app.draft.created and app.entity.created.', 'ok', 4500); }
-        catch (err) { out.insertAdjacentHTML('beforeend', UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger')); }
+        const raw = m.querySelector('[data-dr-json]');
+        if (raw) { try { draft = JSON.parse(raw.value); } catch (x) { out.insertAdjacentHTML('beforeend', UI.notice('The edited draft is not JSON.', 'danger')); return; } }
+        try {
+          const r = await App.post(A(app.id) + '/model/apply', { entities: draft.entities, triggers: draft.triggers || [] });
+          st.entity = null; st.tab = 'entities'; afterChange(ctx, {});
+          ctx.toast('Model applied: ' + r.created.length + ' created, ' + r.updated.length + ' updated' + (r.triggers.length ? ', ' + r.triggers.filter((t) => t.created).length + ' of ' + r.triggers.length + ' triggers' : '') + '. Audited app.model.applied.', 'ok', 5000);
+        } catch (err) { out.insertAdjacentHTML('beforeend', UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)) + (err.problem && err.problem.problems ? ' ' + esc(err.problem.problems.join('; ')) : ''), 'danger')); }
+      });
+    } });
+  }
+
+  // ---------- AI fills over every row (1.6.0, B-8402) ----------
+  function renderAiFills(ctx, app, ent) {
+    const st = ctx.state;
+    const aiFields = fieldsOf(ent).filter((f) => f.type === 'ai');
+    if (!aiFields.length) return '';
+    st.fills = st.fills || {}; st.fillEstimate = st.fillEstimate || {};
+    const key = app.id + '/' + ent.id;
+    const cur = st.fills[key];
+    if (!cur || cur.stale) {
+      if (!st.fillsBusy) { st.fillsBusy = true; App.get(E(app.id, ent.id) + '/ai/fills').then((d) => { st.fills[key] = { fills: d.fills, at: Date.now() }; }).catch(() => { st.fills[key] = { fills: [], at: Date.now() }; }).finally(() => { st.fillsBusy = false; if (App.state.route === 'apps') ctx.rerender(); }); }
+    }
+    const fills = cur ? cur.fills : [];
+    const live = fills.some((x) => x.state === 'running' || x.state === 'queued');
+    if (live && !st.fillTimer) st.fillTimer = setTimeout(() => { st.fillTimer = null; if (st.fills[key]) st.fills[key].stale = true; if (App.state.route === 'apps') ctx.rerender(); }, 1500);
+    const est = st.fillEstimate[key];
+    const rowsF = aiFields.map((f) => [ '<span class="mono">' + esc(f.name) + '</span>', esc(f.profile), '<span class="mono" style="font-size:12px">' + esc((f.prompt || '').slice(0, 80)) + ((f.prompt || '').length > 80 ? '…' : '') + '</span>', UI.btn('Estimate', { size: 'sm', attrs: 'data-fill-est="' + esc(f.name) + '"' }) + ' ' + UI.btn('Fill empty', { size: 'sm', kind: 'primary', attrs: 'data-fill-go="' + esc(f.name) + '" data-scope="empty"' }) + ' ' + UI.btn('Refresh all', { size: 'sm', attrs: 'data-fill-go="' + esc(f.name) + '" data-scope="all"' }) ]);
+    const estHtml = est ? (est.busy ? '<div class="muted" style="font-size:12px">Estimating…</div>' : est.error ? UI.notice(esc(est.error), 'danger') : UI.notice('<b>Estimate for ' + esc(est.field) + ' (' + esc(est.scope) + '):</b> ' + est.records + (est.capped ? '+' : '') + ' records, about ' + Number(est.promptTokens).toLocaleString() + ' prompt and ' + Number(est.outputTokens).toLocaleString() + ' output tokens' + (est.model ? ' on ' + esc(est.model) : '') + (est.cost != null ? ', about ' + Number(est.cost).toFixed(2) + ' ' + esc(est.currency) + ' at the tenant\'s price' : ', no price set for the model') + '. Each record passes the profile\'s guardrails and the tenant quota, and is metered.', 'info')) : '';
+    const when = (t) => (t ? new Date(t).toLocaleString() : '');
+    const fillRows = fills.map((x) => { const pct = x.total ? Math.round(((x.done + x.failed + x.skipped) * 100) / x.total) : 100; return { attrs: 'data-fill="' + esc(x.id) + '"', cells: [ '<span class="mono">' + esc(x.field) + '</span>', esc(x.scope), UI.pill(x.state, x.state === 'succeeded' ? 'ok' : x.state === 'running' || x.state === 'queued' ? 'accent' : x.state === 'cancelled' ? 'outline' : 'danger'), x.state === 'running' || x.state === 'queued' ? UI.meter('', (x.done + x.failed) + ' of ' + x.total, pct, 'accent') : (x.done + ' done, ' + x.failed + ' failed' + (x.skipped ? ', ' + x.skipped + ' skipped' : '')), Number(x.promptTokens).toLocaleString() + ' / ' + Number(x.outputTokens).toLocaleString(), esc(when(x.finishedAt || x.createdAt)), (x.state === 'running' || x.state === 'queued') ? UI.btn('Cancel', { size: 'sm', kind: 'danger', attrs: 'data-fill-cancel="' + esc(x.id) + '"' }) : (x.error ? '<span class="muted" style="font-size:12px">' + esc(x.error) + '</span>' : '') ] }; });
+    const html = UI.panel('AI fills over every row', UI.notice('A fill or refresh of an AI field over every record runs as one job (<span class="mono">apps.ai-fill-all</span>): an estimate first, progress as it runs, a cancel that stops it between records. Prompts may read fields and formulas, <span class="mono">{{upper(name)}}</span>; an edit regenerates only the fields that read what changed, once per quiet window.', 'info')
+      + UI.table(['AI field', 'Profile', 'Prompt', { label: '', right: true }], rowsF, { clickable: false, minWidth: '0' }) + estHtml
+      + UI.table(['Field', 'Scope', 'State', 'Progress', 'Tokens in / out', 'When', { label: '', right: true }], fillRows, { clickable: false, minWidth: '860px', emptyTitle: cur ? 'No fills yet' : 'Loading fills…', emptyText: cur ? 'Estimate, then fill the empty values or refresh them all.' : '' }));
+    const reload = () => { if (st.fills[key]) st.fills[key].stale = true; ctx.rerender(); };
+    ctx.on('click', '[data-fill-est]', async (e, t) => { const field = t.dataset.fillEst; st.fillEstimate[key] = { busy: true }; ctx.rerender(); try { const r = await App.post(E(app.id, ent.id) + '/ai/estimate', { field, scope: 'empty' }); st.fillEstimate[key] = Object.assign({ field, scope: 'empty' }, r); } catch (err) { st.fillEstimate[key] = { error: detailOf(err) }; } ctx.rerender(); });
+    ctx.on('click', '[data-fill-go]', async (e, t) => {
+      const field = t.dataset.fillGo; const scope = t.dataset.scope;
+      try {
+        const est = await App.post(E(app.id, ent.id) + '/ai/estimate', { field, scope });
+        const ok = await ctx.confirm({ title: (scope === 'all' ? 'Refresh ' : 'Fill ') + field + ' for every record', tag: 'model spend', body: '<p class="fg2" style="margin:0">' + est.records + (est.capped ? '+' : '') + ' records, about ' + Number(est.promptTokens).toLocaleString() + ' prompt and ' + Number(est.outputTokens).toLocaleString() + ' output tokens' + (est.cost != null ? ', about ' + Number(est.cost).toFixed(2) + ' ' + esc(est.currency) : '') + '. Runs as one job; cancel it from this panel.</p>' });
+        if (!ok) return;
+        const r = await App.post(E(app.id, ent.id) + '/ai/fills', { field, scope });
+        ctx.toast('Fill ' + esc(r.id.slice(-6)) + ' started over ' + r.total + ' records (job apps.ai-fill-all). Audited app.ai.fill.started.', 'ok', 4500);
+        reload();
+      } catch (err) { App.fail(err, 'Could not start the fill'); }
+    });
+    ctx.on('click', '[data-fill-cancel]', async (e, t) => { try { await App.post(E(app.id, ent.id) + '/ai/fills/' + enc(t.dataset.fillCancel) + '/cancel'); ctx.toast('Fill cancelled between records; filled values stay. Audited app.ai.fill.cancelled.', 'ok'); } catch (err) { App.fail(err, 'Could not cancel the fill'); } reload(); });
+    return html;
+  }
+
+  // ---------- outside tables (1.6.0, B-8501) ----------
+  function renderSource(ctx, app, ent) {
+    const st = ctx.state;
+    const src = (app.sources || []).find((x) => x.entity === ent.name) || null;
+    const canAttach = App.can('connections:manage');
+    if (!src) {
+      const html = UI.panel('Outside table', UI.empty('Not backed by an outside table', 'Attach a table of a PostgreSQL or MySQL data connection: a pull brings its rows in as records (keyed by the table\'s key column), and with writes on an app edit reaches the table at once.' + (canAttach ? '' : ' Attaching needs connections:manage as well as apps:design.'), canAttach ? UI.btn('Attach an outside table', { attrs: 'data-src-attach' }) : ''));
+      ctx.on('click', '[data-src-attach]', () => openSourceModal(ctx, app, ent, null));
+      return html;
+    }
+    const lp = src.lastPull;
+    const when = (t) => (t ? new Date(t).toLocaleString() : '');
+    const kv = UI.kv([
+      ['Connection', '<span class="mono">' + esc(src.connection || src.connectionId) + '</span> <span class="muted">' + esc(src.engine || '') + '</span>'], ['Table', '<span class="mono">' + esc(src.object) + '</span>'],
+      ['Key', '<span class="mono">' + esc(src.keyColumn) + '</span> → ' + (src.keyField ? 'field <span class="mono">' + esc(src.keyField) + '</span>' : 'the record id')], ['State column', src.stateColumn ? '<span class="mono">' + esc(src.stateColumn) + '</span>' : '<span class="muted">none</span>'],
+      ['Writes', src.writes ? UI.pill('through to the table at once', 'ok') : UI.pill('off: records are read-only here', 'outline')], ['Pull', src.pullMinutes ? 'every ' + src.pullMinutes + ' min' + (src.nextPullAt ? ', next ' + esc(when(src.nextPullAt)) : '') : 'on demand'],
+      ['Rows gone outside', src.deleteMissing ? 'remove their records' : 'keep their records'], ['Last pull', lp ? esc(when(src.lastPullAt)) + ': ' + lp.rows + ' rows, ' + lp.created + ' created, ' + lp.updated + ' updated, ' + lp.deleted + ' deleted, ' + lp.unchanged + ' unchanged' + (lp.failed ? ', <b>' + lp.failed + ' failed</b>' : '') + ' in ' + lp.ms + ' ms' + (lp.error ? ' <span style="color:var(--danger-fg)">' + esc(lp.error) + '</span>' : '') : '<span class="muted">never</span>']
+    ], 2);
+    const problems = lp && lp.problems && lp.problems.length ? UI.notice('<b>Rows the last pull could not write:</b><ul style="margin:4px 0 0 18px">' + lp.problems.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>', 'warn') : '';
+    const html = UI.panel('Outside table', UI.notice('Records of this entity are pulled from the table (unmasked, through the connection\'s allow-list) and sealed like any record; searches, policies and labels apply as usual. Audited app.entity.source.pulled per pull.', 'info') + kv + problems
+      + '<div class="hstack gap6 wrap">' + UI.btn('Pull now', { kind: 'primary', size: 'sm', attrs: 'data-src-pull' }) + (canAttach ? UI.btn('Edit', { size: 'sm', attrs: 'data-src-edit' }) + UI.btn('Detach', { size: 'sm', kind: 'ghost', attrs: 'data-src-detach' }) : '') + '</div>');
+    ctx.on('click', '[data-src-pull]', async () => { try { await App.post(E(app.id, ent.id) + '/source/pull'); ctx.toast('Pull queued as job apps.source-pull; the result shows here when it ends.', 'ok'); setTimeout(() => { st.detailKey = st.busyDetail = null; st.recsKey = st.busyRecs = null; if (App.state.route === 'apps') ctx.rerender(); }, 1500); } catch (err) { App.fail(err, 'Could not queue the pull'); } });
+    ctx.on('click', '[data-src-edit]', () => openSourceModal(ctx, app, ent, src));
+    ctx.on('click', '[data-src-detach]', async () => { const ok = await ctx.confirm({ title: 'Detach ' + (ent.title || ent.name) + ' from ' + src.object, tag: 'keeps records', body: '<p class="fg2" style="margin:0">The records stay as ordinary records; nothing is written to the table. Audited app.entity.source.removed.</p>' }); if (!ok) return; try { await App.del(E(app.id, ent.id) + '/source'); afterChange(ctx, {}); ctx.toast('Detached. Audited app.entity.source.removed.', 'ok'); } catch (err) { App.fail(err, 'Could not detach'); } });
+    return html;
+  }
+
+  async function openSourceModal(ctx, app, ent, cur) {
+    let conns = [];
+    try { const list = await App.get('/api/admin/connections'); conns = (Array.isArray(list) ? list : list.connections || []).filter((c) => c.engine === 'postgres' || c.engine === 'mysql'); } catch (err) { App.fail(err, 'Could not list the connections'); return; }
+    if (!conns.length) { ctx.toast('No PostgreSQL or MySQL connection is registered; add one on the Connections screen first.', 'warn'); return; }
+    const sel = cur ? conns.find((c) => c.id === cur.connectionId) || conns[0] : conns[0];
+    const objectsOf = (c) => (c.allowList || []);
+    const plain = fieldsOf(ent).filter((f) => !computed(f));
+    modal(ctx, { title: (cur ? 'Edit the outside table of ' : 'Attach an outside table to ') + esc(ent.title || ent.name), cls: 'wide', body: UI.notice('The table must be on the connection\'s schema allow-list, and the entity\'s label (' + esc(ent.label) + ') must cover the connection\'s. Fields map to the columns of the same name unless mapped below; the key column maps to a string or number field, or to the record id when no field is picked (then the column must take text).', 'info')
+      + '<div class="formgrid">' + UI.field('Connection', UI.select(conns.map((c) => ({ value: c.id, label: c.name + ' (' + c.engine + ', ' + c.label + ')' })), sel.id, 'data-sr-conn')) + UI.field('Table', objectsOf(sel).length ? UI.select(objectsOf(sel), cur ? cur.object : objectsOf(sel)[0], 'data-sr-object') : UI.input(cur ? cur.object : '', { attrs: 'data-sr-object', placeholder: 'schema.table on the allow-list' }))
+      + UI.field('Key column', UI.input(cur ? cur.keyColumn : 'id', { attrs: 'data-sr-key' })) + UI.field('Key field', UI.select([{ value: '', label: 'the record id' }].concat(plain.filter((f) => f.type === 'string' || f.type === 'number').map((f) => ({ value: f.name, label: f.name }))), cur && cur.keyField ? cur.keyField : '', 'data-sr-keyfield'))
+      + UI.field('State column', UI.input(cur && cur.stateColumn ? cur.stateColumn : '', { attrs: 'data-sr-state', placeholder: smOf(ent) ? 'column holding the state' : 'the entity has no state machine' })) + UI.field('Pull every (minutes)', UI.input(cur && cur.pullMinutes ? cur.pullMinutes : '', { type: 'number', attrs: 'data-sr-min', placeholder: 'empty: on demand only' }))
+      + '<div class="span2">' + UI.field('Column mapping (field=column, one per line)', UI.textarea(cur && cur.columns ? Object.keys(cur.columns).map((k) => k + '=' + cur.columns[k]).join('\n') : '', { rows: 2, attrs: 'data-sr-cols spellcheck="false"' })) + '</div>'
+      + '</div>' + UI.check('Writes through: a record created, changed, moved or deleted here reaches the table first', !!(cur && cur.writes), 'data-sr-writes') + UI.check('Rows gone from the table remove their records', cur ? cur.deleteMissing !== false : true, 'data-sr-delete') + '<div data-sr-err></div>',
+    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(cur ? 'Save' : 'Attach', { kind: 'primary', attrs: 'data-sr-ok' }),
+    onMount(m) {
+      m.querySelector('[data-sr-conn]').addEventListener('change', (e) => { const c = conns.find((x) => x.id === e.target.value); const o = m.querySelector('[data-sr-object]'); if (o && o.tagName === 'SELECT') o.innerHTML = objectsOf(c).map((x) => '<option>' + esc(x) + '</option>').join(''); });
+      m.querySelector('[data-sr-ok]').addEventListener('click', async () => {
+        const errEl = m.querySelector('[data-sr-err]');
+        const columns = {}; (m.querySelector('[data-sr-cols]').value || '').split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => { const i = l.indexOf('='); if (i > 0) columns[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+        const min = parseInt(m.querySelector('[data-sr-min]').value, 10);
+        const body = { connectionId: m.querySelector('[data-sr-conn]').value, object: m.querySelector('[data-sr-object]').value.trim(), keyColumn: m.querySelector('[data-sr-key]').value.trim(), keyField: m.querySelector('[data-sr-keyfield]').value || null, columns, stateColumn: m.querySelector('[data-sr-state]').value.trim() || null, writes: m.querySelector('[data-sr-writes]').checked, deleteMissing: m.querySelector('[data-sr-delete]').checked, pullMinutes: Number.isFinite(min) && min > 0 ? min : null, enabled: true };
+        try { await App.put(E(app.id, ent.id) + '/source', body); afterChange(ctx, {}); ctx.toast(cur ? 'Source updated. Audited app.entity.source.updated.' : 'Table attached; pull it now to bring its rows in. Audited app.entity.source.set.', 'ok', 4500); }
+        catch (err) { errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); }
       });
     } });
   }
