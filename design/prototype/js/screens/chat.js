@@ -29,6 +29,8 @@
     c7: [
       { id: 'i1', kind: 'tool', name: 'jira-internal.lookup_issue', side: 'read', by: 'user', state: 'done', args: { key: 'FIN-1188' }, result: '{"key":"FIN-1188","status":"Open","assignee":"m.okafor"}' },
       { id: 'i2', kind: 'tool', name: 'jira-internal.create_issue', side: 'write', by: 'model', state: 'awaiting', approval: 'owner', args: { project: 'FIN', summary: 'Vendor onboarding: Fabrikam' }, expires: 'in 23 h' },
+      // 1.7.0 (B-11703): a plan card: the model's plan before any tool runs, decided by the owner.
+      { id: 'i6', kind: 'plan', name: 'plan', by: 'model', state: 'awaiting', approval: 'owner', expires: 'in 23 h', steps: [{ title: 'Pull last week\'s card transactions', tools: ['cards.query'], data: ['the card feed, 7 days'] }, { title: 'Join them to the ledger on amount and date within two days', tools: ['ledger.query', 'calc.table'], data: ['ledger lines for the same days'] }, { title: 'Report the lines without a match', tools: [], data: [] }], offered: ['cards.query', 'ledger.query', 'calc.table', 'jira-internal.create_issue'] },
       { id: 'i3', kind: 'agent', name: 'Vendor desk', by: 'user', state: 'running', run: 'r-7f31', chain: 'ch-2a19', steps: [{ n: 1, lane: 'think', title: 'Plan', state: 'ok' }, { n: 2, lane: 'do', title: 'vendors.lookup', state: 'ok' }, { n: 3, lane: 'do', title: 'vendors.create_record', state: 'waiting' }] },
       { id: 'i4', kind: 'workflow', name: 'vendor-onboarding v4', by: 'user', state: 'running', run: 'wf-c044', chain: 'ch-2a19', approvals: [{ id: 'ap-1', step: 'Sign-off', role: 'workflow-admin', shows: 'DPA for Fabrikam, country DE' }] }
     ]
@@ -132,6 +134,14 @@
       { title: 'Workflow waiting on an approval', tone: 'info', text: '/workflow started vendor-onboarding v4; its sign-off is a card here, and approving it here resumes the chain. A call held anywhere in the chain is decided from this root too.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.wfDecided = {}; ctx.rerender(); } },
       { title: 'Skill for one turn', tone: 'neutral', text: '"One sentence" is on for this turn only; "Finance tone" is sticky. Removing a chip leaves its instructions out of the very next turn.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); } },
       { title: 'Hidden above the ceiling', tone: 'warn', text: 'The pickers never list an agent or skill whose ceiling is below the conversation\'s label; calling one by name is refused the same way.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = '@'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'Plan awaiting approval', tone: 'info', text: 'A plan-first profile drafts a plan (steps, tools, data) before any tool runs and shows it as a card. Approve it as drafted or edited, or decline it; write tools keep their own cards.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'awaiting' }; ctx.state.planEdited = false; ctx.rerender(); } },
+      { title: 'Plan approved as edited', tone: 'ok', text: 'The answer ran under the edited plan: only the tools it names were offered, and the plan is recorded on the message and in the chain.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'approved' }; ctx.state.planEdited = true; ctx.rerender(); } },
+      { title: 'Plan declined', tone: 'neutral', text: 'A declined plan ends the turn without running anything; the model is told on the next turn.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'declined' }; ctx.rerender(); } },
+      { title: 'Answer checked', tone: 'ok', text: 'A profile with reflection on gets a second pass over the answer against the question, its citations and tool results. The badge shows what it checked.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = {}; ctx.state.checked = { c4: 'ok' }; ctx.rerender(); } },
+      { title: 'Answer revised by reflection', tone: 'warn', text: 'The second pass found a figure the tool results do not support and revised the answer. The original stays one click away; the revised text went through the same output screen.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.checked = { c1: 'revised' }; ctx.rerender(); } },
+      { title: 'Thinking shown to nobody', tone: 'neutral', text: 'The workspace policy keeps thinking from everyone: the stream carries none and the message holds only the token count. Reviewers-only hides it from the author too.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'nobody'; ctx.rerender(); } },
+      { title: 'Thinking budget near its limit', tone: 'warn', text: 'A notice near the limit of the profile\'s or the workspace\'s daily thinking budget; at the limit, turns think at low rather than being refused.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'author'; ctx.state.budget = { used: 8400, limit: 10000, who: 'analyst' }; ctx.rerender(); } },
+      { title: 'Thinking budget spent', tone: 'warn', text: 'The budget is spent for today: the turn ran at low instead of medium, the message says so, and the usage summary counts the drop.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'author'; ctx.state.budget = { used: 10000, limit: 10000, who: 'analyst', spent: true }; ctx.rerender(); } },
       { title: 'Artifact open for a share reader', tone: 'neutral', text: 'A reader of a shared conversation sees the versions of the shown turns, read only, with the same sandboxed render.', apply(ctx) { ctx.state.convo = 'c6'; ctx.state.artifact = { id: 'a2', version: 1 }; ctx.state.readerView = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -139,11 +149,15 @@
       if (ctx.params.convo) { st.convo = ctx.params.convo; }
       st.convo = st.convo || 'c1'; st.sent = st.sent || {}; st.decided = st.decided || {}; st.memories = st.memories || {}; st.query = st.query || '';
       st.thinking = st.thinking || {}; st.level = st.level || 'medium';
+      // 1.7.0 (B-11701 to B-11704): the thinking policy in force, the budget notice, plan cards and reflection badges.
+      st.policy = st.policy || 'author'; st.budget = st.budget || null; st.plan = st.plan || {}; st.checked = st.checked || {};
       const isNew = st.convo === 'new';
       const convo = isNew ? { id: 'new', title: 'New conversation', label: 'internal', profile: st.profile || 'chat-default' } : CONVOS.find((c) => c.id === st.convo) || CONVOS[0];
       if (st.profile) convo.profile = st.profile;
       const prof = PROFILES.find((p) => p.id === convo.profile) || PROFILES[1];
-      const thread = (isNew ? [] : THREADS[convo.id] || []).concat(st.sent[convo.id] || []);
+      let thread = (isNew ? [] : THREADS[convo.id] || []).concat(st.sent[convo.id] || []);
+      const planState = st.plan[convo.id];
+      if (planState && convo.id === 'c4') thread = [thread[0], { role: 'plan', card: 'i6' }].concat(planState === 'approved' ? thread.slice(1) : []);
       const sources = SOURCES[convo.id] || [];
       const list = CONVOS.filter((c) => !st.query || c.title.toLowerCase().includes(st.query.toLowerCase()));
 
@@ -185,7 +199,31 @@
         else if (state === 'cancelled') h += '<div class="fg2" style="font-size:12px">Cancelled from the chat.</div>';
         return h + '</div>';
       };
+      /** B-11703: the plan card: the steps, the tools each names, the data it needs; approve as drafted or edited, or decline. */
+      const planCard = (c) => {
+        const state = planState === 'approved' ? 'approved' : planState === 'declined' ? 'denied' : 'awaiting';
+        const steps = st.planEdited ? c.steps.map((s, k) => (k === 1 ? Object.assign({}, s, { title: 'Join them to the ledger on amount and date within three days' }) : s)) : c.steps;
+        let h = '<div class="card ' + state + ' chat-plan" data-card="' + c.id + '"><div class="hstack gap6">' + UI.icon('brain', 13) + '<b>Plan</b>' + UI.pill(state, stateTone[state] || 'ok') + '<span class="muted" style="font-size:12px">proposed by the model before any tool runs</span></div>'
+          + '<ol>' + steps.map((s) => '<li>' + esc(s.title) + (s.tools.length ? ' <span class="mono fg2">' + esc(s.tools.join(', ')) + '</span>' : '') + (s.data.length ? '<div class="muted" style="font-size:12px">needs ' + esc(s.data.join(', ')) + '</div>' : '') + '</li>').join('') + '</ol>';
+        if (state === 'awaiting') h += '<div class="fg2" style="font-size:12px">Approved, the answer runs under this plan and only the tools it names are offered; write tools keep their own cards. Declined, nothing runs. Expires ' + esc(c.expires) + '.</div><div class="hstack gap6 wrap">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-planapprove' }) + UI.btn('Edit', { size: 'sm', attrs: 'data-planedit' }) + UI.btn('Decline', { kind: 'ghost', size: 'sm', attrs: 'data-plandecline' }) + '</div>';
+        else if (state === 'approved') h += '<div class="fg2" style="font-size:12px">' + UI.icon('check', 12) + ' Approved by you' + (st.planEdited ? ', step 2 edited' : ' as drafted') + '. The answer below ran under it; the plan is on the message and in the chain.</div>';
+        else h += '<div class="fg2" style="font-size:12px">' + UI.icon('x', 12) + ' Declined by you. Nothing ran; the model is told on the next turn.</div>';
+        return h + '</div>';
+      };
+      /** B-11704: the "checked" badge: what the second pass verified, or the revised answer with the original a click away. */
+      const checkedBadge = (key) => {
+        const c = st.checked[key]; if (!c) return '';
+        if (c === 'ok') return '<div class="chat-checked ok">' + UI.pill('checked', 'ok') + '<span>Second pass by <b>analyst</b>: the answer matches the question, both citations hold, the tool results support every figure. No findings.</span>' + UI.btn('Details', { kind: 'ghost', size: 'xs', attrs: 'data-checked="' + key + '"' }) + '</div>';
+        return '<div class="chat-checked warn">' + UI.pill('revised', 'warn') + '<span>Second pass by <b>analyst</b> found one problem: the 13,380 EUR figure has no calculation result or cited source behind it. The answer was revised and screened again.</span>' + UI.btn(st.showOriginal ? 'Show revised' : 'Show original', { kind: 'ghost', size: 'xs', attrs: 'data-original' }) + '</div>';
+      };
+      const thinkBar = (m, i, open) => {
+        const dropped = st.budget && st.budget.spent;
+        if (st.policy === 'nobody') return '<div class="thinkbar"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s, ' + m.thinking.tokens + ' tokens. Kept from everyone by the workspace policy.</span></div>';
+        if (st.policy === 'reviewers') return '<div class="thinkbar"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s, ' + m.thinking.tokens + ' tokens. Shown to reviewers only by the workspace policy.</span></div>';
+        return '<button type="button" class="thinkbar" data-think="' + i + '"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s at level ' + (dropped ? 'low, dropped from ' + esc(m.thinking.level) + ': the daily thinking budget for ' + esc(st.budget.who) + ' is spent' : esc(m.thinking.level)) + ', ' + m.thinking.tokens + ' tokens</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>' + (open ? '<div class="thinktrace">' + esc(m.thinking.text) + '</div>' : '');
+      };
       const renderMsg = (m, i) => {
+        if (m.role === 'plan') { const c = cardsOf.find((x) => x.id === m.card); return c ? '<div class="msg ai turn-plan">' + planCard(c) + '</div>' : ''; }
         if (m.role === 'tool' || m.role === 'agent' || m.role === 'workflow') {
           const c = cardsOf.find((x) => x.id === m.card); if (!c) return '';
           return '<div class="msg ai turn-' + m.role + '">' + (m.role === 'tool' ? toolCard(c) : m.role === 'agent' ? agentCard(c) : wfCard(c)) + '</div>';
@@ -194,15 +232,16 @@
         if (m.streaming) return '<div class="msg ai"><div class="thinkbar"><span>' + (m.phase === 'thinking' ? 'Thinking at level ' + esc(st.level) + '…' : 'Answering…') + '</span><span class="muted">' + UI.btn('Stop', { kind: 'ghost', size: 'xs', attrs: 'data-stop' }) + '</span></div><div class="answer serif">' + m.partial + '<span class="blink">▍</span></div></div>';
         const open = st.thinking[i];
         let h = '<div class="msg ai">';
-        if (m.thinking) h += '<button type="button" class="thinkbar" data-think="' + i + '"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s at level ' + esc(m.thinking.level) + ', ' + m.thinking.tokens + ' tokens</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>' + (open ? '<div class="thinktrace">' + esc(m.thinking.text) + '</div>' : '');
+        if (m.thinking) h += thinkBar(m, i, open);
         if (m.raised) h += '<div class="raised"><span class="rule"></span>Label raised to ' + UI.label('confidential', { sm: true }) + ' by ' + esc(m.raised) + '<span class="rule"></span></div>';
         if (m.ctx) h += UI.ctx(m.ctx.title, m.ctx.body, m.ctx.level);
         if (st.guardStop && i === thread.length - 1) {
           h += '<div class="answer serif"><p>' + m.paras[0].replace(/<a[^>]*>\d<\/a>/g, '') + '</p></div>' + UI.notice('<b>Stopped by guardrail</b> Finance baseline v12, rule <span class="mono">no-personal-data-in-summaries</span>. The rest of this answer was withheld at the sentence boundary.', 'danger', '<a href="#" data-report="' + i + '">Report</a>');
         } else {
-          h += '<div class="answer serif">' + m.paras.map((p, pi) => '<p>' + (st.ungrounded && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span class="ungrounded" title="No calculation result or cited source backs this figure. Logged to flags.">13,380 EUR</span>') : p) + (st.resumed && pi === 0 ? '<span class="gap" title="Connection dropped at event 212 and resumed"> ⋯ </span>' : '') + '</p>').join('') + '</div>';
+          h += '<div class="answer serif">' + m.paras.map((p, pi) => '<p>' + (st.checked[convo.id] === 'revised' && !st.showOriginal && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span style="background:var(--warn-bg)" title="Revised by the second pass: the original figure had no calculation result or cited source behind it.">an amount the ledger result does not give</span>') : st.ungrounded && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span class="ungrounded" title="No calculation result or cited source backs this figure. Logged to flags.">13,380 EUR</span>') : p) + (st.resumed && pi === 0 ? '<span class="gap" title="Connection dropped at event 212 and resumed"> ⋯ </span>' : '') + '</p>').join('') + '</div>';
         }
         if (m.artifacts) h += '<div class="hstack wrap gap6">' + m.artifacts.map((a) => UI.chip(UI.icon(a.key.endsWith('.html') ? 'images' : 'scripts', 12) + ' ' + esc(a.key) + ' <span class="muted">v' + a.version + '</span>', st.artifact && st.artifact.id === (ARTIFACTS[convo.id] || []).find((x) => x.key === a.key).id && st.artifact.version === a.version, 'data-artifact="' + esc((ARTIFACTS[convo.id] || []).find((x) => x.key === a.key).id) + '" data-version="' + a.version + '"')).join('') + '</div>';
+        if (m.paras && st.checked[convo.id] && i === thread.length - 1) h += checkedBadge(convo.id);
         h += '<div class="mactions">' + UI.iconbtn('copy', 'Copy', { cls: 'sm', attrs: 'data-copy="answer"' }) + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + i + '"' }) + UI.iconbtn('branch', 'Branch from here', { cls: 'sm', attrs: 'data-branchmsg="' + i + '"' }) + UI.iconbtn('flag', 'Report this answer', { cls: 'sm', attrs: 'data-report="' + i + '"' }) + (m.branch ? '<span class="hstack gap4">' + UI.iconbtn('chev', 'Previous branch', { cls: 'sm ghost', attrs: 'data-branch="prev" style="transform:rotate(180deg)"' }) + '<span>Branch ' + m.branch[0] + ' of ' + m.branch[1] + '</span>' + UI.iconbtn('chev', 'Next branch', { cls: 'sm ghost', attrs: 'data-branch="next"' }) + '</span>' : '') + '<span class="right muted">' + esc(m.meta || '') + '</span></div>';
         if (m.confirm && !st.decided[convo.id + i]) h += '<div class="confirmcard"><div class="hstack"><b>' + esc(m.confirm.title) + '</b>' + UI.pill('write', 'warn') + '</div><div class="mono fg2">' + esc(m.confirm.tool) + '  ' + esc(m.confirm.args) + '</div><div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">' + esc(m.confirm.note) + '</span><span class="hstack gap6">' + UI.btn('Deny', { size: 'sm', attrs: 'data-deny="' + i + '"' }) + UI.btn('Allow once', { kind: 'primary', size: 'sm', attrs: 'data-allow="' + i + '"' }) + '</span></div></div>';
         if (m.confirm && st.decided[convo.id + i]) h += '<div class="decided ' + (st.decided[convo.id + i] === 'allow' ? 'ok' : '') + '">' + UI.icon(st.decided[convo.id + i] === 'allow' ? 'check' : 'x', 13) + (st.decided[convo.id + i] === 'allow' ? ' Created <a href="#" data-jira>FIN-1187</a> in jira-internal as Mara Okafor. Logged to audit.' : ' Denied. The agent was told the action was refused and continued without it.') + '</div>';
@@ -212,6 +251,8 @@
       };
 
       root.innerHTML = '<style>'
+        + '.chat-plan ol{margin:4px 0 0;padding-left:20px;font-size:13px;line-height:1.5}.chat-plan li{margin:2px 0}'
+        + '.chat-checked{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--fg2);padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}.chat-checked.ok{border-color:var(--ok-fg)}.chat-checked.warn{border-color:var(--warn-fg)}.chat-checked > span{flex:1 1 240px}'
         + '.chat-list{display:flex;flex-direction:column;gap:2px}'
         + '.chat-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto}'
         + '.msg.user{display:flex;justify-content:flex-end;align-items:flex-end;gap:6px}.msg.user .bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px}.msg.user .uactions{opacity:0}.msg.user:hover .uactions{opacity:1}'
@@ -244,6 +285,7 @@
         + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })))
         + (st.runWorkflow ? '<div class="panel" style="gap:8px"><div class="phead"><div class="eyebrow">Run workflow: video-to-notes v3</div>' + UI.pill('running', 'info') + '</div>' + UI.timeline([{ title: 'Extract frames', text: 'media worker, 48 frames', tone: 'ok' }, { title: 'Transcribe audio', text: 'whisper, 12 min of audio', tone: 'ok' }, { title: 'Summarise', text: 'analyst, thinking medium', tone: 'accent' }, { title: 'Guardrail check', text: 'waiting', tone: '' }]) + '<div>' + UI.btn('Open in Runs', { size: 'sm', attrs: 'data-goruns' }) + '</div></div>' : '')
         + '</div></div>'
+        + (st.budget ? UI.notice('<b>Thinking budget' + (st.budget.spent ? ' spent.' : ' near its limit.') + '</b> ' + st.budget.used.toLocaleString('en-GB') + ' of ' + st.budget.limit.toLocaleString('en-GB') + ' thinking tokens today for <b>' + esc(st.budget.who) + '</b>. ' + (st.budget.spent ? 'Turns think at low until midnight UTC rather than being refused.' : 'At the limit, turns think at low rather than being refused.'), 'warn') : '')
         + '<div class="composer"><div class="inner"><div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + esc(prof.id) + (prof.agent ? '' : ' · ' + esc(prof.model.split(':')[0])), true, 'data-pick="profile"') + '</span><span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' Finance KB', true, 'data-pick="kb"') + '</span>' + UI.chip('Travel policy', true, 'data-toggle') + UI.chip(UI.icon('attach', 12) + ' q3-ledger.csv, scanned ' + UI.label('confidential', { sm: true }), true, 'data-attach') + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.level), false, 'data-pick="level"') + '</span></div>'
         + '<div class="skillchips" data-region="skills">' + skillChips(st, convo) + '</div>'
         + '<div class="relative" data-region="picker">' + (st.picker ? pickerHtml(st, convo) : '') + '</div>'
@@ -251,7 +293,7 @@
         + '<span id="composer-hint" class="sr">Slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
         + '<div class="hstack"><div class="hstack gap6">' + UI.iconbtn('attach', 'Attach a file', { attrs: 'data-attachbtn' }) + UI.iconbtn('workflows', 'Run a workflow', { attrs: 'data-wf' }) + UI.iconbtn('images', 'Generate an image', { attrs: 'data-img' }) + '</div><div class="hstack right gap12"><span class="muted num" style="font-size:12px">18,400 of 32,768 context tokens</span>' + UI.btn('Send', { kind: 'primary', icon: 'send', attrs: 'data-send' }) + '</div></div></div></div></div>'
         + '<aside class="inspector w300">' + artifactsHtml(st, convo) + '<div class="eyebrow">Sources</div><div class="vstack gap4" id="sources">' + (sources.length ? sources.map((s) => '<div class="src" data-src="' + s.n + '"><span class="n">' + s.n + '</span><span><span style="font-weight:600;display:block">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.sub) + '</span></span></div>').join('') : '<div class="muted" style="font-size:12px">No sources cited in this conversation.</div>') + '</div>'
-        + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
+        + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Thinking', esc(st.level) + ', ceiling ' + esc(prof.thinking) + '; ' + (st.policy === 'nobody' ? 'kept from everyone' : st.policy === 'reviewers' ? 'shown to reviewers' : 'shown to you') + ' by policy'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
         + '<div class="eyebrow">Quota today</div>' + UI.meter('Tokens', '310k of 500k', 62) + UI.meter('GPU-seconds this month', '16,380 of 18,000', 91, 'warn') + '</aside>';
 
       // ---- events ----
@@ -259,6 +301,12 @@
       ctx.on('click', '[data-new]', () => { st.convo = 'new'; ctx.rerender(); setTimeout(() => { const c = ctx.$('#composer'); if (c) c.focus(); }, 30); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-think]', (e, t) => { st.thinking[t.dataset.think] = !st.thinking[t.dataset.think]; ctx.rerender(); });
+      // B-11703, B-11704: plan decisions and the reflection badge.
+      ctx.on('click', '[data-planapprove]', () => { st.plan[convo.id] = 'approved'; st.planEdited = false; ctx.rerender(); ctx.toast('Plan approved. The answer runs under it; only the tools it names are offered.', 'ok'); });
+      ctx.on('click', '[data-plandecline]', () => { st.plan[convo.id] = 'declined'; ctx.rerender(); ctx.toast('Plan declined. Nothing ran; the model is told on the next turn.'); });
+      ctx.on('click', '[data-planedit]', () => ctx.modal({ title: 'Edit the plan', body: '<div class="vstack gap8">' + UI.field('Step 1', UI.input('Pull last week\'s card transactions', { attrs: 'data-ps="1"' })) + UI.field('Step 2', UI.input('Join them to the ledger on amount and date within three days', { attrs: 'data-ps="2"' })) + UI.field('Step 3', UI.input('Report the lines without a match', { attrs: 'data-ps="3"' })) + '<div class="fg2" style="font-size:12px">A step can only name tools this conversation can call: cards.query, ledger.query, calc.table, jira-internal.create_issue.</div></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Approve as edited', { kind: 'primary', attrs: 'data-planok' }), onMount(el) { el.querySelector('[data-planok]').addEventListener('click', () => { App.closeOverlay(); st.plan[convo.id] = 'approved'; st.planEdited = true; ctx.rerender(); ctx.toast('Plan approved as edited. The answer runs under it.', 'ok'); }); } }));
+      ctx.on('click', '[data-checked]', () => ctx.drawer({ title: 'Checked by analyst', body: UI.kv([['Question', 'answered: the reconciliation and the unmatched lines'], ['Citations', '1 of 1 holds: cards.query ⋈ ledger.query, 3 rows'], ['Tool results', 'every figure traces to a result'], ['Findings', 'none'], ['Metered', '640 tokens to this conversation'], ['Screened', 'no revised answer; nothing to screen']], 1) }));
+      ctx.on('click', '[data-original]', () => { st.showOriginal = !st.showOriginal; ctx.rerender(); });
       ctx.on('click', '.cite', (e, t) => { e.preventDefault(); const s = ctx.$('.src[data-src="' + t.dataset.cite + '"]'); ctx.$$('.src').forEach((x) => x.classList.remove('hi')); if (s) { s.classList.add('hi'); s.scrollIntoView({ block: 'nearest' }); } });
       ctx.on('click', '.src', (e, t) => {
         const s = sources.find((x) => String(x.n) === t.dataset.src);
