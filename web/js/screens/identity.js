@@ -38,10 +38,13 @@
     if (!res.ok) throw new App.ApiError(data || { status: res.status, title: res.statusText });
     return data;
   };
+  // 1.6.0 (B-7101): the MCP server's tool groups, and the label order its label is picked from.
+  const MCP_GROUP_NAMES = { workflows: ['Workflows', 'published workflows, as workflow_<name>'], agents: ['Agents', 'agents published to the workspace, as agent_<name>'], knowledge: ['Knowledge', 'one search tool per published knowledge base'], tools: ['Registry tools', 'tools published to the workspace'], records: ['App records', 'list, query, count, aggregate, create, update, delete'] };
+  const LABEL_ORDER = ['public', 'internal', 'confidential', 'restricted'];
   const copy = (text, what, ctx) => { if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => ctx.toast(esc(what) + ' copied.', 'ok'), () => ctx.toast('Copy failed; select the text instead.', 'warn')); else ctx.toast('Copy is not available here; select the text instead.', 'warn'); };
 
   App.register({
-    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings',
+    id: 'identity', title: 'Identity', section: 'admin', live: true, summary: 'OIDC clients, SAML providers, scopes and consent, signing keys, user stores (GitHub, AT-Protocol), sign-up and MFA policy, invitations, CSV imports, DID bindings, the MCP server (publication, self-registration)',
     crumb: ['Admin', 'Identity'],
     commands: [
       { label: 'Invite someone', sub: 'Identity', run(app) { const s = app.stateFor('identity'); s.tab = 'policy'; s.policyView = 'invitations'; s.openInvite = true; app.render(); } },
@@ -55,7 +58,13 @@
       { title: 'Sign-up pending approval', tone: 'warn', text: 'With the approval mode, a new account is created disabled and identity admins get a notice. Approve activates it; reject keeps it disabled and tells the user by email.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'signups'; ctx.state.signupFilter = 'pending'; ctx.rerender(); } },
       { title: 'MFA grace restarted', tone: 'info', text: 'Widening the MFA requirement restarts the grace period: covered accounts sign in without a factor for graceDays, then enrol first. Audited with graceRestarted.', apply(ctx) { ctx.state.tab = 'policy'; ctx.state.policyView = 'policy'; ctx.state.graceRestarted = true; ctx.rerender(); } },
       { title: 'Import dry run with conflicts', tone: 'warn', text: 'A dry run plans and reports every row; conflicts (an account linked to another store, a reused address) and errors (a role the importer may not grant) change nothing.', apply(ctx) { const st = ctx.state; st.tab = 'imports'; const x = (st.imports || []).find((i) => i.dryRun && i.summary && (i.summary.conflict || i.summary.error)) || (st.imports || []).find((i) => i.dryRun); if (x) st.importSel = x.id; ctx.rerender(); } },
-      { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } }
+      { title: 'SCIM token shown once', tone: 'info', text: 'A new SCIM token is shown once, with the base URL to paste into Entra ID or Okta; afterwards only its prefix and last use are listed.', apply(ctx) { const st = ctx.state; st.tab = 'upstream'; st.scimShown = { storeId: null, name: 'Entra ID connector', token: 'exai_scim1_5c2e9d40a1f3_' + 'x'.repeat(43), expiresAt: Date.now() + 365 * DAY }; ctx.rerender(); } },
+      { title: 'Deprovisioned by SCIM', tone: 'danger', text: 'The identity provider set active to false: the user is disabled and their sessions, OAuth grants, API keys and app passwords end within one request. Audited as scim.user.deactivated.', apply(ctx) { ctx.state.tab = 'upstream'; ctx.state.scimDeprovisioned = true; ctx.rerender(); } },
+      { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } },
+      // 1.6.0 (B-7101, B-7102): the MCP server. States explain; none of them changes anything.
+      { title: 'MCP server published', tone: 'ok', text: 'A workspace publishes its MCP server: clients connect to its URL, sign in through this issuer and see the groups it publishes, filtered by each person\'s roles and the label.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'published'; ctx.rerender(); } },
+      { title: 'Token for another resource', tone: 'danger', text: 'A token issued for the API or another workspace is refused with 401, and WWW-Authenticate names the protected resource metadata so the client can get the right one (RFC 8707, RFC 9728).', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'refusal'; ctx.rerender(); } },
+      { title: 'Self-registration on', tone: 'warn', text: 'With dynamic client registration on, any MCP client that reaches the issuer can register itself; each one still asks every person for consent, and only for the MCP scopes.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpNote = 'dcr'; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -71,9 +80,9 @@
         const extraErr = {};
         const opt = (perm, key, url) => (App.can(perm) ? App.get(url).catch((err) => { extraErr[key] = err; return null; }) : Promise.resolve(null));
         Promise.all([App.get('/api/admin/federation'), App.get('/api/admin/federation/oidc/clients'), App.get('/api/admin/federation/saml/sps'), App.get('/api/admin/federation/upstream'), App.get('/api/admin/federation/sessions'), App.get('/api/admin/federation/scopes'), App.get('/api/admin/federation/keys'), App.get('/api/admin/federation/proposals?state=pending'), App.get('/api/admin/federation/metadata'),
-          opt('identity:manage', 'policy', '/api/admin/identity-policy'), opt('users:manage', 'signups', '/api/admin/signups'), opt('members:invite', 'invites', '/api/invitations'), opt('users:manage', 'imports', '/api/admin/user-imports'), opt('identity:manage', 'dids', '/api/admin/atproto/accounts'), opt('identity:manage', 'stores', '/api/admin/identity-providers'), opt('users:manage', 'roles', '/api/admin/roles'), opt('users:manage', 'people', '/api/admin/users?limit=500')])
-          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people]) => {
-            Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, extraErr, loaded: true, loadError: null });
+          opt('identity:manage', 'policy', '/api/admin/identity-policy'), opt('users:manage', 'signups', '/api/admin/signups'), opt('members:invite', 'invites', '/api/invitations'), opt('users:manage', 'imports', '/api/admin/user-imports'), opt('identity:manage', 'dids', '/api/admin/atproto/accounts'), opt('identity:manage', 'stores', '/api/admin/identity-providers'), opt('users:manage', 'roles', '/api/admin/roles'), opt('users:manage', 'people', '/api/admin/users?limit=500'), opt('identity:manage', 'mcp', '/api/admin/mcp-server')])
+          .then(([overview, clients, sps, upstream, sessions, scopes, keys, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, mcp]) => {
+            Object.assign(st, { overview, clients, sps, upstream, sessions, scopes, jwks: keys.jwks, proposals, sources, policy, signups, invites, imports, dids, stores, roles, people, mcp, extraErr, loaded: true, loadError: null });
             st.draft = policy ? clone(policy) : null;
           })
           .catch((err) => { st.loadError = err; })
@@ -95,7 +104,7 @@
       const rotatesAt = ov.rotation.rotatesAt;
       const nearing = st.keyExpiring || (!nextKey && rotatesAt && rotatesAt - Date.now() < 14 * DAY);
 
-      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'User stores and federation' }, { id: 'policy', label: 'Sign-up and MFA policy', count: st.signups ? st.signups.filter((x) => x.state === 'pending').length : undefined }, { id: 'imports', label: 'CSV imports' }, { id: 'dids', label: 'AT-Protocol accounts' }, { id: 'sessions', label: 'Sessions' }], st.tab);
+      const tabs = UI.tabs([{ id: 'clients', label: 'OIDC clients', count: clients.length }, { id: 'saml', label: 'SAML service providers', count: st.sps.length }, { id: 'scopes', label: 'Scopes and consent' }, { id: 'keys', label: 'Keys' }, { id: 'upstream', label: 'User stores and federation' }, { id: 'policy', label: 'Sign-up and MFA policy', count: st.signups ? st.signups.filter((x) => x.state === 'pending').length : undefined }, { id: 'imports', label: 'CSV imports' }, { id: 'dids', label: 'AT-Protocol accounts' }, { id: 'mcp', label: 'MCP server', count: st.mcp ? st.mcp.publications.filter((x) => x.enabled).length : undefined }, { id: 'sessions', label: 'Sessions' }], st.tab);
       const banner = nearing && signing ? UI.notice('<b>Signing key ' + esc(signing.kid) + ' rotates ' + esc(rotatesAt ? inDays(rotatesAt) : 'soon') + '.</b> Rotate now to generate the next key and publish it to JWKS, so relying parties cache it before it signs anything.', 'warn', UI.btn('Rotate now', { size: 'sm', attrs: 'data-rotatekey' })) : '';
 
       function keysTable(compact) {
@@ -117,6 +126,37 @@
       const myClearance = (App.me && App.me.user.clearance) || 'internal';
       const wsName = (id) => (!id ? 'none' : (myWorkspaces.find((w) => w.id === id) || { name: id }).name);
       const who = (id) => { if (!id) return 'system'; if (App.me && id === App.me.user.id) return 'you'; const u = (st.people || []).find((x) => x.id === id); return u ? u.displayName : id; };
+
+      // 1.6.0 (B-7201, B-7202): SCIM stores, their status, tokens and recent changes (identity:manage; changes with audit:read).
+      const scimStores = (st.stores || []).filter((p) => p.kind === 'scim');
+      if (st.tab === 'upstream' && st.stores && st.scim === undefined && !st.scimLoading) {
+        st.scimLoading = true;
+        Promise.all(scimStores.map((x) => Promise.all([App.get('/api/admin/identity-providers/' + encodeURIComponent(x.id) + '/scim'), App.can('audit:read') ? App.get('/api/admin/audit?action=scim.&target=' + encodeURIComponent(x.id) + '&limit=8').catch(() => []) : Promise.resolve(null)]).then(([status, changes]) => Object.assign(status, { changes }))))
+          .then((list) => { st.scim = list; st.scimError = null; })
+          .catch((err) => { st.scim = []; st.scimError = err; })
+          .finally(() => { st.scimLoading = false; if (App.state.route === 'identity' && !document.querySelector('.modal')) ctx.rerender(); });
+      }
+      const reloadScim = () => { st.scim = undefined; ctx.rerender(); };
+      const storeName = (id) => { const x = (st.stores || []).find((p) => p.id === id); return x ? x.name : id; };
+      function scimSection() {
+        if (!st.stores) return '';
+        const head = '<div class="hstack wrap"><h2 class="eyebrow" id="identity-scim-h" style="margin:0">SCIM provisioning</h2><span class="right hstack gap6">' + UI.btn('Add a SCIM store', { size: 'sm', kind: scimStores.length ? 'ghost' : 'primary', attrs: 'data-scimstore' }) + '</span></div>';
+        const intro = '<div class="fg2" style="font-size:13px;margin:6px 0">Entra ID or Okta pushes users and groups to a SCIM store (SCIM 2.0, RFC 7643 and 7644): create, replace, patch, delete, filters and paging. The store takes no passwords; its users sign in through the stores it names. Group mappings with the store turn SCIM groups into roles, clearance and workspaces.</div>';
+        if (st.scimError) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + UI.problem('SCIM status could not be loaded', st.scimError.message, st.scimError.problem && st.scimError.problem.trace_id) + '</section>';
+        if (!scimStores.length) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + intro + UI.empty('No SCIM store', 'Add one, make a token, and paste the base URL and the token into your identity provider\'s provisioning settings.') + '</section>';
+        if (!st.scim) return '<section class="panel" aria-labelledby="identity-scim-h">' + head + UI.notice('Loading…', 'info') + '</section>';
+        const deprov = st.scimDeprovisioned ? UI.notice('<b>Deprovisioned by SCIM.</b> When the provider sets active to false, the user is disabled and their sessions, OAuth grants, API keys and app passwords end within the same request (scim.user.deactivated). A later active true re-enables them; an administrator\'s own disable stays.', 'danger') : '';
+        return st.scim.map((sc) => {
+          const shown = st.scimShown && (st.scimShown.storeId === sc.store.id || st.scimShown.storeId === null) ? UI.notice('<b>Copy the token now: it is shown once.</b> Paste it with the base URL into the provisioning settings of ' + esc(st.scimShown.name) + '.<div class="codebox mono" style="margin-top:6px;word-break:break-all" data-scimtoken>' + esc(st.scimShown.token) + '</div><div class="muted" style="font-size:12px">' + (st.scimShown.expiresAt ? 'Expires ' + esc(date(st.scimShown.expiresAt)) + '. ' : '') + 'We keep only its prefix and a keyed hash.</div>', 'accent', UI.btn('Copy token', { size: 'sm', attrs: 'data-scimcopy' }) + UI.btn('Done', { size: 'sm', kind: 'ghost', attrs: 'data-scimdone' })) : '';
+          const signIn = (sc.store.config.signInStores || []).map(storeName);
+          const tokens = UI.table(['Token', 'Prefix', 'State', 'Last used', 'Expires', ''], sc.tokens.map((t) => ['<b>' + esc(t.name) + '</b><div class="muted" style="font-size:12px">made ' + esc(date(t.createdAt)) + '</div>', '<span class="mono">exai_scim1_' + esc(t.prefix) + '_…</span>', UI.pill(t.state, t.state === 'active' ? 'ok' : t.state === 'revoked' ? '' : 'warn'), (t.lastUsedAt ? esc(when(t.lastUsedAt)) : 'never') + (t.lastUsedIp ? '<div class="muted mono" style="font-size:12px">' + esc(t.lastUsedIp) + '</div>' : ''), t.expiresAt ? esc(date(t.expiresAt)) : 'when revoked', t.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'danger', attrs: 'data-scimrevoke="' + esc(t.id) + '" data-store="' + esc(sc.store.id) + '" aria-label="Revoke ' + esc(t.name) + '"' }) : '']), { clickable: false, minWidth: '640px', emptyTitle: 'No SCIM tokens', emptyText: 'Make a token for the identity provider that provisions this store.' });
+          const changes = sc.changes ? (sc.changes.length ? UI.timeline(sc.changes.map((e) => ({ title: esc(e.action) + (e.target && e.target.username ? ': ' + esc(e.target.username) : e.target && e.target.name ? ': ' + esc(e.target.name) : ''), text: e.redacted ? 'above your clearance' : esc(e.action === 'scim.user.deactivated' ? 'ended sessions, OAuth grants, API keys and app passwords' : e.action === 'scim.user.access.changed' ? 'roles, clearance or workspaces changed; sessions ended' : ''), meta: esc(when(e.ts)), tone: e.action === 'scim.user.deactivated' || e.action === 'scim.user.deleted' ? 'danger' : e.action === 'scim.user.created' ? 'ok' : e.action === 'scim.user.access.changed' ? 'info' : '' }))) : '<div class="muted" style="font-size:12px">No SCIM changes yet.</div>') : '<div class="muted" style="font-size:12px">Recent changes need audit:read.</div>';
+          return '<section class="panel" aria-labelledby="identity-scim-h-' + esc(sc.store.id) + '"><div class="hstack wrap"><h2 class="eyebrow" id="identity-scim-h-' + esc(sc.store.id) + '" style="margin:0">SCIM provisioning: ' + esc(sc.store.name) + '</h2>' + UI.pill(sc.store.enabled ? 'enabled' : 'disabled', sc.store.enabled ? 'ok' : '') + '<span class="right hstack gap6">' + UI.btn('Re-apply group mappings', { size: 'sm', kind: 'ghost', attrs: 'data-scimreapply="' + esc(sc.store.id) + '"' }) + UI.btn('New SCIM token', { size: 'sm', icon: 'key', kind: 'primary', attrs: 'data-scimtokennew="' + esc(sc.store.id) + '"' }) + '</span></div>'
+            + intro + shown + deprov
+            + UI.kv([['Base URL', '<span class="mono">' + esc(sc.baseUrl) + '</span> ' + UI.btn('Copy', { size: 'xs', kind: 'ghost', attrs: 'data-idcopy="' + esc(sc.baseUrl) + '" data-what="SCIM base URL" aria-label="Copy the SCIM base URL"' })], ['Users', sc.activeUsers + ' active of ' + sc.users], ['Groups', sc.groups + ', ' + sc.groupMappings + ' group mapping' + (sc.groupMappings === 1 ? '' : 's') + ' name them'], ['Sign in through', signIn.length ? signIn.map(esc).join(', ') : 'none named: its users cannot sign in yet'], ['Last change', sc.lastChangeAt ? esc(when(sc.lastChangeAt)) : 'none yet'], ['Live tokens', String(sc.tokens.filter((t) => t.state === 'active').length)]], 2)
+            + tokens + '<div class="eyebrow" style="margin-top:10px">Recent SCIM changes</div>' + changes + '</section>';
+        }).join('') + (scimStores.length ? '<div>' + UI.btn('Add a SCIM store', { size: 'sm', kind: 'ghost', attrs: 'data-scimstore' }) + '</div>' : '');
+      }
 
       let body = '';
       if (st.tab === 'clients') {
@@ -151,6 +191,7 @@
         body = '<div class="hstack wrap"><span class="fg2">Optional federation: this issuer acts as OIDC relying party or SAML service provider to an on-prem identity provider.</span><span class="right hstack gap6">' + UI.btn('Add GitHub or AT-Protocol store', { size: 'sm', kind: 'ghost', attrs: 'data-addstore' }) + UI.btn('Add upstream provider', { size: 'sm', icon: 'plus', attrs: 'data-upstream' }) + '</span></div>'
           + UI.table(['Provider', 'Protocol', 'Reachability', 'Status', 'Used by', 'Metadata', ''], upRows.map((u) => ['<b>' + esc(u.name) + '</b>', /^(github|atproto)$/.test(u.protocol) ? UI.pill(u.protocol, 'outline') : esc(u.protocolLabel), esc(u.reach), UI.pill(u.status, u.status === 'connected' ? 'ok' : u.status === 'disabled' ? '' : 'danger'), esc(u.usedBy), u.protocol === 'saml' ? sourceCell(u.id) : u.protocol === 'oidc' ? '<span class="muted">discovery</span>' : '<span class="muted">none</span>', /^(github|atproto)$/.test(u.protocol) && (st.stores || []).some((p) => p.id === u.id) ? UI.btn('Settings', { size: 'xs', kind: 'ghost', attrs: 'data-storedetail="' + esc(u.id) + '" aria-label="Settings of ' + esc(u.name) + '"' }) : '']), { clickable: false, minWidth: '720px', emptyTitle: 'No upstream providers', emptyText: 'Users sign in with the user stores. Add an on-prem OIDC or SAML provider, a GitHub or an AT-Protocol store to federate.' })
           + UI.notice('Since 1.4.0 the chain also takes a <b>GitHub</b> store (OAuth app, allowed organisations, verified primary address only) and an <b>AT-Protocol</b> store (a bound DID signs in as its user; others are provisioned just in time with the handle as username and the DID as their only group). Both pass the service URL checks when saved and at every connection.', 'info')
+          + scimSection()
           + '<div class="grid2">' + UI.panel('Primary authentication', UI.kv([['Kerberos SPNEGO', k.available && k.enabled ? esc(k.detail) + (k.realms.length ? ', realms ' + esc(k.realms.join(', ')) : ', any realm') : k.enabled ? 'not available: ' + esc(k.detail) : 'turned off for this tenant'], ['LDAP bind', 'LDAPS or StartTLS to the directory; never a clear bind'], ['Second factor', 'WebAuthn passkeys and TOTP, required for admin roles, also after Kerberos and upstream sign-in'], ['Device flow', 'RFC 8628 at <span class="mono">' + esc(ov.device.verificationUri) + '</span>, codes live ' + ov.device.minutes + ' min'], ['Fallback order', 'Kerberos, then upstream or password, then MFA']], 1) + '<div>' + UI.btn('Test a login', { size: 'sm', attrs: 'data-testlogin' }) + '</div>')
           + UI.panel('Air gap', UI.notice('Cloud identity providers are unreachable from this network. Only on-prem providers on internal addresses' + (ov.upstream.allowList ? ', or hosts on the allow-list (' + esc(ov.upstream.allowList) + '),' : '') + ' can be upstream.', 'info') + UI.kv([['OIDC redirect URI', '<span class="mono">' + esc(ov.upstream.redirectUri) + '</span>'], ['SAML ACS URL', '<span class="mono">' + esc(ov.upstream.acsUrl) + '</span>'], ['SAML single logout', '<span class="mono">' + esc(ov.upstream.sloUrl) + '</span>']], 1) + '<div>' + UI.btn('Open zones', { size: 'sm', kind: 'ghost', attrs: 'data-gozones' }) + '</div>') + '</div>';
       } else if (st.tab === 'policy') {
@@ -228,6 +269,8 @@
           + (!st.dids ? (st.extraErr.dids ? UI.problem('Bindings could not be loaded', st.extraErr.dids.message, st.extraErr.dids.problem && st.extraErr.dids.problem.trace_id) : UI.notice('Seeing bindings needs the identity:manage permission.', 'info'))
             : UI.table(['User', 'DID', 'Handle', 'State', 'Proof', { label: '', right: true }], st.dids.map((d) => ['<span class="mono">' + esc(d.username) + '</span>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.did) + '</span>', d.handle ? '<span class="mono">' + esc(d.handle) + '</span>' : '<span class="muted">none</span>', d.verified ? UI.pill('verified', 'ok') : d.challengePending ? UI.pill('challenge pending', 'warn') + '<div class="muted" style="font-size:12px">expires ' + esc(stamp(d.challengeExpiresAt)) + '</div>' : UI.pill('unverified', 'warn'), d.proof ? UI.pill(d.proof, 'outline') : '', UI.btn('Remove binding', { size: 'xs', kind: 'ghost', attrs: 'data-rmdid="' + esc(d.id) + '" aria-label="Remove the binding for ' + esc(d.username) + '"' })]), { clickable: false, minWidth: '760px', emptyTitle: 'No bindings', emptyText: 'Users bind a DID from Settings.' }))
           + '<div class="muted" style="font-size:12px">Removing a binding is audited atproto.did.removed (204). Handles are checked both ways: the DNS or well-known record must give the DID, and the DID document must name the handle back.</div>';
+      } else if (st.tab === 'mcp') {
+        body = mcpBody();
       } else {
         body = '<div class="eyebrow">Active sessions and grants in this tenant</div>' + UI.table(['User', 'Signed in', 'Method', 'Client', ''], st.sessions.map((s, i) => ['<b>' + esc(s.user) + '</b>', esc(s.kind === 'service' ? 'token, ' + when(s.signedInAt) : when(s.signedInAt)), esc(s.method), esc(s.client), UI.btn('Revoke', { size: 'xs', attrs: 'data-revoke="' + i + '"' })]), { clickable: false, minWidth: '560px', emptyTitle: 'No active sessions', emptyText: 'Sessions appear when someone signs in or a service account requests a token.' })
           + '<div class="muted" style="font-size:12px">Revocation also invalidates refresh tokens. Users disabled by directory sync lose their sessions within one sync interval.</div><div>' + UI.btn('Open tenant sessions', { size: 'sm', kind: 'ghost', attrs: 'data-gotenants' }) + '</div>';
@@ -247,7 +290,7 @@
           + '<div class="field"><span class="fl">Redirect URIs</span>' + (client.redirectUris.length ? client.redirectUris.map((r) => '<div class="mono" style="overflow-wrap:anywhere">' + esc(r) + '</div>').join('') : '<div class="muted">none</div>') + '</div>'
           + '<div class="field"><span class="fl">Grant types</span><div class="hstack wrap gap4">' + client.grants.map((g) => UI.pill(g, 'outline')).join('') + '</div></div>'
           + '<div class="field"><span class="fl">Scopes</span><div class="mono">' + esc(client.scopes.join(' ')) + '</div></div>'
-          + UI.toggle(cc ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkceRequired, 'data-manual data-pkce' + (cc || client.type === 'public' ? ' data-na style="opacity:.6"' : ''))
+          + UI.toggle(cc ? 'PKCE not applicable to client credentials' : 'PKCE required', client.pkceRequired, 'data-manual data-pkce' + (cc || client.type === 'public' ? ' data-na aria-disabled="true" style="opacity:.6"' : ''))
           + UI.toggle('DPoP proof required (sender-constrained tokens)', client.dpopRequired, 'data-manual data-dpop')
           + (client.confidential ? '<div class="field"><span class="fl">Token introspection</span><div class="fg2" style="font-size:12px">' + (client.introspect === 'any' ? 'Resource server: introspects access tokens of every client in this tenant.' : client.introspectPending ? 'Its own tokens. Introspecting every client\'s tokens waits for a second identity admin.' : 'Its own tokens only.') + '</div><div>' + (client.introspect === 'any' ? UI.btn('Limit to its own tokens', { size: 'sm', kind: 'ghost', attrs: 'data-introspect="own"' }) : client.introspectPending ? '' : UI.btn('Make it a resource server', { size: 'sm', kind: 'ghost', attrs: 'data-introspect="any"' })) + '</div></div>' : '')
           + (client.grants.indexOf('authorization_code') >= 0 ? UI.toggle('Pushed authorization requests required', client.parRequired, 'data-manual data-par') : '')
@@ -552,12 +595,133 @@
 
       // ----- handlers -----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; delete ctx.params.tab; ctx.rerender(); });
+
+      // ----- the MCP server (B-7101, B-7102) -----
+      function mcpBody() {
+        const m = st.mcp;
+        if (!m) return st.extraErr.mcp ? UI.problem('The MCP server settings could not be loaded', st.extraErr.mcp.message, st.extraErr.mcp.problem && st.extraErr.mcp.problem.trace_id) : UI.notice('Seeing the MCP server needs the identity:manage permission.', 'info');
+        const live = m.publications.filter((x) => x.enabled);
+        const sample = live[0] || m.publications[0];
+        const prm = (u) => u.replace(/\/mcp\//, '/.well-known/oauth-protected-resource/mcp/');
+        return UI.notice('Each workspace can publish an MCP server. Clients such as Claude Desktop connect to its URL, sign in through this tenant\'s issuer (OAuth 2.1, PKCE) and act as the person who signed in: their roles, the token\'s scopes, the label the workspace publishes at, guardrails and approvals apply to every call, and every call is audited <span class="mono">mcp.server.call</span>.', 'info')
+          + (st.mcpNote === 'published' ? (live.length ? UI.notice('<b>' + esc(live.map((x) => x.workspace).join(', ')) + (live.length === 1 ? ' publishes its' : ' publish their') + ' MCP server.</b> People find the URL under Settings, MCP access.', 'ok') : UI.notice('No workspace publishes its MCP server yet. Edit one below and turn it on.', 'info')) : '')
+          + (st.mcpNote === 'refusal' && sample ? UI.panel('A token for another resource', '<div class="fg2" style="font-size:12px">A token issued for the API (audience <span class="mono">' + esc(m.issuer + '/api') + '</span>) or another workspace is refused. Each server accepts only tokens whose audience is its own URL (RFC 8707), and the API refuses tokens for an MCP server.</div>'
+            + UI.code('HTTP/1.1 401 Unauthorized\nWWW-Authenticate: Bearer resource_metadata="' + prm(sample.url) + '",\n  scope="' + m.scopes.join(' ') + '",\n  error="invalid_token", error_description="The access token is invalid, expired, revoked, or was issued for another resource."', 'http'), { actions: UI.btn('Dismiss', { size: 'xs', kind: 'ghost', attrs: 'data-mcpdismiss' }) }) : '')
+          + UI.panel('Self-registration', UI.toggle('Let MCP clients register themselves (RFC 7591)', m.dynamicRegistration, 'data-mcpdcr data-manual')
+            + UI.kv([['Registration endpoint', m.dynamicRegistration ? '<span class="mono">' + esc(m.registrationEndpoint) + '</span>' : '<span class="muted">not offered</span>'], ['Issuer', '<span class="mono">' + esc(m.issuer) + '</span>'], ['Scopes a client may ask for', '<span class="mono">' + esc(m.scopes.concat(['offline_access']).join(' ')) + '</span>']], 1)
+            + (m.dynamicRegistration || st.mcpNote === 'dcr' ? UI.notice((m.dynamicRegistration ? '<b>Self-registration is on.</b> ' : '<b>When self-registration is on,</b> ') + 'any MCP client that reaches the issuer can register a public client with HTTPS or loopback redirect URIs. Each one asks every person for consent before it acts, and only for the MCP scopes.', 'warn') : '<span class="muted" style="font-size:12px">Off: an identity admin creates the client for each MCP client under OIDC clients, with its redirect URI.</span>'))
+          + '<div class="eyebrow">Workspaces</div>'
+          + UI.table(['Workspace', 'MCP server', 'Tool groups', 'Label', 'DPoP', 'Connection URL', { label: '', right: true }], m.publications.map((x) => [
+            '<b>' + esc(x.workspace) + '</b><div class="muted" style="font-size:11px">ceiling ' + esc(x.ceiling) + '</div>',
+            x.enabled ? UI.pill('published', 'ok') : UI.pill('off', 'outline'),
+            esc(x.groups.map((g) => (MCP_GROUP_NAMES[g] || [g])[0]).join(', ')),
+            UI.label(x.label, { sm: true }),
+            x.requireDpop ? UI.pill('required', 'info') : '<span class="muted">optional</span>',
+            x.enabled ? '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(x.url) + '</span>' : '<span class="muted">not published</span>',
+            '<span class="hstack gap6" style="justify-content:flex-end">' + (x.enabled ? UI.iconbtn('copy', 'Copy the URL of ' + x.workspace, { attrs: 'data-mcpcopy="' + esc(x.url) + '"', cls: 'sm ghost' }) : '') + UI.btn('Edit', { size: 'sm', attrs: 'data-mcpedit="' + esc(x.workspaceId) + '" aria-label="Edit the MCP server of ' + esc(x.workspace) + '"' }) + '</span>']), { minWidth: '760px', clickable: false, emptyTitle: 'No workspaces', emptyText: 'Create a workspace under Tenants first.' })
+          + '<div class="muted" style="font-size:12px">Clients find the issuer from the server\'s protected resource metadata (RFC 9728) and ask for a token for that server\'s URL (RFC 8707). Tokens for the API or another workspace are refused with 401.</div>'
+          + UI.panel('Clients that registered themselves', UI.table(['Client', 'Client ID', 'Redirect URI', 'Scopes', 'Last used', { label: '', right: true }], m.clients.map((c) => [esc(c.name) + ' ' + UI.pill(c.status === 'active' ? c.type.replace('_', ' ') : 'disabled', c.status === 'active' ? 'outline' : 'warn'), '<span class="mono">' + esc(c.clientId) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.redirectUris.join(' ')) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.scopes.join(' ')) + '</span>', esc(when(c.lastUsedAt)), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-mcpclient="' + esc(c.id) + '" aria-label="Open ' + esc(c.name) + ' under OIDC clients"' }) + '</span>']), { minWidth: '640px', clickable: false, emptyTitle: 'No self-registered clients', emptyText: 'With self-registration on, MCP clients that register themselves are listed here.' })
+            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>');
+      }
+      function mcpEdit(wsId) {
+        const x = st.mcp.publications.find((p) => p.workspaceId === wsId);
+        if (!x) return;
+        const draft = { enabled: x.enabled, groups: x.groups.slice(), label: x.label, requireDpop: x.requireDpop };
+        const labels = LABEL_ORDER.filter((l) => LABEL_ORDER.indexOf(l) <= LABEL_ORDER.indexOf(x.ceiling));
+        let tools = null; let toolsErr = null;
+        const preview = () => '<div class="eyebrow">What it publishes, as you would see it</div>' + (toolsErr ? UI.notice(esc(toolsErr), 'warn') : !tools ? UI.notice('Loading…', 'info') : UI.table(['Tool', 'Group', 'Side effect'], tools.filter((t) => t.group === 'status' ? draft.groups.indexOf('workflows') >= 0 || draft.groups.indexOf('agents') >= 0 : draft.groups.indexOf(t.group) >= 0).map((t) => ['<span class="mono">' + esc(t.name) + '</span>', esc(t.group), UI.pill(t.sideEffect === 'read' ? 'read-only' : t.sideEffect, t.sideEffect === 'read' ? 'ok' : t.sideEffect === 'write' ? 'warn' : 'danger')]), { minWidth: '0', clickable: false, emptyTitle: 'No tools', emptyText: 'Nothing in these groups is published to this workspace for you, or no group is picked.' })) + '<span class="muted" style="font-size:12px">At the saved label, with your roles. Write and destructive calls wait until the person approves them in Settings, MCP access.</span>';
+        ctx.drawer({
+          title: 'MCP server of ' + esc(x.workspace),
+          body: UI.toggle('Published', draft.enabled, 'data-pubon') + UI.kv([['Connection URL', '<span class="mono" style="overflow-wrap:anywhere">' + esc(x.url) + '</span>'], ['Protected resource metadata', '<span class="mono" style="overflow-wrap:anywhere;font-size:12px">' + esc(x.url.replace(/\/mcp\//, '/.well-known/oauth-protected-resource/mcp/')) + '</span>']], 1)
+            + '<fieldset class="vstack gap6" style="border:0;padding:0;margin:0"><legend class="eyebrow">Tool groups</legend>' + st.mcp.groups.map((g) => UI.check((MCP_GROUP_NAMES[g] || [g, ''])[0] + ': ' + (MCP_GROUP_NAMES[g] || [g, ''])[1], draft.groups.indexOf(g) >= 0, 'data-pubgroup="' + g + '"')).join('') + '</fieldset>'
+            + UI.field('Highest label a call carries', UI.select(labels, draft.label, 'data-publabel'), 'Each person\'s clearance is lowered to it for calls here; the workspace ceiling is ' + esc(x.ceiling) + '.')
+            + UI.toggle('Require DPoP-bound tokens', draft.requireDpop, 'data-pubdpop') + '<div data-pubpreview>' + preview() + '</div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-pubsave' }),
+          onMount(dr) {
+            const show = () => { const el = dr.querySelector('[data-pubpreview]'); if (el) el.innerHTML = preview(); };
+            App.get('/api/admin/mcp-server/workspaces/' + x.workspaceId + '/tools').then((r) => { tools = r.tools; if (!r.asYou) toolsErr = 'You are not a member of this workspace, so the preview is empty.'; }).catch((err) => { toolsErr = err.message; }).finally(show);
+            dr.querySelectorAll('[data-pubgroup]').forEach((el) => el.addEventListener('change', () => { const g = el.dataset.pubgroup; draft.groups = draft.groups.filter((y) => y !== g).concat(el.checked ? [g] : []); show(); }));
+            dr.querySelector('[data-pubsave]').addEventListener('click', async () => {
+              draft.enabled = dr.querySelector('[data-pubon]').getAttribute('aria-checked') === 'true';
+              draft.requireDpop = dr.querySelector('[data-pubdpop]').getAttribute('aria-checked') === 'true';
+              draft.label = dr.querySelector('[data-publabel]').value;
+              App.closeOverlay();
+              const turning = draft.enabled !== x.enabled;
+              const ok = await ctx.confirm({ title: (turning ? (draft.enabled ? 'Publish' : 'Stop publishing') : 'Save') + ' the MCP server of ' + esc(x.workspace) + '?', tone: turning && !draft.enabled ? 'danger' : 'info', body: '<p class="fg2" style="margin:0">' + (turning && !draft.enabled ? 'Clients get 404 at its URL from the next request; tokens issued for it stop being useful.' : 'Clients see these groups on their next tools/list.') + '</p>', kv: [['Groups', esc(draft.groups.join(', ') || 'none')], ['Label', esc(draft.label)], ['DPoP', draft.requireDpop ? 'required' : 'optional']], ok: turning ? (draft.enabled ? 'Publish' : 'Stop publishing') : 'Save' });
+              if (!ok) return;
+              try {
+                await App.api('PUT', '/api/admin/mcp-server/workspaces/' + x.workspaceId, draft);
+                ctx.toast(esc(x.workspace) + (turning ? (draft.enabled ? ' publishes its MCP server.' : ' no longer publishes its MCP server.') : ': MCP server saved.'), turning && !draft.enabled ? 'warn' : 'ok');
+                if (turning && draft.enabled) st.mcpNote = 'published';
+                reload();
+              } catch (err) { App.fail(err); }
+            });
+          }
+        });
+      }
+      ctx.on('click', '[data-mcpedit]', (e, t) => mcpEdit(t.dataset.mcpedit));
+      ctx.on('click', '[data-mcpcopy]', (e, t) => copy(t.dataset.mcpcopy, 'The URL', ctx));
+      ctx.on('click', '[data-mcpdismiss]', () => { st.mcpNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-mcpclient]', (e, t) => { st.client = t.dataset.mcpclient; st.tab = 'clients'; ctx.rerender(); });
+      ctx.on('click', '[data-mcpdcr]', async () => {
+        const on = !st.mcp.dynamicRegistration;
+        const ok = await ctx.confirm({ title: (on ? 'Let' : 'Stop letting') + ' MCP clients register themselves?', tone: on ? 'warn' : 'info', body: '<p class="fg2" style="margin:0">' + (on ? 'The discovery document names <span class="mono">' + esc(st.mcp.registrationEndpoint) + '</span>. Any client that reaches the issuer can register a public client; each one asks every person for consent, and only for the MCP scopes.' : 'Registration answers 404. Clients that registered before keep working until you disable them under OIDC clients.') + '</p>', ok: on ? 'Turn on' : 'Turn off' });
+        if (!ok) return;
+        try { await App.api('PUT', '/api/admin/mcp-server/settings', { dynamicRegistration: on }); ctx.toast('Self-registration ' + (on ? 'on' : 'off') + '.', on ? 'warn' : 'ok'); reload(); } catch (err) { App.fail(err); }
+      });
       ctx.on('click', 'tr[data-client]', (e, t) => { st.client = t.dataset.client; delete ctx.params.client; ctx.rerender(); });
       ctx.on('input', '[data-q]', (e, t) => { st.q = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-q]'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } });
       ctx.on('click', '[data-create]', createClient);
       ctx.on('click', '[data-rotatekey]', rotateKey);
       ctx.on('click', '[data-saml]', samlImport);
       ctx.on('click', '[data-upstream]', upstreamModal);
+      // ----- SCIM (1.6.0, B-7201, B-7202) -----
+      ctx.on('click', '[data-scimtokennew]', (e, t) => {
+        const storeId = t.dataset.scimtokennew;
+        ctx.modal({
+          title: 'New SCIM token',
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('Entra ID connector', { attrs: 'data-scimname aria-label="Token name" maxlength="100"' }), 'Who uses it, so the list says which provider it is.') + UI.field('Expires after', UI.select([{ value: '30', label: '30 days' }, { value: '90', label: '90 days' }, { value: '365', label: '365 days' }], '365', 'data-scimdays aria-label="Expires after"'), 'At most IDENTITY_SCIM_TOKEN_MAX_DAYS on this server.') + '</div>' + UI.notice('The token is shown once. It reads and writes this store\'s users and groups only; holders of identity:manage revoke it here.', 'info') + '<div data-scimerr></div>',
+          actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Make token', { kind: 'primary', attrs: 'data-scimmake' }),
+          onMount(m) {
+            m.querySelector('[data-scimmake]').addEventListener('click', () => {
+              const name = m.querySelector('[data-scimname]').value.trim() || 'SCIM token';
+              App.post('/api/admin/identity-providers/' + encodeURIComponent(storeId) + '/scim/tokens', { name, expiresInDays: +m.querySelector('[data-scimdays]').value })
+                .then((tok) => { st.scimShown = { storeId, name: tok.name, token: tok.token, expiresAt: tok.expiresAt }; App.closeOverlay(); reloadScim(); ctx.toast('SCIM token made. Copy it now: it is shown once.', 'ok'); })
+                .catch((err) => { m.querySelector('[data-scimerr]').innerHTML = UI.notice(problemText(err), 'danger'); });
+            });
+          }
+        });
+      });
+      ctx.on('click', '[data-scimcopy]', () => { const tok = st.scimShown && st.scimShown.token; if (tok) copy(tok, 'Token', ctx); st.scimShown = null; ctx.rerender(); });
+      ctx.on('click', '[data-scimdone]', () => { st.scimShown = null; ctx.rerender(); });
+      ctx.on('click', '[data-scimrevoke]', async (e, t) => {
+        const sc = (st.scim || []).find((x) => x.store.id === t.dataset.store); const tok = sc && sc.tokens.find((x) => x.id === t.dataset.scimrevoke); if (!tok) return;
+        const ok = await ctx.confirm({ title: 'Revoke ' + esc(tok.name) + '?', tag: 'stops provisioning', tone: 'danger', body: '<p class="fg2" style="margin:0">The provider\'s next request is refused with 401. Users and groups already provisioned stay as they are.</p>', kv: [['Prefix', '<span class="mono">' + esc(tok.prefix) + '</span>'], ['Last used', tok.lastUsedAt ? esc(when(tok.lastUsedAt)) : 'never']], ok: 'Revoke' });
+        if (!ok) return;
+        App.del('/api/admin/identity-providers/' + encodeURIComponent(sc.store.id) + '/scim/tokens/' + encodeURIComponent(tok.id)).then(() => { reloadScim(); ctx.toast(esc(tok.name) + ' revoked. Audited as scim.token.revoked.', 'warn'); }).catch(App.fail);
+      });
+      ctx.on('click', '[data-scimreapply]', async (e, t) => {
+        const sc = (st.scim || []).find((x) => x.store.id === t.dataset.scimreapply); if (!sc) return;
+        const ok = await ctx.confirm({ title: 'Re-apply group mappings', tone: 'info', body: '<p class="fg2" style="margin:0">Recomputes roles, clearance and workspaces for every user of ' + esc(sc.store.name) + ' from their SCIM groups, as a job. Anyone whose access changes is signed out once.</p>', kv: [['Users', String(sc.users)], ['Group mappings', String(sc.groupMappings)]], ok: 'Re-apply' });
+        if (!ok) return;
+        App.post('/api/admin/identity-providers/' + encodeURIComponent(sc.store.id) + '/scim/reapply').then((r) => { reloadScim(); ctx.toast('Re-applying group mappings to ' + sc.users + ' users (job ' + esc(r.jobId) + '). Follow it under Jobs.', 'ok'); }).catch(App.fail);
+      });
+      ctx.on('click', '[data-scimstore]', () => {
+        const ups = (st.stores || []).filter((p) => /^(oidc|saml|github)$/.test(p.kind));
+        ctx.modal({
+          title: 'Add a SCIM store',
+          body: UI.field('Name', UI.input('Entra ID provisioning', { attrs: 'data-scimsname aria-label="Store name" maxlength="100"' })) + '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="eyebrow">Its users sign in through</legend>' + (ups.length ? ups.map((p) => UI.check(p.name + ' (' + p.kind + ')', false, 'data-scimsin="' + esc(p.id) + '"')).join('') : '<div class="muted" style="font-size:12px">No OIDC, SAML or GitHub store yet: add one under Upstream providers, then name it here.</div>') + '</fieldset>' + UI.notice('A SCIM store takes no passwords. Users the provider pushes get roles from group mappings that name its groups (with this store as provider), else none until a group gives them some.', 'info') + '<div data-scimserr></div>',
+          actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Add store', { kind: 'primary', attrs: 'data-scimsave' }),
+          onMount(m) {
+            m.querySelector('[data-scimsave]').addEventListener('click', () => {
+              const signInStores = Array.prototype.slice.call(m.querySelectorAll('input[data-scimsin]')).filter((x) => x.checked).map((x) => x.dataset.scimsin);
+              App.post('/api/admin/identity-providers', { name: m.querySelector('[data-scimsname]').value.trim() || 'SCIM', kind: 'scim', config: { signInStores, defaultRoles: [], defaultClearance: 'internal' } })
+                .then((row) => { st.stores = (st.stores || []).concat([row]); App.closeOverlay(); reloadScim(); ctx.toast(esc(row.name) + ' added. Make a SCIM token next.', 'ok'); })
+                .catch((err) => { m.querySelector('[data-scimserr]').innerHTML = UI.notice(problemText(err), 'danger'); });
+            });
+          }
+        });
+      });
       ctx.on('click', '[data-testlogin]', testLogin);
       ctx.on('click', '[data-idcopy]', (e, t) => copy(t.dataset.idcopy, t.dataset.what || 'Value', ctx));
       ctx.on('click', '[data-idpmeta]', () => window.open(ov.idp.metadataUrl, '_blank', 'noopener'));

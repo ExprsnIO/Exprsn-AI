@@ -85,6 +85,7 @@ export const profileView = (p: ProfileRow) => ({
   fallback: p.fallback,
   canary: p.canary,
   tools: p.tools,
+  trustMarking: p.trust_marking !== false,
   label: p.label,
   status: p.status,
   version: p.version,
@@ -605,6 +606,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     fallback: fallbackSchema,
     // calculate, or published registry and MCP tools by name (Sprint 7)
     tools: z.array(z.string().trim().regex(/^[A-Za-z0-9][\w.:-]{0,119}$/)).max(32),
+    // B-6901: datamark untrusted content for this profile's model (on by default)
+    trustMarking: z.boolean(),
     label: z.enum(LABELS)
   });
 
@@ -689,6 +692,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       fallback: body.fallback ?? null,
       canary: null,
       tools: body.tools ?? [],
+      trust_marking: body.trustMarking ?? true,
       label: body.label ?? 'internal',
       status: body.aliasOf ? 'published' : 'draft',
       version: 1,
@@ -725,6 +729,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     await validate(p.tenantId, next, next.status === 'published');
     // Sprint 21 (B-1303): a version whose gated evaluations have not passed for its settings is not published.
     await s.evals.gate(p.tenantId, before, next);
+    // 1.6.0 (B-7001): and the red-team gate, which no evaluation override opens.
+    await s.redteam.gateProfile(p.tenantId, before, next);
     await g.repo.updateProfile(p.tenantId, before.id, { ...patch, version: next.version, updated_by: p.userId });
     await g.repo.snapshot(next, note, p.userId);
     return next;
@@ -741,7 +747,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       if (!target || target.alias_of || target.id === before.id) throw badRequest('An alias must point at a real profile.');
     }
     const patch: Partial<ProfileRow> = {};
-    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['label', 'label'], ['aliasOf', 'alias_of']];
+    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['trustMarking', 'trust_marking'], ['label', 'label'], ['aliasOf', 'alias_of']];
     for (const [a, b] of map) if (body[a] !== undefined) (patch as Record<string, unknown>)[b] = body[a];
     if (patch.model_id && patch.model_id !== before.model_id) {
       const m = await g.repo.model(patch.model_id);

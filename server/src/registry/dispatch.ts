@@ -7,6 +7,7 @@ import type { McpService } from '../mcp/service.js';
 import type { ScriptService } from '../scripts/service.js';
 import { ChainLimit, chainScope, type ChainCtx, type ChainErrorType, type ChainKind, type ChainRef, type ChainService } from '../chain/context.js';
 import { functionName, validateAgainst } from './schema.js';
+import { toolSource, type InjectionDefence, type UntrustedVerdict } from '../guardrails/injection.js';
 import type { EntryRow, RegistryService, SideEffect } from './service.js';
 
 const RESULT_LIMIT = 64 * 1024;
@@ -123,7 +124,17 @@ export interface ToolOutcome {
   valid?: boolean | null;
   /** B-4106: how an awaited callee failed (`budget`, `cancelled`, …), as the error's prefix tells the model. */
   errorType?: ChainErrorType;
+  /**
+   * B-6902: what the untrusted-content checkpoint decided for the result (absent for trusted built-ins such as
+   * calculate). Callers wrap the result as untrusted content with `toolResultContent` before a model reads it.
+   */
+  untrusted?: UntrustedVerdict;
   durationMs: number;
+}
+
+/** B-8901: HTTP tools (`impl: 'http'`) run through this runner (`registry/http-tool.ts`). */
+export interface HttpToolRunnerLike {
+  run(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
@@ -139,6 +150,8 @@ export class ToolDispatcher {
   private chains: ChainService | null = null;
   private builtins: BuiltinRunner | null = null;
   private agents: AgentToolRunner | null = null;
+  private http: HttpToolRunnerLike | null = null;
+  private injection: InjectionDefence | null = null;
 
   constructor(
     private readonly registry: RegistryService,
@@ -170,6 +183,16 @@ export class ToolDispatcher {
   /** B-4102: delegated agents run through this runner. */
   useAgents(runner: AgentToolRunner): void {
     this.agents = runner;
+  }
+
+  /** B-8901: HTTP tools run through this runner. */
+  useHttp(runner: HttpToolRunnerLike): void {
+    this.http = runner;
+  }
+
+  /** B-6902: tool results pass the untrusted-content checkpoint through this. */
+  useInjection(defence: InjectionDefence): void {
+    this.injection = defence;
   }
 
   /** B-3904: the domain built-ins run through this runner. */
@@ -387,7 +410,16 @@ export class ToolDispatcher {
     if (g.action === 'block' || g.action === 'require-approval') {
       return out({ decision: g.action, withheld: true, valid, error: `The result of ${tool.entry.name} was withheld by a guardrail${g.reason ? `: ${g.reason}` : '.'}` });
     }
-    return out({ ok: true, result: defuseResult(g.action === 'redact' ? g.text : JSON.stringify(capped ?? null)), decision, valid });
+    let shown = g.action === 'redact' ? g.text : JSON.stringify(capped ?? null);
+    // B-6902: the untrusted-content checkpoint: instructions aimed at the model in a result are blocked or annotated.
+    const source = toolSource(tool.entry.impl, tool.entry.definition.builtin);
+    let untrusted: UntrustedVerdict | undefined;
+    if (source && this.injection) {
+      untrusted = await this.injection.screen({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, principal: p, label: clears(p.clearance, ctx.label) ? ctx.label : p.clearance, source, ref: tool.entry.id, name: tool.entry.name, text: shown, meta: { tool: tool.entry.name, impl: tool.entry.impl, ...(ctx.source ? { via: ctx.source.kind } : {}) } });
+      if (untrusted.action === 'block') return out({ decision: 'block', withheld: true, valid, untrusted, error: `The result of ${tool.entry.name} was withheld: it tries to instruct the model${untrusted.rule ? ` (${untrusted.rule})` : ''}.` });
+      shown = untrusted.text;
+    }
+    return out({ ok: true, result: defuseResult(shown), decision, valid, ...(untrusted ? { untrusted } : {}) });
   }
 
   private async execute(ctx: ToolCallContext, entry: EntryRow, args: Record<string, unknown>): Promise<unknown> {
@@ -410,6 +442,9 @@ export class ToolDispatcher {
       case 'agent':
         if (entry.kind !== 'agent' || !this.agents) throw new Error(`${entry.name} cannot be delegated to on this instance.`);
         return this.agents.runAsTool(ctx, entry, args);
+      case 'http':
+        if (!this.http) throw new Error('HTTP tools are not available on this instance.');
+        return this.http.run(ctx, entry, args);
       default:
         throw new Error(`${entry.name} cannot be called (${entry.impl}).`);
     }

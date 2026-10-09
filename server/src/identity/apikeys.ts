@@ -17,6 +17,17 @@ export interface ApiKeyRow {
   created_at: number;
   /** Sprint 20 (B-1203): an Ed25519 public key (JWK x); when set, every `/v1` request with this key must be signed. */
   signature_key: string | null;
+  /** 1.6.0 (B-7701): the agent identity the key was minted for; requests with it act as the agent on the owner's behalf. */
+  agent_id: string | null;
+  /** 1.6.0 (B-8601): a key limited to one app (and, with `entity`, one entity's records); accepted nowhere else. */
+  app_scope: AppKeyScope | null;
+}
+
+export interface AppKeyScope {
+  app: string;
+  entity: string | null;
+  /** 1.6.0 (B-8702): the entity names an embedded session reaches (its app's settings); absent or null: every entity. */
+  entities?: string[] | null;
 }
 
 const KEY_RE = /^exai_k1_([0-9a-f]{12})_([A-Za-z0-9_-]{43})$/;
@@ -32,7 +43,9 @@ const toRow = (r: Record<string, unknown>): ApiKeyRow => ({
   last_used_at: r.last_used_at == null ? null : Number(r.last_used_at),
   revoked_at: r.revoked_at == null ? null : Number(r.revoked_at),
   created_at: Number(r.created_at),
-  signature_key: r.signature_key == null ? null : String(r.signature_key)
+  signature_key: r.signature_key == null ? null : String(r.signature_key),
+  agent_id: r.agent_id == null ? null : String(r.agent_id),
+  app_scope: r.app_scope == null ? null : json<AppKeyScope | null>(r.app_scope, null)
 });
 
 export const apiKeyState = (k: ApiKeyRow): 'active' | 'expired' | 'revoked' =>
@@ -53,7 +66,7 @@ export class ApiKeyService {
     return hmac(this.secret, 'apikey:' + key);
   }
 
-  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number; signatureKey?: string | null }): Promise<{ key: string; row: ApiKeyRow }> {
+  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number; signatureKey?: string | null; agentId?: string | null; appScope?: AppKeyScope | null }): Promise<{ key: string; row: ApiKeyRow }> {
     const prefix = randomBytes(6).toString('hex');
     const key = `exai_k1_${prefix}_${randomToken(32)}`;
     const t = Date.now();
@@ -69,7 +82,9 @@ export class ApiKeyService {
       last_used_at: null,
       revoked_at: null,
       created_at: t,
-      signature_key: input.signatureKey ?? null
+      signature_key: input.signatureKey ?? null,
+      agent_id: input.agentId ?? null,
+      app_scope: input.appScope ? JSON.stringify(input.appScope) : null
     };
     await this.db('api_keys').insert(row);
     return { key, row: toRow(row) };
@@ -89,11 +104,27 @@ export class ApiKeyService {
     return row;
   }
 
-  /** Lists a user's keys; expired and revoked keys stay listed for 30 days. */
+  /** 1.6.0 (B-7701): the keys minted for an agent identity (any owner); revoked and expired ones stay listed for 30 days. */
+  async listForAgent(agentId: string): Promise<ApiKeyRow[]> {
+    const cutoff = Date.now() - 30 * 86400_000;
+    const rows = await this.db('api_keys')
+      .where({ agent_id: agentId })
+      .andWhere((w) => w.whereNull('revoked_at').orWhere('revoked_at', '>', cutoff))
+      .andWhere('expires_at', '>', cutoff)
+      .orderBy('created_at', 'desc');
+    return rows.map(toRow);
+  }
+
+  async revokeForAgent(agentId: string, id: string): Promise<boolean> {
+    return (await this.db('api_keys').where({ agent_id: agentId, id, revoked_at: null }).update({ revoked_at: Date.now() })) > 0;
+  }
+
+  /** Lists a user's keys (their personal ones, not those minted for agents); expired and revoked keys stay listed for 30 days. */
   async listForUser(userId: string): Promise<ApiKeyRow[]> {
     const cutoff = Date.now() - 30 * 86400_000;
     const rows = await this.db('api_keys')
       .where({ user_id: userId })
+      .whereNull('agent_id')
       .andWhere((w) => w.whereNull('revoked_at').orWhere('revoked_at', '>', cutoff))
       .andWhere('expires_at', '>', cutoff)
       .orderBy('created_at', 'desc');

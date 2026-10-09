@@ -33,13 +33,87 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | **Done** |
 | 36b | Model thinking templates and a tool-calling evaluation that sends a system prompt (B-11707, pulled forward from 1.7.0 on 2026-10-08: the owner's Magistral profiles) | B-11707 | 2 | Next |
-| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | Next |
-| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Planned |
-| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | **Done** (B-7202 partial) |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | **Done** |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | **Done** |
 
 ### Progress
 
-**Sprint 36: done** (this PR). Groups depth (B-4401 to B-4405, migration `038_groups2`): channels inside a group with
+**Sprint 39: done** (this PR), and with it the 1.6.0 release (B-5101). Content credentials (B-7901, migration
+`041_provenance_artifacts`): a generated PNG carries a C2PA manifest store (CBOR, JUMBF, COSE_Sign1 written here, no
+reference library) signed by a content-credentials certificate the tenant's issuing CA makes with its key in custody,
+verified by `GET /api/images/:id/content-credentials` and offline by `exprsn-ai c2pa:verify`. Versioned artifacts
+(B-8001): fenced blocks of an answer become artifacts of the conversation with a version per change, in the Chat
+inspector and for share readers, rendered in a sandboxed frame from a short-lived capability URL. App packages
+(B-8201 to B-8204, migration `041b_app_packages`): `exprsn-app/2` packages built, signed, sealed and verified before
+they are read; pipelines of three app slots with promotion that cannot skip a stage and needs an approval workflow
+before production (`app.package.promoted`); a backup before every deployment, a 365-day history and rollback on the
+Apps screen; git export and import as one file per object. Data model drafts (B-8301, migration `041c_model_gen_sync`):
+a description becomes a diff of entities, fields, relations, formulas, state machines and triggers to accept in one
+step; AI fields (B-8401, B-8402) take field references and formula functions, regenerate once when a reference
+changes, and fill every row as a cancellable job with an estimate first; outside tables (B-8501) from a PostgreSQL or
+MySQL connection as app entities with writes through and scheduled pulls. Entity APIs (B-8601 to B-8603, migration
+`041d_entity_api_embeds`): `/api/apps/:app/:entity` under the policies, field masks and labels with app-limited API
+keys; a schema API that versions every change; an OpenAPI document and TypeScript client per app. Embedding (B-8701,
+B-8702): public embed pages under a `frame-ancestors` allowlist and signed embeds from a host-signed JWT (or a tenant CA
+certificate) mapped to a user, with their own bearer sessions. Unit suite 1170 passed; PostgreSQL integration 52
+files passed (MySQL ran for 39b and 39c); prototype smoke 51 of 51; the full Playwright suite 168 passed, 0 failed (B-5101: the sweep list gained Analytics, the harness driver
+was limited to the outside table, an Analytics reload race and the draft dialog's accessibility pass were fixed). Choices to know: the backlog's
+`apps:manage` is the catalogue's `apps:design`; stages are app slots of one tenant (cross-instance only through git);
+production promotion refuses without an approval workflow; outside tables are read unmasked, so attaching needs
+`connections:manage`; packages share the bundle HMAC key. Known gaps in `docs/security.md`: no RFC 3161 time stamp or
+ingredient chain in the manifest; JPEG images carry none; artifacts come only from fenced blocks; a field type change
+on an entity with records fails a deployment; rollback restores design, not records; pulls are full reads; a public
+embed page is reachable by anyone who learns its id; the host site is trusted for who is behind the browser.
+
+**Sprint 38: done** (PR #69). The AI inventory (B-7301, B-7302, migration `040_inventory_analytics`): one register of
+models, profiles, agents, workflows, tools, MCP servers and datasets with an owner, an oversight role, provenance,
+lineage, an impact assessment and known issues counted from run flags and failed evaluations, on the Models screen's
+Inventory tab, exported as CSV or JSON; the owner gate (an agent with no owner cannot be approved) is a tenant setting,
+off by default so existing tenants keep publishing. Analytics (B-7401 to B-7403): a new Analytics screen summing
+`usage_records` by workspace, group, model, profile and user and per day, prices per model or pool with a chargeback
+export per workspace that sums to the screen, and `gen_ai.*` usage attributes on the chat stream span. Audit export
+(B-7501): time-windowed JSONL files that end in a KMS-signed checkpoint and verify offline with
+`audit:verify-export`, and per-tenant SIEM destinations (HTTPS, syslog over TLS) under dual control. Red-team suites
+(B-7001, B-7002, migration `040b_redteam_agents`): built-in attack categories (the Sprint 37a corpus, jailbreaks,
+exfiltration through tools, system-prompt extraction) and tenant cases run against profiles, agents and workflows by
+the job `redteam.run`, judged deterministically; a gate beside the evaluation gate that no override opens; every
+successful attack a flag a reviewer turns into an eval case. Agent identities (B-7701): an agent as a principal with
+roles, a label ceiling and scoped keys, its runs narrowed to both grants, `actor.agent` on audit events. Handoffs
+(B-7801): a specialist agent listed in the configuration answers through the chain and is named on the Runs screen.
+Policies (B-8101 to B-8103, migration `040c_policies_dlp`): reusable rule sets per app entity with row conditions
+over the user's attributes, groups and roles and field permissions with last-four, hash and hidden masks, enforced in
+records queries, tools, forms, exports and workflows, with an editor and an explain view on Apps. DLP (B-7601): PII,
+secret and tenant-pattern detectors on answers, agent outputs and uploads that raise the label and hold or redact by
+rule; legal holds (B-7602) on users and workspaces under dual control that chat, memory and file purges respect; a
+compliance export API (B-7603) with the `compliance:export` scope. Unit suite 1130 passed; PostgreSQL integration
+passed on the merged migrations (MySQL ran for 38c only); prototype smoke 51 of 51; the specs for the touched screens
+passed. Choices to know: SIEM destinations, DLP, holds and exports live on the Usage and audit screen (Settings is
+personal settings); prices are per model or pool, not per instance; handoff attribution is on the Runs screen until
+agents reach chat in Sprint 40; `gen_ai` usage is on chat spans only. Known gaps in `docs/security.md`: a fixed
+English attack catalogue and a deterministic judge; identities narrow by permission, not by object; a handoff hands
+the task, not the messages; costs are computed on read, so a price change alters past chargebacks; no offline HMAC
+check; a record created outside one's own rows is accepted then unreachable; DLP inspects finished answers up to
+`DLP_MAX_TEXT_BYTES`; a hold does not stop self-deletion; exports are unsigned.
+
+**Sprint 37: done** (PR #65). The HTTP tool kind (B-8901 to B-8904): registry tools that call web APIs from a URL
+template, headers, a body and a response mapping, only to the tenant's allowed hosts, credentials only as vault
+references, every call metered and audited. Prompt-injection defence (B-6901 to B-6903): knowledge chunks, crawled
+pages and tool, MCP and HTTP results reach the model marked as untrusted content, an `untrusted-content` checkpoint with
+an injection rule (annotate by default, block per tenant), and a 57-attack, 30-benign corpus in CI with a 0.9 detection
+and 0.1 false-positive bar. The MCP server and MCP authorization (B-7101 to B-7103): a per-workspace MCP endpoint that
+publishes workflows, agents, knowledge bases, registry tools and app records and acts as the signed-in user, an OAuth 2.1
+resource server of the tenant's issuer (RFC 9728, RFC 8707), and per-user OAuth with PKCE in the MCP client. SCIM 2.0
+Users and Groups with deprovisioning that ends sessions, tokens, keys and app passwords in one request, and group
+mappings to roles (B-7201, B-7202). Vault secrets shared with one principal (B-4801), MongoDB dynamic credentials
+(B-4802), quote posts and per-post visibility (B-4901). Migrations `039_tools_injection`, `039b_mcp_server`,
+`039c_scim_vault_posts`. **B-7202 is partial**: the Entra ID and Okta validators could not reach this server; a local
+conformance suite covers what they check (`docs/identity.md`). Unit suite 1098 passed; PostgreSQL and MySQL integration
+passed. Each part ran its own Playwright specs. Known gaps in `docs/security.md`: the injection heuristic is tuned on its
+own corpus, the MCP server has no sessions, resources or prompts, write calls over MCP need a browser approval each time,
+and an unlisted post stays in the bookmarks of whoever saved it.
+
+**Sprint 36: done** (PR #64). Groups depth (B-4401 to B-4405, migration `038_groups2`): channels inside a group with
 their own members, roles and feed, never labelled below their group; a discovery page of joinable groups ranked by shared
 members and activity, filtered by clearance; places on groups and points on events with distance filters (PostGIS when
 installed, a bounding box otherwise, the same great-circle cut everywhere); trending groups by job; tenant group

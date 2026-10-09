@@ -6,6 +6,7 @@ import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { runChecks, type CheckResult } from './checks.js';
 import { schemaHash, type JsonSchema } from './schema.js';
 import type { ChainRefs, UsedBy } from '../chain/refs.js';
+import { httpDefinitionProblems, httpDefinitionSchema, httpSideEffect } from './http-tool.js';
 
 export const ENTRY_KINDS = ['tool', 'skill', 'agent'] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
@@ -13,7 +14,8 @@ export const ENTRY_STATUSES = ['draft', 'in_review', 'published', 'deprecated', 
 export type EntryStatus = (typeof ENTRY_STATUSES)[number];
 export const SIDE_EFFECTS = ['read', 'write', 'destructive'] as const;
 export type SideEffect = (typeof SIDE_EFFECTS)[number];
-export type EntryImpl = 'builtin' | 'mcp' | 'script' | 'archive' | 'agent' | 'workflow';
+/** 1.6.0 (B-8901): `http` tools call an outside HTTP API through the outbound address guard (`registry/http-tool.ts`). */
+export type EntryImpl = 'builtin' | 'mcp' | 'script' | 'archive' | 'agent' | 'workflow' | 'http';
 
 /** Where an entry is looked up: a tenant and, for workspace-scoped entries, the workspace. */
 export type RegistryScope = Pick<Principal, 'tenantId' | 'workspaceId'>;
@@ -37,6 +39,8 @@ export interface AgentDefinition {
   agents?: string[];
   /** B-4104: workflows (by name, in the run's workspace) this agent may start and await, offered as `workflow:<name>`. */
   workflows?: string[];
+  /** 1.6.0 (B-7801): specialist agents this agent may hand the conversation to; the handed-to run's answer is the run's answer. */
+  handoffs?: string[];
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;
@@ -175,6 +179,9 @@ export const referencedTools = (e: Pick<EntryRow, 'kind' | 'definition'>): strin
  * published to everyone and read-only here.
  */
 export class RegistryService {
+  /** 1.6.0, Sprint 38a (B-7301): asked before an agent is published; throws when the inventory entry is incomplete. */
+  publishGate: ((tenantId: string, kind: 'agent', id: string) => Promise<void>) | null = null;
+
   /** B-4105: the reference graph; unset, the chain checks and the "used by" guard are skipped. */
   private refs: ChainRefs | null = null;
 
@@ -259,6 +266,15 @@ export class RegistryService {
       ...(e.kind !== 'tool' ? { references: await this.referenceStatus(e.tenant_id ?? '', refs) } : {}),
       ...(e.kind === 'agent' ? { maxBudgets: MAX_BUDGETS } : {})
     });
+    // B-8901: an HTTP tool's request: fixed host, placeholders from the schema, credentials only as vault references.
+    if (e.impl === 'http') {
+      const r = httpDefinitionSchema.safeParse(e.definition);
+      const problems = r.success ? httpDefinitionProblems(r.data, e.input_schema) : r.error.issues.slice(0, 4).map((i) => `${i.path.join('.') || 'definition'}: ${i.message}.`);
+      const host = r.success ? (/^https?:\/\/([^/?#]+)/i.exec(r.data.url)?.[1] ?? '') : '';
+      const sideOk = !r.success || e.side_effect === httpSideEffect(r.data.method, e.side_effect);
+      if (!sideOk) problems.push(`A ${r.success ? r.data.method : ''} tool is ${r.success ? httpSideEffect(r.data.method, e.side_effect) : ''}; its side-effect class says ${e.side_effect}.`);
+      out.push({ name: 'HTTP request', ok: !problems.length, detail: problems.length ? problems.slice(0, 4).join(' ') : `${r.success ? r.data.method : ''} ${host}: path and query from the input schema, credentials only as vault references, every call through the outbound address guard.` });
+    }
     // B-4105: delegates, skills and workflows published, within the ceiling, and no cycle that cannot end.
     if (this.refs && e.kind !== 'tool' && e.tenant_id) {
       const c = await this.refs.checkEntry(e);
@@ -375,6 +391,8 @@ export class RegistryService {
       throw conflict(`Approve stays disabled until the checks pass: ${checks.filter((c) => !c.ok).map((c) => c.name).join(', ')}.`);
     }
     const scope = await this.checkScope(e, input.scope ?? 'tenant', input.workspaces ?? []);
+    // 1.6.0, Sprint 38a (B-7301): an agent with no owner in the AI inventory is incomplete and is not published.
+    if (e.kind === 'agent' && this.publishGate && e.tenant_id) await this.publishGate(e.tenant_id, 'agent', e.id);
     const next: EntryRow = { ...e, status: 'published', checks, checked_at: t, approved_hash: e.schema_hash, reviewed_by: p.userId, reviewed_at: t, review_note: input.note ?? null, publish_scope: scope.scope, publish_workspaces: scope.workspaces, updated_at: t };
     await this.save(next);
     return next;

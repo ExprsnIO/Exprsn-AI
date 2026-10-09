@@ -26,6 +26,9 @@ export interface VerifyReport {
   lastGoodCheckpoint: { seq: number; hash: string; ts: number } | null;
 }
 
+/** The signed bytes of a checkpoint (canonical JSON of tenant, seq, hash, ts). */
+export const checkpointPayload = (c: Pick<Checkpoint, 'tenant_id' | 'seq' | 'hash' | 'ts'>): string => canonicalJson({ tenant: c.tenant_id, seq: c.seq, hash: c.hash, ts: c.ts });
+
 const fromRow = (r: Record<string, unknown>): Checkpoint => ({ ...(r as unknown as Checkpoint), seq: Number(r.seq), ts: Number(r.ts) });
 
 /**
@@ -43,7 +46,31 @@ export class AuditCheckpoints {
   ) {}
 
   private payload(c: Pick<Checkpoint, 'tenant_id' | 'seq' | 'hash' | 'ts'>): string {
-    return canonicalJson({ tenant: c.tenant_id, seq: c.seq, hash: c.hash, ts: c.ts });
+    return checkpointPayload(c);
+  }
+
+  /**
+   * 1.6.0, Sprint 38a (B-7501): signs the chain at a given sequence number (the end of an export window), or returns
+   * the checkpoint already there. A checkpoint of an earlier point is as valid as one of the head: it records the
+   * hash the chain had at that sequence.
+   */
+  async createAt(tenantId: string, seq: number, by: string): Promise<Checkpoint> {
+    const existing = await this.db('audit_checkpoints').where({ tenant_id: tenantId, seq }).first();
+    if (existing) return fromRow(existing);
+    const row = await this.db('audit_events').where({ tenant_id: tenantId, seq }).first('hash');
+    if (!row) throw new Error(`No audit event at sequence ${seq}`);
+    const c: Checkpoint = { id: ulid(), tenant_id: tenantId, seq, hash: String(row.hash), ts: Date.now(), key: this.keyName, signature: '', blob_key: null, created_by: by };
+    c.signature = await this.kms.hmac(this.keyName, this.payload(c));
+    c.blob_key = `audit-checkpoints/${tenantId}/${String(c.seq).padStart(12, '0')}.json`;
+    await this.blobs.put(c.blob_key, Buffer.from(JSON.stringify({ ...c, payload: this.payload(c) }, null, 2)), 'application/json');
+    try {
+      await this.db('audit_checkpoints').insert(c);
+    } catch {
+      const again = await this.db('audit_checkpoints').where({ tenant_id: tenantId, seq }).first();
+      if (again) return fromRow(again);
+      throw new Error('The checkpoint could not be recorded');
+    }
+    return c;
   }
 
   /** Signs the current head. Returns null when the chain is empty or the head is already checkpointed. */

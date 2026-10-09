@@ -253,7 +253,7 @@ export class OllamaClient implements ModelServer {
     const headers = new AbortController();
     const timer = setTimeout(() => headers.abort(new Error('timed out waiting for the instance')), headerTimeoutMs);
     // B-1401: the whole stream is one span (the call itself, up to the response headers, is a child of it).
-    const span = startChild('gateway chat stream', SpanKind.CLIENT, { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': request.model });
+    const span = startChild('gateway chat stream', SpanKind.CLIENT, { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': request.model, 'gen_ai.provider.name': 'ollama' });
     let res;
     try {
       try {
@@ -264,6 +264,8 @@ export class OllamaClient implements ModelServer {
       if (!res.body) return;
       for await (const chunk of ndjson<ChatChunk>(res.body)) {
         if (chunk.error) throw new OllamaError(chunk.error, 500);
+        // B-7403: the final chunk carries the token counts; they go on the stream span as gen_ai.usage.*.
+        if (chunk.done) span?.setAttributes({ 'gen_ai.response.model': request.model, 'gen_ai.usage.input_tokens': chunk.prompt_eval_count ?? null, 'gen_ai.usage.output_tokens': chunk.eval_count ?? null });
         yield chunk;
       }
       span?.ok();

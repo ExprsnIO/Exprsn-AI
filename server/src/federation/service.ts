@@ -116,7 +116,7 @@ export class FederationService {
    * Builds a principal from an access token issued here (for the API's bearer authentication). Scopes narrow the
    * user's roles; admin roles still need a token whose sign-in had a second factor.
    */
-  async principalFromAccessToken(token: string, binding?: { scheme: 'bearer' | 'dpop'; dpop: DpopInput }): Promise<Principal | null> {
+  async principalFromAccessToken(token: string, binding?: { scheme: 'bearer' | 'dpop'; dpop: DpopInput }, opts: { audience?: string; claims?: (c: Record<string, unknown>) => void } = {}): Promise<Principal | null> {
     let tid: string;
     try {
       tid = String(decodeJwt(token).claims.tid ?? '');
@@ -137,9 +137,11 @@ export class FederationService {
         return null;
       }
     }
-    // Only tokens minted for this API: a token exchanged or requested for another audience is refused here.
+    // Only tokens minted for this API: a token exchanged or requested for another audience is refused here. Sprint 37b
+    // (B-7102): an MCP endpoint asks for its own resource URL instead (RFC 8707), so neither accepts the other's tokens.
     const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!aud.includes(`${t.issuer}/api`)) return null;
+    if (!aud.includes(opts.audience ?? `${t.issuer}/api`)) return null;
+    opts.claims?.(claims);
     const s = this.s();
     if ((await s.tenants.byId(t.id))?.state !== 'active') return null;
     const user = await s.users.get(t.id, String(claims.sub));

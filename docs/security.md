@@ -152,13 +152,349 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   with the caller, at most at the label of the conversation or run it is called from (and never above the caller's
   clearance), so a result never carries data above the context it lands in.
 
+## HTTP tools and untrusted content (1.6.0, Sprint 37a)
+
+- **HTTP tools (B-89) reach only what an operator and a tenant admin allow.** Ported from exprsn-platform under the
+  port findings' constraints (decision D11c). The scheme and host of an `impl: http` tool are fixed by its author; only
+  the path and query take the model's arguments, percent-encoded. Every call goes through the outbound address guard
+  (`platform/egress.ts`, `guardedRequest`): the host is resolved once, every address is checked, the connection is
+  pinned to the checked address (a second DNS answer cannot point elsewhere) and redirects are not followed. Cloud
+  metadata addresses (169.254.169.254 and the other providers'), unspecified, multicast and broadcast addresses are
+  always refused, also when written as a literal at save time; link-local, private and loopback addresses only when
+  `SERVICE_ALLOWED_HOSTS` names the host or network; public addresses only when the tenant's list of allowed hosts
+  names them (kept by `tenant:manage` on the Registry screen and audited `tenant.hosts.updated`). A tenant's list never
+  admits an internal host. Answers are capped (`HTTP_TOOL_MAX_RESPONSE_BYTES`) and timed out (`HTTP_TOOL_TIMEOUT_MS`).
+- **Credentials only as vault references.** `Authorization`, `Proxy-Authorization`, `Cookie` and any header, query
+  parameter or body field named like a credential take `vault:path#key`, refused as a literal when the tool is saved
+  (and the secrets scan check runs over the whole definition). The references are resolved on every call as the tool's
+  author, under the vault policies and the author's `secrets:read` (a reference the author cannot read is refused at
+  save), and the value is placed in the request only. The audit entry `registry.http.called` and the meter
+  (`registry_http_calls`) keep the host, method, status, size, latency and outcome; never the path, query string,
+  headers or body. An HTTP tool goes through the registry's review and publish lifecycle; GET tools are `read`, every
+  other method `write` or `destructive`, so chat and `/v1` never offer a write HTTP tool and agents and workflows hold
+  it for approval. Arguments pass the `tool-call` guardrail before the request; the tool's rate limit applies.
+- **Untrusted content is marked (B-6901).** Retrieved knowledge chunks, crawled pages, tool results, MCP results and
+  HTTP tool answers reach the model inside `<untrusted-content>` delimiters that name the source and say the text is
+  data, with its words joined by a datamark (Spotlighting), and closing tags inside defused. Per profile
+  (`trust_marking`), on by default. A delegated agent's answer and a workflow's output are not wrapped again (their own
+  inputs were screened and marked inside their runs). Marking lowers the chance a model follows an instruction it
+  reads; it does not make it impossible.
+- **The untrusted-content checkpoint (B-6902)** screens each such text before the model reads it. The platform
+  baseline's `injection-untrusted` rule (heuristic classifier, threshold 0.6) annotates: the text goes in with a
+  warning. A tenant, workspace or agent rule set adds a blocking rule to leave chunks out and withhold tool results.
+  The `injection` mechanism's guard-model engine asks a profile's model instead and fails closed by default. Each
+  detection is counted per source without its text (`injection_detections`, 90 days) and audited
+  `guardrail.injection.detected`; the inspected text is in the sealed guard decision like any checkpoint's.
+- **The corpus (B-6903).** CI fails when the heuristic classifier, the checkpoint with the baseline rule, or a
+  guard-model rule detects fewer than 90% of the corpus's attacks or flags more than 10% of its benign texts.
+## The MCP server and MCP authorization (1.6.0, Sprint 37b)
+
+- **Per-user access without a service account (B-7101).** Before 1.6.0 Exprsn-AI was an MCP client only, so reaching
+  its workflows or records from an MCP client meant a separate MCP service holding a service account's credential,
+  which acted with that account's rights for everyone. Each workspace's MCP server now acts as the person who signed
+  in: their roles narrowed by the token's scopes, their clearance lowered to the label the workspace publishes at, the
+  workspace membership, and the same dispatcher, label ceilings, rate limits and `tool-call` and `context` checkpoints
+  as a call from the console. Nothing is published until an identity admin turns a workspace's server on, and only the
+  groups chosen there.
+- **Writes wait for the person (B-7101).** A write or destructive call, and any call the `tool-call` guardrail holds,
+  does not run: it is held with its arguments sealed (`mcp-hold:<id>`) and the person is notified. Only a browser
+  session decides (the decide route is session-only, and an MCP token is refused by the API anyway), so a client, or a
+  prompt injected into its model, cannot approve its own call. An approval covers that tool with exactly those
+  arguments (compared by hash), once, for 15 minutes; a pending call lapses after an hour.
+- **A resource server of the tenant's issuer (B-7102).** The endpoint accepts only access tokens from the tenant's own
+  issuer whose audience is that endpoint's URL (RFC 8707): the resource named at the authorization endpoint is checked
+  against the tenant's endpoints, kept with the code and the refresh token family, and becomes the `aud`. A token for
+  the API, another workspace or another tenant is refused with `401` and the protected resource metadata URL (RFC
+  9728); the API refuses tokens for an MCP endpoint, so a token handed to an MCP client cannot be replayed against the
+  console's API. Revocation, disabled clients and users, ended sessions and the deny-list apply as to any token from
+  the issuer. DPoP-bound tokens are checked with a proof per request and can be required per workspace. Requests with
+  a foreign `Origin` are refused (DNS rebinding), failed tokens count towards the per-address bearer-failure limit,
+  and each user has at most 600 requests a minute.
+- **Dynamic client registration is off by default (B-7102).** When an identity admin turns it on, any client that
+  reaches the issuer can register (RFC 7591), but only with the authorization code grant, PKCE required, redirect URIs
+  on HTTPS or a loopback address, and the MCP scopes; each such client is third-party or public, so every person is
+  asked for consent before it acts as them, and an admin can disable it like any client. At most 500 per tenant.
+- **OAuth for the MCP client (B-7103).** Each person connects to an authorization-protected MCP server with the
+  authorization code grant and PKCE (`S256`), naming the server as the resource. The `state` is single use and bound to
+  the browser that started the flow by an HttpOnly cookie (so a code obtained by someone else cannot be attached to
+  another account), the verifier is sealed at rest, and an `iss` in the answer must be the authorization server asked
+  (RFC 9207). Access and refresh tokens are sealed with the tenant key (`mcp-token:` and `mcp-refresh:` associated
+  data), refreshed before they expire, deleted when a refresh is refused, and revoked at the authorization server when
+  the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
+  MCP calls; tokens never enter model context.
+
+## The AI inventory, analytics and audit export (1.6.0, Sprint 38a)
+
+- **The inventory is a register, not a new authority.** It reads the objects it lists through the same tables their
+  own screens use and adds owner, oversight role, provenance, lineage note, known issues and impact assessment per
+  system (`inventory_systems`), under `models:manage`. The only enforcement it adds is the publish gate: with the
+  tenant's `requireOwner` setting on, the registry refuses to approve an agent that has no owner (`409`), on top of
+  the registry's own dual control. The gate is off by default so existing tenants keep publishing until their
+  register is filled in; turning it on is audited. Known issues are counted from open flags raised in the system's
+  agent or workflow runs and from failed evaluations; nothing is inferred from message text.
+- **Analytics reads the meter, never the content.** Every figure is a sum over `usage_records` (the rows the quotas
+  count), grouped by workspace, group, model, profile or user; `by=tenant` is for system admins. The group dimension
+  follows group membership, so a user's records count once per group they are in. Costs are computed at read time
+  from the tenant's prices and withheld for a row that mixes priced and unpriced records, so a partial figure never
+  reads as a total. Prices are `tenant:manage`, one currency per tenant, audited. The chargeback export is the same
+  computation and is audited with its total.
+- **Tracing carries token counts only.** `gen_ai.usage.*`, `gen_ai.response.model` and `gen_ai.provider.name` join
+  the allow-listed span attributes; the prompt and the answer still never leave the server.
+- **JSONL exports keep the chain verifiable.** A window holds every event between its bounds, those above the
+  requester's clearance redacted to their hashes (the hash covers all fields, so a redacted row cannot be recomputed,
+  but its `prev_hash` and `hash` still link the chain), and ends with a checkpoint signed by the KMS at the window's
+  last sequence (`AuditCheckpoints.createAt`, the same HMAC key as the scheduled checkpoints). `audit:verify-export`
+  needs nothing but the file; the HMAC is verified online by `audit:verify`. Requests and downloads are on the chain.
+- **Streaming per tenant is dual-controlled and guarded.** A destination is proposed by one tenant admin and approved
+  by another (the proposer cannot approve what they proposed); until then nothing is sent. Bearer tokens are sealed
+  with the tenant key and never shown again; a private CA is kept for the TLS connection. Every delivery dials
+  through the outbound address guard: HTTPS through the policy-checked dispatcher (no redirects), syslog through a
+  policy-checked lookup, so a destination whose name later resolves to a refused address stops working at that call.
+  Cloud metadata addresses are refused at save. Events are filtered per tenant before they reach a forwarder; the
+  platform stream (`SIEM_URL`) stays the operator's. Delivery is at least once with backoff; overflow is counted as
+  dropped on the row, and the chain in the database stays the record of truth.
+
+## Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c)
+
+- **Policies narrow, never widen (B-8101, B-8102).** A policy is applied after labels and workspace membership: a
+  reader reaches a record only when it is at a label they clear, in an app of their workspaces, and (once the entity
+  has a policy) in the rows a policy that names them allows. The row condition is run by the same query builder as any
+  filter, over the clear index, so a policy can only name indexed or unique fields (checked when it is saved, for
+  every entity it covers); a placeholder the reader has no value for makes the policy grant nothing, never everything.
+  A reader without `read` on a field cannot filter or sort by it (no inference from an ordering), and the field is not
+  in the record at all; a reader without `unmasked` gets the mask from the server (the full value never leaves it,
+  exports included). Grants combine permissively across the policies that name a reader, so a tenant that wants a
+  narrow result keeps its policies narrow. Designers (`apps:design`) are exempt: they define policies and can read the
+  records through the bundle export anyway; explain shows them what every reader gets. The user attributes policies
+  compare are set only by `users:manage` and audited with the user update.
+- **DLP acts after the guardrails, with no shadow stage (B-7601).** DLP rules are the tenant's data classification,
+  always in force for the scopes they name, kept by `compliance:manage` and audited. The built-in detectors are the
+  checksummed ones of the PII and secrets classifiers (scores below 0.8 are ignored); tenant patterns are compiled
+  with RE2 (linear time, no backtracking). A hold goes where a guardrail hold goes: the flag queue, where a reviewer
+  cleared for the label decides; an agent run ends failed with the rule's name; an upload is rejected with it. A
+  raised label is written to the message, the conversation (a high-water mark, never lowered), the run, the
+  attachment or the file version, and content raised above its owner's clearance is held regardless of the rule, so a
+  rule that only labels cannot show someone what they may not read. The DLP test endpoint stores and audits nothing.
+- **Legal holds are dual-controlled and quiet (B-7602).** A hold is asked for by one holder of `compliance:manage`
+  and approved by another (self-approval is refused), the reason is sealed with the tenant key (the audit chain keeps
+  a 500-character excerpt), and the people concerned are not told. An active hold is read by the chat, memory and file
+  purges on every run; releasing it is audited and takes effect at the next purge, nothing is deleted at once.
+- **Compliance exports are clearance-bound and sealed (B-7603).** The job reads the requester's clearance when it
+  runs and leaves out every row above it, counting what it left out; the export carries the highest label it holds and
+  is downloaded only by someone cleared for it. Parts are sealed with the tenant key (per-part AAD) in the blob store;
+  a download streams them part by part and is audited with the counts. An API key scoped to `compliance:export` (the
+  eDiscovery token) can do no more than its owner and is named in the audit events and the export row.
+
+## Content credentials and chat artifacts (1.6.0, Sprint 39a)
+
+- **Two manifests, two keys (B-7901).** The HMAC manifest of Sprint 20 proves to this server that it made the image;
+  it proves nothing to anyone else. The C2PA manifest is signed by a certificate the tenant's own issuing CA made, so
+  a verifier outside the server (or `exprsn-ai c2pa:verify` on a downloaded file) can check the claim's signature,
+  chain it to the tenant CA and bind it to the bytes without trusting the server. The certificate's key is in custody
+  (signer process or OpenBao) like every CA key; the app signs claim bytes through the same path it signs
+  certificates and never holds the key. Revoking the certificate on the Certificates screen retires it: the next
+  image signs with a new one, and the old manifests still verify against the chain but a validator that checks
+  revocation (CRL, OCSP, both published by the CA) will say so.
+- **The manifest is part of the file.** It covers every byte outside its own chunk, so a changed pixel fails
+  `dataHash`; a changed claim fails `signature`; a stripped chunk is `present: false`. It is added last, over the
+  HMAC chunk, and the HMAC manifest is verified over the bytes without either chunk, so both verify on one file.
+  Nothing in the manifest is secret: the prompt is a hash, the user an id and username, and the label is stated.
+- **What a conformance validator may dispute.** The implementation is the specification's parts written here (CBOR,
+  JUMBF, COSE_Sign1), not a reference library: there is no RFC 3161 time stamp (the signing time is the action's
+  `when`, and validity is judged at verification time), no `c2pa.ingredient` chain for a variation of another image,
+  and the hashed-URI hash is the SHA-256 of the assertion's content box with its header. `verify` checks what it
+  writes; a third-party validator that reads the structure will see a manifest whose signature verifies but may flag
+  those points.
+- **Artifacts are the answer's own text (B-8001).** An artifact is a sealed copy of a fenced block of an answer, with
+  the answer's label and message id; a share reader sees only versions from the messages on the shared path, never
+  from another branch or a withheld or held answer, and nothing above their clearance. Nothing in an artifact is
+  checked again by the guardrails: it was screened as part of the answer.
+- **Rendering untrusted HTML.** A model's HTML runs in an `<iframe sandbox="allow-scripts">` whose document comes from
+  `/api/public/artifacts/:vid/raw` with its own CSP: `default-src 'none'`, `connect-src 'none'`, `form-action 'none'`,
+  `frame-ancestors 'self'`, and the `sandbox` directive without `allow-same-origin`. The document is an opaque origin:
+  it cannot read the console's cookies, storage or DOM, cannot call the API with the reader's session, cannot
+  navigate the page that frames it, and cannot submit a form or open a connection. The URL is a capability (the
+  version id, an expiry and an HMAC by the KMS) valid for `CHAT_ARTIFACT_RAW_TTL_SECONDS`, minted only when a reader
+  who may see the artifact lists it; the route reads no session, so a stolen link shows that one version for a few
+  minutes and nothing else.
+
+## App packages, environments and promotion (1.6.0, Sprint 39b)
+
+- **A package is verified before it is read (B-8201).** As with bundles, the signature (the KMS HMAC key the server
+  holds) is checked over the canonical JSON of exactly what arrived, before the shape or any object in it is looked
+  at; a package changed in any byte, signed elsewhere, naming another key or unsigned is refused with `422` and the
+  refusal audited, and nothing is created. A package pasted in, read from a repository or deployed from the store is
+  verified the same way, and a stored package is checked against its hash when opened. Records in a package are the
+  values the packager was cleared for, without computed fields (recomputed on import); a package is sealed with the
+  tenant key at rest and capped at `APPS_PACKAGE_MAX_BYTES`.
+- **Applying a package reconciles, it does not replace (B-8201, B-8203).** Entities, forms, triggers and policies are
+  matched by name, so a deployment keeps record ids and the entity revisions move forward; the same type and unique
+  checks apply as to a designer's edit (a type change on an entity that holds records fails the deployment, and the
+  target keeps what it had, with the backup beside it). An entity the package no longer has is dropped only when it
+  holds no record; otherwise it stays and the report says so. Triggers are recreated against the workflows of the
+  target's workspace by name, so a trigger whose workflow is missing or unpublished there is skipped and reported,
+  never pointed at another workspace's workflow.
+- **Production waits on the Workflows approval step (B-8202).** A promotion to production lands only the package the
+  last successful promotion to test landed (its id and hash are on both deployments), never a fresh package of the
+  test or development app, and only after a run of the pipeline's approval workflow succeeds. That run starts as the
+  requester, with the deployment as its input and caller, so the approver sees who asked, what package and which
+  hash; a rejection, a failure, a cancellation or an expiry rejects the deployment. Nothing else moves on a pipeline
+  while a deployment is going. Deployments run as the requester (their roles and clearance at run time, in the
+  target's workspace), so an app the requester may no longer design is not deployed.
+- **Backups and rollback (B-8203).** Every deployment first packages the target as it is; a rollback is a deployment
+  of that backup, with its own backup, so it is audited and reversible like any other. The history (who, what,
+  which package, the report) is kept `APPS_DEPLOYMENT_HISTORY_DAYS`.
+- **Git stays behind the same guards (B-8204).** Repositories are `https://` only (`file://` for same-host mirrors
+  when `APPS_GIT_ALLOW_FILE` is on), never with credentials in the URL, never at a link-local, multicast or
+  unspecified address (checked after DNS); git runs with no system or global configuration, no hooks, no prompts and
+  only the https (and allowed file) protocol. A token is given as a vault reference, resolved as the caller at use
+  and answered to git through a credential helper from the environment, so it is not on a command line or in a
+  remote URL. The push writes the package's files, nothing else, under the path given, and a path that leaves the
+  tree is refused.
+
+## Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c)
+
+- **A draft is a proposal (B-8301).** The description passes the `user-input` checkpoint and the model's answer the
+  `model-output` one, as any app draft does; the draft is validated with the same schema and checks as a saved
+  entity, against the app's entities and each other, and nothing is written until a designer accepts it. Accepting
+  never removes a field or a state: fields the draft omits are listed and kept, so a model cannot drop data; a type
+  change on an entity with records is refused by the entity update as always. Triggers are created only for workflows
+  the designer may already see, and only `record` triggers: a draft cannot name a schedule.
+- **AI prompts read fields through the formula engine (B-8401).** A placeholder is a field name or a formula over the
+  entity's plain fields and the formula functions, compiled by the same parser that refuses everything but fields and
+  listed functions, so a prompt can no more reach a global than a formula field can; an unreadable placeholder is
+  refused when the entity is saved and renders empty if one slips through. Only the fields whose prompts read a changed
+  value regenerate, and a burst of edits asks the model once per field (`APPS_AI_DEBOUNCE_MS`), which bounds what one
+  editor can spend; the fill still runs as the record's last editor, within their clearance and the profile's.
+- **A fill over every row is one metered, cancellable job (B-8402).** It needs `apps:design`, shows its estimate first
+  (and the money when the tenant priced the model), runs one record at a time through the profile's guardrails and the
+  tenant's quota (the quota refuses the next record when it runs out), and stops between records when cancelled; one
+  fill per field at a time. Its token totals are on the fill and in the audit events; the answers themselves are
+  sealed in the records like any value.
+- **An outside table is read unmasked, by designers who also manage connections (B-8501).** The connection's PII
+  masking is for ad-hoc queries and knowledge; records of a sourced entity carry the rows as they are, so attaching
+  one needs `connections:manage` beside `apps:design`, the table must be on the connection's allow-list, and the
+  entity's label must cover the connection's: the rows land sealed under at least the label the connection carries,
+  policed, labelled and audited like any record. Pulls are audited with their counts, never their values. Writes
+  through to the table run only when the designer turned them on, through parameterised statements on plain column
+  names (quoted identifiers, values as parameters) in their own transaction, before anything changes locally: a
+  refused write leaves the app as it was. The connection's own account decides what the writes may do; a read-only
+  account makes writes fail with `502` and the app untouched.
+
+## Entity APIs and app embedding (1.6.0, Sprint 39d)
+
+- **The entity API is the records API with another shape (B-8601).** `/api/apps/:app/:entity` calls the same service
+  as the records routes: the reader's policies narrow the rows and mask the fields, labels and workspaces apply, every
+  write is audited as before, and `include=related` fetches each related record through the same read path, so a
+  record the reader may not read comes back as null. A key limited to one app or one entity (`api_keys.app_scope`)
+  holds at most `records:read` and `records:write`, is accepted under `/api/apps` alone (never `/v1`, the MCP server or
+  the rest of the API), and is refused by every apps router on another app or entity before any handler runs; the
+  owner's own app-limited key leaves `apps:design` out, so it reads masked like a member. The scope is checked on
+  ids, whatever the path names.
+- **Every design change leaves a version (B-8602).** The Apps screen, the schema API and a package import all end in
+  `AppService.createEntity`, `updateEntity`, `removeEntity` or the forms service, which record a row of
+  `app_schema_versions` with the SHA-256 of the whole design afterwards, under the audit event `app.schema.versioned`;
+  the version numbers are unique per app on the database. The OpenAPI document and the client are computed from the
+  design on each read and carry that version and hash (the `ETag`), so a stale document cannot be served and a client
+  knows the design it was built on.
+- **Embed pages are framed only where the designers said (B-8701).** A public form becomes an embed page under a
+  random 26-character id; the page is served with `frame-ancestors 'self' <allowed hosts>` and no `X-Frame-Options`,
+  so a browser frames it on those origins and refuses it elsewhere, and `noindex`. The page opens and submits the form
+  by the embed id through `/api/public/embeds`, on the public submission path (per-address and per-form limits, the
+  `user-input` checkpoint, held values queued), so the form's link token never reaches a host site; turning public
+  pages off, unpublishing the form or removing the page gives `404` at once.
+- **A signed embed is a credential the host site vouches for (B-8702).** The host signs a short JWT with a key the
+  app's designers registered: a public key (ES256, RS256, EdDSA), a shared secret (HS256, sealed with the tenant key,
+  shown once), or a certificate the tenant CA issued, carried as `x5c` and verified against the tenant's active
+  intermediate and its revocations. The `kid` picks the key and the `alg` must match it (no algorithm confusion); the
+  audience must be the app; `exp` is required and capped by the app's and the server's limit; `jti` is required and
+  accepted once per key, so a token cannot be replayed; the person is an active user named by a claim the designers
+  chose. The exchange is rate-limited per address and audited either way with the kid and the reason, never the token.
+  The embedded session is a bearer of its own, apart from console sessions: no cookie, so nothing cross-site and no
+  CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
+  it ends with its key, with the app's settings turned off, or when the designers end it.
+
 ## Deployment hardening
+
+## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
+
+- **An adversarial gate beside the evaluations (B-7001).** A profile's or an agent's publish gate could require
+  passing evaluations, but nothing asked whether the model gives up its system prompt, follows an injected
+  instruction or reaches for an outside address. A red-team suite does, with the built-in attack categories (the
+  Sprint 37a corpus cases with a canary handed over as documents, jailbreaks, exfiltration through tools,
+  system-prompt extraction) and the tenant's own cases; every attack is judged deterministically (a canary, the
+  attack's address in the answer or in a tool call's arguments, eight consecutive words of the system prompt), so a
+  run's verdict does not depend on a judge model. A profile with a gated suite is published only once its settings
+  hash has a passing run, and no evaluation override opens that gate; an agent version is approved only once its
+  schema hash has one. Attacks against agents run as child runs under the agent's own budgets and approvals: a run
+  that pauses on an approval is cancelled and judged on what it reached for, so a red-team run never approves a
+  write.
+- **Every successful attack is reviewed (B-7002).** An attack that succeeded is a flag in the review queue (checkpoint
+  `red-team`, high severity for extraction and exfiltration), labelled as the suite and sealed like any excerpt; a
+  reviewer confirms it into an eval case or dismisses it. The flag names the attack, the target and the run, never
+  the suite's own cases beyond the one that succeeded.
+- **Agents as principals (B-7701).** A run used to act with everything its owner may do. With an identity, the run
+  acts within the identity's roles (as credential scopes, decided by the scope step of the policy pipeline) and the
+  lower of the owner's clearance and the identity's ceiling, so an agent granted no knowledge access cannot search
+  it even when an admin runs it, and a run labelled above the ceiling fails before it thinks. Audit events carry the
+  agent beside the user. Keys minted for an identity authenticate as the agent on the owner's behalf within the
+  identity's grants, the owner's and the key's scopes; they are refused the moment the identity is turned off, are
+  narrowed when the identity's roles are, and are never listed among the owner's personal keys. An identity's roles
+  never widen their author: every permission they grant, the author holds.
+- **Handoffs end the run (B-7801).** A handoff reuses the delegation path (a child run in the chain, within the
+  remaining budget, under the delegate's ceiling), so nothing an agent could not delegate to can be handed to; the
+  handed-to run's answer becomes the run's answer and the reader sees who answered.
+
+
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
 the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, empty capability set, system-call
 filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
+
+- The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
+  only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
+  Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
+  conversations are not linked to the profile, and models and tools show no issues. The register is a synchronous
+  download (no sealed export job), so it is not kept for later download. Analytics prices are per model or per pool,
+  not per instance: the meter records the pool a request ran on, not the instance. Costs are computed on each read and
+  nothing is stored per request, so a price change changes past months' chargebacks; keep the export if a figure
+  must stand. The group dimension counts a user's records once per group they belong to, so group rows do not sum to
+  the tenant's total. A JSONL export redacts rows above the requester's clearance to their hashes; the offline
+  verifier checks the chain and the checkpoint's hash but not its HMAC (that needs the key: `audit:verify`). Tenant
+  SIEM forwarders buffer in memory on the instance that appended the event (as the platform stream does): on a
+  multi-instance install each instance delivers the events it appended, and a restart drops what was buffered
+  (counted on the row only if the counters were flushed). A syslog destination opens one TLS connection per batch and
+  sends no structured data elements; HTTPS destinations get no retry on a 4xx beyond the forwarder's backoff.
+- HTTP tools and prompt-injection defence (1.6.0, Sprint 37a). The heuristic injection classifier is a set of
+  patterns tuned on the corpus it is measured against (detection 100%, false positives 3.3% on it); new phrasings,
+  other languages than English, Spanish, French, German and Dutch, and attacks split across chunks are missed, and a
+  benign text quoting an attack (security training) is flagged. A guard-model rule (any profile, through the
+  `injection` mechanism) is the stronger option; whether the platform should ship one by default is an open decision.
+  Annotate mode only warns the model, and trust marking lowers but does not remove the chance that a model follows an
+  instruction it reads; block mode drops whole chunks, including the rest of their text. Memories are not wrapped as
+  untrusted (they are proposed through the memory checkpoint and accepted by a curator), and neither are a delegated
+  agent's answer or a workflow's output (a workflow HTTP step's answer reaches a later model step unmarked). The
+  injection counts are per tenant and source, not per workspace on the Guardrails screen. HTTP tool answers are not
+  scanned for malware and must be JSON or text; a tool's vault references resolve as its author, so a tool keeps
+  working for its callers until the author loses `secrets:read` or the vault policy changes, and stops for everyone
+  then. Public hosts are allowed per tenant, not per tool (one list shared with workflow HTTP steps and webhooks, as the
+  open decision assumes); the guard re-resolves on every call, so a host whose DNS answer moves to a refused address
+  is refused at that call, not before. Only `read` HTTP tools run in the registry's test harness; a write tool is
+  tested through an agent run with its approval.
+- The MCP server and MCP authorization (1.6.0, Sprint 37b, B-7101 to B-7103). The server offers no sessions, no
+  event stream and no resources or prompts: a long agent run or a workflow paused on an approval answers with a handle
+  after 20 s, and the client asks again with `exprsn_run_status`. Held calls are matched by the arguments' hash, so a
+  client that changes any argument asks again; the approval is per call, with no "trust this client" setting. Agents
+  published to a workspace run as tools with their own approvals inside the run (decided on the Runs screen, as in the
+  console), not with a held call. The DNS-rebinding check refuses any foreign `Origin`, so a browser-based MCP client
+  on another origin cannot use the endpoint. Dynamically registered clients are not removed when unused. On the client
+  side, refreshes are serialised per server and user on one instance only: two instances refreshing the same rotating
+  refresh token at once can make the authorization server revoke the grant, and the person then connects again.
+  Discovery and token requests reach internal hosts only (or those `MCP_ALLOWED_HOSTS` names), so an MCP server whose
+  authorization server is public needs that host allow-listed. A server's OAuth configuration removed or rediscovered
+  for another issuer leaves tokens users already connected until they expire or are disconnected.
 
 - Model servers beyond Ollama (1.6.0, Sprint 35a, B-4301 to B-4307). What the digest check cannot cover for a
   server-held model (`format: server`): the gateway never sees the weights, so it cannot verify which file answers
@@ -311,6 +647,53 @@ filter, private `/tmp`, only the state directory writable.
   holds addresses for `VAULT_ANOMALY_HISTORY_DAYS`; it is readable by the owner and vault administrators through the
   flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
   vault administrators.
+
+- SCIM 2.0 provisioning (1.6.0, Sprint 37c, B-7201, B-7202). A SCIM token is a bearer secret for one store with no
+  sender binding (no mTLS, no DPoP): anyone holding it creates, changes and deprovisions that store's users and their
+  group memberships, which through group mappings means their roles, clearance and workspaces (never more than the
+  mappings name: a SCIM store cannot give a role no mapping names, and it never takes over a user of another store).
+  Tokens are shown once, kept as an HMAC with `SESSION_SECRET` (rotating it invalidates every SCIM token, as it does
+  API keys), expire after `IDENTITY_SCIM_TOKEN_MAX_DAYS` and are revoked under Identity; the rate limit is per address
+  (`IDENTITY_SCIM_RATE_PER_MINUTE`), not per token. Failed token checks are not written to the audit chain (no tenant
+  is known yet); use the access log. Complex filters are evaluated in memory over at most 50 000 users or groups of the
+  store; one `eq` on an indexed attribute is asked of the database. Deprovisioning ends what can be ended at once
+  (sessions and their sockets, OAuth refresh tokens, API keys, DAV app passwords); an OAuth access token already issued
+  to another relying party stays valid until it expires (at most its lifetime, 5 to 30 minutes) unless that party
+  introspects it, as for any disabled user. Sign-in for SCIM users goes through the upstream stores the SCIM store
+  names, matched by username: an upstream store whose usernames are not the provider's `userName` (Entra ID's UPN,
+  Okta's login) does not link, and an upstream store an administrator names that belongs to another provider would let
+  its accounts with the same names sign in as the SCIM users, so name only the stores of the same provider. The
+  conformance runs of the Entra ID SCIM Validator and Okta's SCIM test suite could not be made from here (they call
+  the service from the internet); `server/test/sprint37c-scim.test.ts` reproduces their checks locally
+  (`docs/identity.md`).
+
+- Vault sharing (1.6.0, Sprint 37c, B-4801). A share is an ordinary allow grant of `read` and `list` on one exact KV
+  path, so it widens who reads that secret by design, within what the policy allows: a deny that names the grantee
+  still wins, and the secret's label still has to clear the grantee's clearance. Sharing with a directory group or a
+  workspace reaches whoever is in it at read time, including people who join later; share with a person when that
+  matters. Whoever may share (holders of `secrets:write` with `read` and `write` on the path) may share with any
+  principal of the tenant, without a second approval. An expired share stops applying in the same instant (the policy
+  query compares the expiry), and is removed by `vault.shares.expire` within five minutes. A grantee who read the value
+  keeps what they read: revoking a share does not rotate the secret. Reveals by grantees are audited and watched for
+  anomalies (B-4803) like the owner's.
+
+- MongoDB leases (1.6.0, Sprint 37c, B-4802). MongoDB accounts carry no expiry, so a leased user exists until the
+  sweeper drops it (every `VAULT_LEASE_SWEEP_SECONDS`, 60 by default) or a revoke does; between the lease's expiry and
+  the next sweep its password still works (PostgreSQL's `VALID UNTIL` closes that window there, MySQL has the same gap).
+  The expiry is recorded in the user's `customData` for operators. Ending a dropped user's open sessions needs
+  `killAnySession`, which `userAdmin` does not include: without it, sessions opened before the drop run until they
+  close. The admin login is checked for `createUser`, `dropUser` and `grantRole` at registration, not for
+  `killAnySession`. Connections use one direct connection to the checked, pinned address (no replica-set discovery);
+  `mongodb+srv` is not supported.
+
+- Quote posts and visibility (1.6.0, Sprint 37c, B-4901). Unlisted means out of feeds, not secret: anyone who may read
+  the post's workspace or group and has its link (or its id, a ULID that encodes its creation time) can open it, and a
+  bookmark keeps it listed for whoever saved it. Moderation, the flag queue, search over the audit chain and exports
+  treat unlisted posts like any other. `public` changes nothing inside the instance (D4: there is no public feed); it
+  only marks posts an author lets the 1.7.0 cross-posting (B-11402) write elsewhere. A quote may sit in another
+  workspace than what it quotes: readers there who cannot read the quoted post see the quote without the embed, but its
+  author's own words about the quoted post are theirs to share, under the guardrail and the quote's label (at least the
+  quoted post's).
 
 - WebDAV for the file store (1.5.0, Sprint 34b, B-3201 to B-3203): `/dav/files/` (the WebDAV URL Settings shows)
   answers only an app password with the `webdav` scope and the caller's `files:read` / `files:write`; a CalDAV- or
@@ -1111,6 +1494,21 @@ filter, private `/tmp`, only the state directory writable.
   is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
   step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
   confidential data from reaching it).
+- Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b, B-7001, B-7002, B-7701, B-7801). The built-in
+  attacks are a fixed catalogue in English (plus the corpus's other languages); a model that resists them may fall to
+  phrasings it has not seen, and a tenant that does not add cases of its own measures only the catalogue. The judge is
+  deterministic: an attack whose canary comes back paraphrased, or a leak of fewer than eight consecutive words of the
+  system prompt, counts as resisted, and a benign answer that quotes the canary back ("I will not say FREEBIRD-01")
+  counts as a success for the attack. Exfiltration is judged on the address the attack names; a model that reaches
+  for another address is not caught. Workflow targets are judged on their step outputs with the attack in the first
+  string field of the trigger input, and their runs are not cancelled when they pause; workflow red-team runs are
+  finalised when their target is next read (there is no hook back from the workflow service). A red-team run of an
+  agent is metered to the person who started it, like an evaluation. The red-team gate covers profiles and agents;
+  workflows have suites and runs but no gate on publishing. Agent identities narrow by permission, not by object: an
+  identity granted `knowledge:read` reads every knowledge base its owner may, and a tool's own side-effect approvals
+  still apply. A key minted for an identity carries its owner's roles narrowed by the identity, so demoting the
+  owner demotes the key, but a different owner minting a key for the same identity gets their own narrowing. A
+  handoff hands the task the model wrote, not the run's messages; the specialist does not see the conversation.
 - Image classification in Knowledge (1.6.0, Sprint 36c, B-8801 to B-8805). The thumbnail is the stored image served as
   is: nothing is resized on the server, so a large image is sent whole (the console scales it). HEIC images have no
   thumbnail, since browsers do not show them. Only JPEG and 8-bit RGB or grey Flate images are taken out of PDFs
@@ -1118,3 +1516,58 @@ filter, private `/tmp`, only the state directory writable.
   are skipped as icons. A guardrail rule that names a vision classifier on text fails, and its `onError` decides. The
   vision profile's description and classification calls are metered as `embed` usage (knowledge indexing), with no
   user, not under a usage kind of their own.
+- Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c). A record a reader creates
+  outside the rows their policies allow is accepted and then out of their reach (the create grant is per field, not per
+  row); a lookup field's option list is not narrowed by policies; a policy's row condition is one filter of at most 30
+  conditions and 4 levels, and the reader's own filter is ANDed to it, not merged into those limits. DLP inspects at
+  most `DLP_MAX_TEXT_BYTES` characters of a text (the rest keeps its label); streamed chat answers are inspected when
+  finished, so a redacted span may have been shown while streaming, as with a guardrail redaction; the thinking of an
+  answer is not inspected by DLP; uploads are inspected only when they are text (UTF-8 or JSON), not inside PDF or
+  Office documents. A legal hold does not stop a user from deleting their own conversation, memory or file, and agent
+  runs have no retention purge to suspend. A compliance export matches by `createdAt`, not by activity in the range;
+  file bytes are not in it; conversations hold at most 10 000 messages each; nothing is signed, so an export's
+  integrity rests on the audit events around it.
+- Content credentials and artifacts (1.6.0, Sprint 39a). Content credentials are built from the specification's parts,
+  not a reference library: no time stamp, no ingredient chain for variations, and an assertion hash over the content
+  box; a third-party validator may flag those (see above). JPEG images from a ComfyUI worker carry neither manifest
+  chunk. Verification judges certificate validity at the time of the check, so an image signed with a since-expired
+  certificate reports `certificateValid: false` though it was valid when made. Artifacts are taken from fenced blocks
+  only (a model that writes code without a fence makes none), names come from the fence's info string (two blocks the
+  model names the same in one answer keep the first), and a conversation holds at most 200 artifacts. A render link
+  is a bearer capability for its lifetime; anyone holding it can show that version until it expires.
+
+- App packages, environments and promotion (1.6.0, Sprint 39b). A package carries the workflows its triggers name
+  as drafts; the importer publishes them, and until then the triggers are skipped. A deployment applies entity changes
+  through the designer's rules, so a field type change on an entity holding records fails the deployment (the backup
+  stays beside it) rather than migrating values. A rollback restores the design, not the records written since; an
+  entity that still holds records survives a rollback that would drop it. The approval workflow's trigger must accept
+  the deployment input (or declare no schema). A pipeline's stages must be apps of one tenant; promotion across
+  instances goes through git export and import, which is not two-way (a change in the repository is imported as a new
+  app, not merged). Git pushes dial out through the address checks but not through the tenant's allowed-host list.
+  Deployment history is pruned on read, not by a job.
+
+- Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c). A draft is only as good as the model: it may
+  name fields that validate but mean little, and the diff shows what changes, not whether it is sensible. Debounced
+  AI regeneration keys its window on the clock, so two edits either side of a window boundary ask twice; a fill's
+  estimate samples prompts and assumes `maxLength` or 600 characters of output, and the cost uses the tenant's price
+  at the time (B-7402's known gap applies). A pull reads at most `APPS_SOURCE_PULL_MAX_ROWS` rows and then stops
+  deleting (a capped pull never removes records); pulls are full reads, not change streams; a write through to the
+  table that succeeds but whose local write then fails leaves the row outside ahead of the app until the next pull;
+  CSV imports into a sourced entity write through row by row (slow, and partial on a refusal); records above the
+  connection's label that the designer created locally are pushed to a table that carries no labels.
+
+- Entity APIs and app embedding (1.6.0, Sprint 39d). An entity named like one of the app's own route segments
+  (`entities`, `forms`, `policies`, `triggers`, `export`, `schema`, `embed`, `transfers`, `drafts`, `import`, `held`)
+  is reached only through `/entities/:entity/records`, not the entity API; `where` conditions are typed by their
+  text (a string that looks like a number is a number); `include=related` fetches each related record separately
+  (at most one call per distinct reference). A schema version holds the whole definition of a changed entity, not a
+  diff, and nothing restores an earlier version. The generated TypeScript client types values loosely (`json` as
+  `unknown`, formulas as `string | number | boolean`). An app-limited key is refused on `/v1` and the MCP server
+  outright rather than narrowed to its app's tools. The embed page's `frame-ancestors` names whole origins, not
+  paths; a public embed page is reachable by anyone who learns its random id (as a public form link is), and a
+  submission is `source: form`, by no one. A signed embed names the person by a claim the host asserts: the host site
+  is trusted for who is behind the browser, within what that person may do; the `host` recorded on a session is the
+  token's `iss`, not the framing page; HS256 secrets are shared with the host site; the tenant CA path checks the
+  leaf against the active intermediate only (no chain of several intermediates, no OCSP); ended sessions are purged
+  by the next exchange's bookkeeping, not a schedule; the embed page lists at most six fields per record and keeps the
+  session token in memory, so a reload needs a new host token.

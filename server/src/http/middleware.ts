@@ -9,6 +9,8 @@ import { rolesRequireMfa, type Permission } from '../authz/permissions.js';
 import { actorFrom } from '../audit/chain.js';
 import type { SessionRow, SessionStage } from '../identity/sessions.js';
 import type { ApiKeyRow } from '../identity/apikeys.js';
+import { AppEmbeds, type EmbedSessionRow } from '../apps/embeds.js';
+import { underApps } from '../apps/key-scope.js';
 import type { Services } from '../services.js';
 import { badRequest, forbidden, HttpProblem, tooManyRequests, unauthorized } from './problem.js';
 import { Limiter } from '../platform/ratelimit.js';
@@ -24,6 +26,8 @@ declare module 'express-serve-static-core' {
     principal?: Principal;
     authSession?: SessionRow;
     apiKey?: ApiKeyRow;
+    /** 1.6.0 (B-8702): the embedded session the request was made with (a bearer `exe_…` token). */
+    embedSession?: EmbedSessionRow;
   }
 }
 
@@ -139,12 +143,36 @@ export function authenticate(s: Services): RequestHandler {
         await sanctioned(req);
         return next();
       }
+      // 1.6.0 (B-8702): an embedded session's token acts as the mapped user inside its app only.
+      if (m[1].startsWith('exe_')) {
+        const session = await s.apps.embeds.resolveSession(m[1]);
+        if (!session) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The embedded session is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+        if (!underApps(req.originalUrl)) throw forbidden('An embedded session acts inside its app only.', { step: 'scope' });
+        const p = await loadPrincipal(s, session.tenant_id, session.user_id, {});
+        if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The embedded session\'s user is disabled.', { extensions: { error: 'invalid_token' } }));
+        p.kind = 'api_key';
+        p.scopes = AppEmbeds.scopesFor(session);
+        p.mfa = false;
+        req.embedSession = session;
+        req.principal = p;
+        p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+        await sanctioned(req);
+        return next();
+      }
       const key = await s.apiKeys.verify(m[1]);
       if (!key) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+      // 1.6.0 (B-8601): a key limited to one app is accepted under /api/apps only; the apps routers check the app.
+      if (key.app_scope && !underApps(req.originalUrl)) throw forbidden('This API key is limited to one app and is accepted under /api/apps only.', { step: 'scope' });
       // Sprint 20 (B-1203): a key that requires signed requests is checked by /v1 only, so it is accepted nowhere else.
       if (key.signature_key && !/^\/v1(\/|$|\?)/.test(req.originalUrl)) return refuse(req, new HttpProblem(401, 'Unauthorized', 'This API key requires signed requests, which only /v1 checks; it is not accepted here.', { extensions: { error: 'invalid_token' } }));
-      const p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
+      let p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
       if (!p) throw unauthorized('The key owner is disabled.');
+      // 1.6.0 (B-7701): a key minted for an agent identity acts as the agent on the owner's behalf, within both grants.
+      if (key.agent_id) {
+        const identity = await s.agentIdentities.byId(key.agent_id);
+        if (!identity || !identity.enabled || identity.tenant_id !== key.tenant_id) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The agent identity behind this key is off or gone.', { extensions: { error: 'invalid_token' } }));
+        p = s.agentIdentities.narrowTo(p, identity);
+      }
       req.apiKey = key;
       req.principal = p;
       p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;

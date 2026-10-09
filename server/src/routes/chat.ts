@@ -111,6 +111,20 @@ export function chatRoutes(s: Services): Router {
     res.json(await wrap(() => chat.resume(principalOf(req), String(req.params.id), String(req.params.mid), q.after))(req));
   });
 
+  // ---------- 1.6.0, Sprint 39a (B-8001): versioned artifacts ----------
+
+  /** The artifacts of a conversation (owner or share reader): one entry per name, with every version's render link. */
+  r.get('/conversations/:id/artifacts', read, async (req, res) => {
+    res.json({ artifacts: await wrap(() => s.chatArtifacts.list(principalOf(req), String(req.params.id)))(req) });
+  });
+
+  r.get('/conversations/:id/artifacts/:aid/versions/:n', read, async (req, res) => {
+    const n = Number(req.params.n);
+    if (!Number.isInteger(n) || n < 1) throw badRequest('A version is a positive integer.');
+    const out = await wrap(() => s.chatArtifacts.version(principalOf(req), String(req.params.id), String(req.params.aid), n))(req);
+    res.json({ id: out.artifact.id, key: out.artifact.key, kind: out.artifact.kind, language: out.artifact.language, title: out.artifact.title, label: out.artifact.label, version: out.version.version, messageId: out.version.message_id, bytes: Number(out.version.bytes), sha256: out.version.sha256, createdAt: Number(out.version.created_at), content: out.content });
+  });
+
   r.post('/compare', write, invoke, async (req, res) => {
     const body = parseBody(z.object({ prompt: z.string().trim().min(1).max(100_000), profiles: z.array(z.string().min(1).max(63)).min(2).max(4), think, label: z.enum(LABELS).optional() }), req.body);
     if (new Set(body.profiles).size !== body.profiles.length) throw badRequest('Pick each profile once.');

@@ -61,6 +61,16 @@ import * as m037d from './037d_platform_social.js';
 import * as m038 from './038_groups2.js';
 import * as m038b from './038b_dedup_held_vault.js';
 import * as m038c from './038c_knowledge_images.js';
+import * as m039 from './039_tools_injection.js';
+import * as m039b from './039b_mcp_server.js';
+import * as m039c from './039c_scim_vault_posts.js';
+import * as m040 from './040_inventory_analytics.js';
+import * as m040b from './040b_redteam_agents.js';
+import * as m040c from './040c_policies_dlp.js';
+import * as m041 from './041_provenance_artifacts.js';
+import * as m041b from './041b_app_packages.js';
+import * as m041c from './041c_model_gen_sync.js';
+import * as m041d from './041d_entity_api_embeds.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -130,7 +140,17 @@ const MIGRATIONS: Record<string, Migration> = {
   '037d_platform_social': m037d,
   '038_groups2': m038,
   '038b_dedup_held_vault': m038b,
-  '038c_knowledge_images': m038c
+  '038c_knowledge_images': m038c,
+  '039_tools_injection': m039,
+  '039b_mcp_server': m039b,
+  '039c_scim_vault_posts': m039c,
+  '040_inventory_analytics': m040,
+  '040b_redteam_agents': m040b,
+  '040c_policies_dlp': m040c,
+  '041_provenance_artifacts': m041,
+  '041b_app_packages': m041b,
+  '041c_model_gen_sync': m041c,
+  '041d_entity_api_embeds': m041d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

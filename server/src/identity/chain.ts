@@ -6,6 +6,7 @@ import { LdapProvider } from './providers/ldap.js';
 import { LocalProvider } from './providers/local.js';
 import { SqlProvider } from './providers/sql.js';
 import { FederatedProvider, type FederatedTester } from './providers/federated.js';
+import { ScimProvider } from './providers/scim.js';
 import { burnPasswordCheck } from './passwords.js';
 import type { VaultRefResolver } from './secrets.js';
 import { parseProviderConfig, type ExternalUser, type IdentityProvider, type LdapConfig, type SqlConfig, type Step } from './providers/types.js';
@@ -68,6 +69,9 @@ export class IdentityChain {
       case 'atproto': // Sprint 26 (B-1808): AT-Protocol accounts sign in by redirect too
       case 'github':
         provider = new FederatedProvider(row, (r, steps) => (this.federatedTester ? this.federatedTester(r, steps) : Promise.resolve(false)));
+        break;
+      case 'scim': // 1.6.0 (B-7201): users pushed by an identity provider; no passwords
+        provider = new ScimProvider(row.id, row.name, this.db);
         break;
     }
     this.cache.set(row.id, { updatedAt: row.updated_at, provider });

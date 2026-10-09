@@ -15,9 +15,12 @@ import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
-import { allowAll, type GuardDecision, type Guardrails } from '../guardrails/types.js';
+import { allowAll, type GuardDecision, type GuardFinding, type Guardrails } from '../guardrails/types.js';
+import type { DlpInspector } from '../compliance/dlp-types.js';
+import type { HoldLookup } from '../compliance/holds.js';
 import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
 import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
+import { toolResultContent, type UntrustedVerdict } from '../guardrails/injection.js';
 import { StreamGuard, type CheckLimiter, type Release, type Screen } from '../guardrails/stream.js';
 import type { FlagService } from '../guardrails/flags.js';
 import type { Notifications } from '../platform/notifications.js';
@@ -150,6 +153,10 @@ export interface ChatOptions {
   principalFor?: (tenantId: string, userId: string, workspaceId: string | null) => Promise<Principal | null>;
   /** The streaming guard model (Sprint 16): hold-back in sentence windows and the per-instance check limiter. */
   streamModel?: { holdback: number; limiter: CheckLimiter };
+  /** 1.6.0 (B-7601): DLP on finished answers: a raised label, a redaction or a hold. */
+  dlp?: DlpInspector;
+  /** 1.6.0 (B-7602): users and workspaces under a legal hold, whose conversations retention leaves alone. */
+  legalHolds?: HoldLookup;
 }
 
 const LIVE: MessageState[] = ['queued', 'streaming'];
@@ -841,6 +848,8 @@ export class ChatService {
     if (!days && !scoped.length) return { days: null, conversations: 0, messages: 0, attachments: 0, scopes: 0 };
     const now = Date.now();
     const busy = this.db('messages').where({ tenant_id: tenantId }).whereIn('state', [...LIVE, 'awaiting']).select('conversation_id');
+    // 1.6.0 (B-7602): a legal hold on the owner or the workspace suspends the purge of their conversations.
+    const held = (await this.opts.legalHolds?.held(tenantId)) ?? { users: [], workspaces: [] };
     // A conversation is past its shortest period exactly when it is past any one of the periods that apply to it.
     const expired = (w: Knex.QueryBuilder) => {
       if (days) w.orWhere('updated_at', '<', now - days * 86_400_000);
@@ -850,7 +859,10 @@ export class ChatService {
     let messages = 0;
     let attachments = 0;
     for (;;) {
-      const ids = ((await this.db('conversations').where({ tenant_id: tenantId }).andWhere((w) => expired(w)).whereNotIn('id', busy.clone()).limit(500).select('id')) as { id: string }[]).map((x) => x.id);
+      const q = this.db('conversations').where({ tenant_id: tenantId }).andWhere((w) => expired(w)).whereNotIn('id', busy.clone());
+      if (held.users.length) q.whereNotIn('user_id', held.users);
+      if (held.workspaces.length) q.andWhere((w) => w.whereNull('workspace_id').orWhereNotIn('workspace_id', held.workspaces));
+      const ids = ((await q.limit(500).select('id')) as { id: string }[]).map((x) => x.id);
       if (!ids.length) break;
       const used = new Set<string>();
       for (const r of (await this.db('messages').whereIn('conversation_id', ids).whereNotNull('attachments').select('attachments')) as { attachments: string }[]) for (const a of json<string[]>(r.attachments, [])) used.add(a);
@@ -1141,7 +1153,7 @@ export class ChatService {
   private async applyContext(c: ConversationRow, m: MessageRow, r: ResolvedProfile, lease: Lease, messages: ChatMessage[], gathered: ContextItem[], st: Stream): Promise<void> {
     const items = gathered.filter((x) => labelRank(x.label) <= labelRank(lease.pool.label_ceiling));
     if (!items.length) return;
-    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items) });
+    messages.splice(r.profile.system_prompt ? 1 : 0, 0, { role: 'system', content: formatContext(items, { marking: r.profile.trust_marking !== false }) });
     const label = highest(c.label, ...items.map((x) => x.label));
     const citations = items.map((x, i) => ({ n: i + 1, kind: x.tag === 'context' ? 'knowledge' : 'memory', label: x.label, ...x.cite }));
     st.context = { items, citations };
@@ -1374,10 +1386,12 @@ export class ChatService {
         for (const call of calls) {
           const expression = String((call.function.arguments as { expression?: unknown }).expression ?? '');
           let tool: NonNullable<Chunk['tool']>;
+          let untrusted: UntrustedVerdict | undefined;
           const ext = extra.find((t) => t.fn === call.function.name);
           if (ext) {
             const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal, chainRoot: { kind: 'chat-turn', ref: m.id } }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
             tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
+            if (o.ok) untrusted = o.untrusted;
           } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {
             usage.calcCalls++;
@@ -1387,7 +1401,8 @@ export class ChatService {
               tool = { name: 'calculate', expression, error: (err as Error).message };
             }
           }
-          messages.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify(tool.result ?? tool.output ?? { error: tool.error }) });
+          // B-6901: a registry, MCP or HTTP tool's result reaches the model as untrusted content (calculate is trusted).
+          messages.push({ role: 'tool', tool_name: call.function.name, content: toolResultContent(tool.result ?? tool.output ?? { error: tool.error }, { name: tool.name, untrusted: untrusted ?? null, marking: r.profile.trust_marking !== false }) });
           const shown = await this.screenTool(st, tool);
           st.tools.push(shown);
           if (!st.held) this.push(st, { tool: shown });
@@ -1455,8 +1470,11 @@ export class ChatService {
       gpu_ms: Math.round(prior.gpuMs + usage.gpuMs),
       first_token_ms: usage.firstTokenMs,
       ...(guard ? { guard: JSON.stringify(guard.summary) } : {}),
+      ...(guard?.raised ? { label: guard.raised } : {}),
       ...(passages ? { citations: passages } : {})
     });
+    // 1.6.0 (B-7601): a DLP rule raised the answer's label; the conversation follows it (its label is a high-water mark).
+    if (guard?.raised && labelRank(guard.raised) > labelRank(c.label)) await this.db('conversations').where({ id: c.id }).update({ label: guard.raised, updated_at: Date.now() });
     // A replaced or held answer is read back from the store, not from the streamed chunks.
     if ((guard?.replaced || guard?.held) && this.streams.get(m.id) === st) this.streams.delete(m.id);
     if (metered) {
@@ -1556,7 +1574,7 @@ export class ChatService {
    * when there is no review queue); a redaction replaces the flagged spans. What the streaming screen already
    * stopped stays stopped. The stored answer is what the user sees from then on.
    */
-  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream, answer = true): Promise<{ summary: Record<string, unknown>; replaced: boolean; held: boolean; decision: GuardDecision } | null> {
+  private async guardOutput(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream, answer = true): Promise<{ summary: Record<string, unknown>; replaced: boolean; held: boolean; decision: GuardDecision; raised: Label | null } | null> {
     let d: GuardDecision = { action: 'allow', text: st.content, findings: [] };
     const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
     const prompt = q?.content ? await this.open(c.tenant_id, m.parent_id!, 'content', q.content) : null;
@@ -1590,6 +1608,30 @@ export class ChatService {
       thinkingReplaced = true;
     }
     const thinkingSummary = thought && thought.action !== 'allow' && thought.action !== 'flag' ? { thinking: { action: thought.action === 'require-approval' ? 'block' : thought.action, ...(thought.reason ? { reason: thought.reason } : {}), rules: [...new Set(thought.findings.filter((f) => f.stage === 'enforce').map((f) => f.ruleName))] } } : {};
+    // 1.6.0 (B-7601): DLP classifies the finished answer. A raised label is returned for the message and conversation;
+    // a hold joins the decision as require-approval (so does a label above the owner's clearance, whatever the rule
+    // says: they may not read it); a redaction is what is stored. A DLP finding is recorded like a rule's.
+    let raised: Label | null = null;
+    let dlpSummary: Record<string, unknown> = {};
+    if (this.opts.dlp && answer && st.content && d.action !== 'block') {
+      try {
+        const dlp = await this.opts.dlp.inspect({ tenantId: c.tenant_id, text: d.action === 'redact' ? d.text : st.content, scope: 'answer', label: c.label });
+        if (dlp.rules.length) {
+          const names = dlp.rules.map((x) => x.name).join(', ');
+          const finding = (action: GuardFinding['action']): GuardFinding => ({ ruleId: `dlp:${dlp.rules[0]!.id}`, ruleName: `DLP: ${dlp.rules[0]!.name}`, action, stage: 'enforce', detail: dlp.rules.flatMap((x) => x.kinds).join(', '), ...(dlp.detections[0] ? { span: dlp.detections[0].span } : {}) });
+          if (dlp.raised) raised = dlp.label;
+          const aboveOwner = labelRank(dlp.label) > labelRank(p.clearance);
+          if (dlp.action === 'hold' || aboveOwner) {
+            if (d.action !== 'require-approval') d = { ...d, action: 'require-approval', reason: dlp.action === 'hold' ? `Held by the DLP rule ${names}.` : `DLP classified this answer ${dlp.label}, above your clearance.`, findings: [...d.findings, finding('require-approval')] };
+          } else if (dlp.action === 'redact') {
+            d = { ...d, action: d.action === 'redact' || d.action === 'require-approval' ? d.action : 'redact', text: dlp.text, findings: [...d.findings, finding('redact')] };
+          } else d = { ...d, findings: [...d.findings, finding('log')] };
+          dlpSummary = { dlp: { label: dlp.label, action: dlp.action, rules: dlp.rules.map((x) => x.name) } };
+        }
+      } catch (err) {
+        this.log.error({ err, message: m.id }, 'DLP inspection failed');
+      }
+    }
     const halt = st.guard?.halted ?? st.thinkGuard?.halted ?? null;
     const hold = st.held ? (st.guard?.held ?? st.thinkGuard?.held ?? { action: 'require-approval' as const, text: st.content, findings: [], reason: 'Held for review while streaming.' }) : null;
     if (halt && d.action !== 'block') d = { ...d, action: 'block', reason: halt.reason ?? d.reason ?? 'Blocked by a guardrail.', findings: [...d.findings, ...halt.findings] };
@@ -1598,8 +1640,8 @@ export class ChatService {
       d = { ...d, action: 'require-approval', ...(reason ? { reason } : {}), findings: [...d.findings, ...hold.findings] };
     }
     const enforced = d.findings.filter((f) => f.stage === 'enforce');
-    if (!enforced.length && d.action === 'allow' && !thinkingReplaced) return null;
-    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))], ...thinkingSummary };
+    if (!enforced.length && d.action === 'allow' && !thinkingReplaced && !raised) return null;
+    const summary = { action: d.action, ...(d.reason ? { reason: d.reason } : {}), rules: [...new Set(enforced.map((f) => f.ruleName))], ...thinkingSummary, ...dlpSummary };
     let replaced = thinkingReplaced;
     let held = false;
     if (d.action === 'require-approval' && this.opts.flags) held = true;
@@ -1616,6 +1658,6 @@ export class ChatService {
       st.seq++;
       st.chunks = [];
     }
-    return { summary, replaced, held, decision: d };
+    return { summary, replaced, held, decision: d, raised };
   }
 }

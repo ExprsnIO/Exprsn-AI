@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { actorFrom } from '../audit/chain.js';
 import { effectivePermissions } from '../authz/policy.js';
 import { getRole, PERMISSIONS, rolesRequireMfa, type Permission } from '../authz/permissions.js';
-import { apiKeyState } from '../identity/apikeys.js';
+import { apiKeyState, type AppKeyScope } from '../identity/apikeys.js';
 import { ed25519PublicKey } from '../crypto/httpsig.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requireRecentAuth, setSessionCookie, workspacesFor } from '../http/middleware.js';
 import { AccountService } from '../identity/account.js';
@@ -340,7 +340,7 @@ export function meRoutes(s: Services): Router {
 
   r.get('/api-keys', active, async (req, res) => {
     const rows = await s.apiKeys.listForUser(principalOf(req).userId);
-    res.json(rows.map((k) => ({ id: k.id, name: k.name, prefix: `exai_k1_${k.prefix}`, scopes: k.scopes, state: apiKeyState(k), expiresAt: k.expires_at, lastUsedAt: k.last_used_at, createdAt: k.created_at, signatureKey: k.signature_key })));
+    res.json(rows.map((k) => ({ id: k.id, name: k.name, prefix: `exai_k1_${k.prefix}`, scopes: k.scopes, state: apiKeyState(k), expiresAt: k.expires_at, lastUsedAt: k.last_used_at, createdAt: k.created_at, signatureKey: k.signature_key, appScope: k.app_scope })));
   });
 
   r.post('/api-keys', browser, recent, async (req, res) => {
@@ -351,7 +351,9 @@ export function meRoutes(s: Services): Router {
         scopes: z.array(z.enum(PERMISSIONS)).min(1).max(PERMISSIONS.length),
         ttlDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
         // Sprint 20 (B-1203): requests made with the key must then carry an RFC 9421 signature by this Ed25519 key.
-        signatureKey: z.string().trim().min(1).max(400).nullable().optional()
+        signatureKey: z.string().trim().min(1).max(400).nullable().optional(),
+        // 1.6.0 (B-8601): a key limited to one app (and one entity's records): records:read and records:write only.
+        app: z.object({ app: z.string().min(1).max(63), entity: z.string().min(1).max(63).nullable().optional() }).strict().nullable().optional()
       }),
       req.body
     );
@@ -359,10 +361,18 @@ export function meRoutes(s: Services): Router {
     const held = effectivePermissions(p);
     const extra = body.scopes.filter((sc) => !held.has(sc));
     if (extra.length) throw forbidden(`Scopes never widen a role: you do not hold ${extra.join(', ')}.`, { step: 'scope' });
-    const { key, row } = await s.apiKeys.create({ tenantId: p.tenantId, userId: p.userId, name: body.name, scopes: body.scopes as Permission[], ttlDays: body.ttlDays, signatureKey });
-    await audit(req, 'apikey.created', { key: row.id, prefix: row.prefix, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key });
+    let appScope: AppKeyScope | null = null;
+    if (body.app) {
+      const beyond = body.scopes.filter((sc) => sc !== 'records:read' && sc !== 'records:write');
+      if (beyond.length) throw badRequest(`A key limited to an app holds records:read and records:write only, not ${beyond.join(', ')}.`);
+      const app = await s.apps.app(p, body.app.app);
+      const entity = body.app.entity ? await s.apps.entityOf(app, body.app.entity) : null;
+      appScope = { app: app.id, entity: entity?.id ?? null };
+    }
+    const { key, row } = await s.apiKeys.create({ tenantId: p.tenantId, userId: p.userId, name: body.name, scopes: body.scopes as Permission[], ttlDays: body.ttlDays, signatureKey, appScope });
+    await audit(req, 'apikey.created', { key: row.id, prefix: row.prefix, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key, ...(appScope ? { appScope } : {}) });
     await alert(req, 'api_key.created', `Key "${row.name}" (exai_k1_${row.prefix}…) with ${row.scopes.length} scope${row.scopes.length === 1 ? '' : 's'}.`);
-    res.status(201).json({ id: row.id, key, prefix: `exai_k1_${row.prefix}`, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key, notice: 'This is the only time the key is shown.' });
+    res.status(201).json({ id: row.id, key, prefix: `exai_k1_${row.prefix}`, scopes: row.scopes, expiresAt: row.expires_at, signatureKey: row.signature_key, appScope: row.app_scope, notice: 'This is the only time the key is shown.' });
   });
 
   /**

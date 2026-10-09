@@ -153,6 +153,66 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
 
 ## Screens changed in 1.6.0
 
+- **Apps: policies and explain** (B-8103, Sprint 38c): a Policies tab for designers lists the app's policies in a
+  table whose state is a pill with its word; the editor is a labelled form (name, description, entity, the subjects as
+  labelled kind and value controls with a text Remove button each, the row condition as three labelled controls with
+  a sentence of hints, an Enabled switch with `role="switch"` and `aria-checked`, and the field grants as a table of
+  labelled checkboxes and mask selects, one row per field). Placeholder and list mistakes are refused before the
+  request in a toast that names the valid placeholders. Explain is a labelled form (reader, entity, record, field) whose
+  answer is a key-value list and a table: reachable or not, and each grant, is a pill with its word, with the policy
+  named in text. `e2e/tests/apps-policies.spec.ts` runs axe-core on the tab with an explain answer.
+- **Apps: Deployments tab** (B-8201 to B-8204, Sprint 39b): a tab for designers with three panels. Environments shows
+  the pipeline's three stages as cards (stage name as an eyebrow, the app, its workspace, the deployed version as a
+  pill with its number) joined by decorative arrows (`aria-hidden`), the approval workflow in a key-value list, a
+  notice while a deployment is going, and text buttons to promote (disabled while one is going), edit or delete the
+  pipeline; without a pipeline, an empty state and a Create button. Packages is a table (version, source as a pill with
+  its word, hash with the full value as a title, contents, size, note, made) with text buttons to download or push each
+  one, and buttons to make, import or import from git. The history table shows each deployment's stages as text, its
+  state as a pill with its word (and the error as text), who, when, the report as a sentence and a Roll back button.
+  Every dialog is a labelled form (package contents and note; repository, branch, path, credential and message; the
+  pipeline's name, approval workflow and three app selects; the pasted package) with the server's problem shown inside
+  it; promotion and rollback go through a confirm dialog that says what will happen. A refused package is a problem
+  panel on the page. `e2e/tests/apps-deployments.spec.ts` runs axe-core on the tab with a pipeline and with a refused
+  package.
+
+- **Apps: the data model draft, AI fills and the outside table** (B-8301, B-8402, B-8501, Sprint 39c): the draft
+  dialog is a labelled form (profile, label, description) whose answer is a table (entity, change as a pill with its
+  word, fields added, changed and omitted as pills, states, problems) with the triggers as a list and the draft JSON in
+  a native `details` element the designer can edit; the live region announces the model's progress. The AI fills
+  panel lists each field with text buttons (Estimate, Fill empty, Refresh all), the estimate as a notice, and the fills
+  as a table whose running row carries a `meter` with its text beside it and a Cancel button; a confirm dialog states
+  the estimate before a fill starts. The outside table panel is a key-value list and text buttons; the attach dialog
+  is a labelled form (connection, table, key column, key field, state column, pull interval, column mapping, two
+  checkboxes). `e2e/tests/apps-model.spec.ts` runs axe-core on the draft dialog, the fills panel and the source panel.
+- **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
+  exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
+  label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,
+  danger) is also said in words, with the redacted text in a `pre`. The rule, pattern, hold and export dialogs are
+  labelled forms (detectors and scopes as labelled checkboxes, the approver a labelled select of named people); every
+  refusal (a pattern in use, dual control, an export above one's clearance) is a problem block with its trace id.
+  `e2e/tests/compliance.spec.ts` runs axe-core on the tab.
+- **Apps: API tab** (B-8601 to B-8603, Sprint 39d): a tab for designers with three panels. The entity API is a table
+  (method as a pill with its word, path, the permission, what it does) and a `pre` with a curl to try; the OpenAPI
+  document and the client are links with `download` and buttons that say which file they fetch, with the schema
+  version and hash in a key-value list; the schema versions are a table whose change and source are pills with their
+  words. `e2e/tests/apps-api.spec.ts` runs axe-core on the tab.
+- **Apps: Embed tab** (B-8701, B-8702, Sprint 39d): a labelled form (the host sites as a labelled textarea, Public
+  pages, Signed embeds and Writes as switches with `role="switch"` and `aria-checked`, the claim as a labelled input
+  and select, the longest session as a labelled select, the entities as a labelled input) with a sentence of hint
+  each; the audience, page address and `frame-ancestors` in a key-value list. Keys, pages and sessions are tables whose
+  state is a pill with its word, with text buttons (Revoke, Snippet, Remove) labelled by the key or form. The key
+  dialog is a labelled form; an HS256 secret is a warning notice shown once with a Copy button. The snippet dialog is
+  a `pre`. Refusals are problem blocks with the trace id. axe-core runs on the tab in `apps-api.spec.ts`.
+- **The embed pages** (B-8701, B-8702, Sprint 39d): `/embed/<id>` and `/embed/app/<tenant>/<app>` reuse the console
+  stylesheet (its colours, focus outlines and dark theme) with `lang`, a viewport, one `h1` (the form or app title) and
+  a `main` with `aria-live="polite"` for loading and refusals. A public form is a labelled form (each field a `label`
+  bound to its control, hints as text, required fields marked for the browser, fields hidden by a visibility rule
+  with `hidden`), a status line read by assistive technology, and the thank-you as a notice. A signed embed shows the
+  entities as a tablist, a labelled search, a records table with headers, Next page and First page buttons, and a
+  labelled New record form when writes are allowed. axe-core runs on a submitted embed page in `apps-api.spec.ts`.
+- **Settings: a key limited to an app** (B-8601, Sprint 39d): the Create API key dialog gains a labelled select (Limit
+  to an app) and a labelled input (Entity) with a sentence of hint each; a key so limited is marked in the list with a
+  pill saying so. A scope the limit refuses is a toast naming the scopes allowed.
 - **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
   Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
   unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
@@ -217,6 +277,121 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   checker in light and dark on Discover, Trending, the Channels tab, a channel, the Social and messaging Groups tab,
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
+
+- **Models: the AI inventory tab** (B-7301, B-7302, Sprint 38a): a second tab in the ARIA tablist (Catalogue, AI
+  inventory), reachable with the arrow keys; a labelled segmented control filters by kind; every system is a table row
+  with a selected state, and the inspector is a form of labelled fields (owner as a select of the tenant's users,
+  oversight role, provenance, lineage note, known issues, impact assessment) with a Save button; the completeness
+  notice names what is missing in words, not by colour alone. The owner-requirement control is a `role="switch"` with
+  `aria-checked`, and the register exports are buttons whose names say the format. Toasts repeat the server's outcome.
+- **Analytics** (B-7401, B-7402, Sprint 38a): the chart is an SVG with `role="img"` and a label, each bar a focusable
+  list item with an accessible name (day and value) and a title, and a labelled segmented control picks the metric;
+  the dimension and period controls are labelled; the table has a Total row; cost cells that are withheld say "no
+  price" with a title explaining why. The price and chargeback dialogs are forms with labelled fields and hints, and
+  a refused save stays in the dialog with the server's words. Remove buttons name the price they remove.
+- **Usage and audit: JSONL exports and SIEM destinations** (B-7501, Sprint 38a): the export dialog's content select
+  swaps the hint text to explain the JSONL proof; the destinations table names the proposer and approver in each row;
+  state is a pill with words (awaits a second admin, active, disabled); the Approve button a proposer cannot use
+  carries a title saying why, and the refusal is a toast with the server's reason. Propose is a dialog of labelled
+  fields with hints (address forms, where the token goes). `e2e/tests/analytics.spec.ts` checks the screen with
+  axe-core and the in-page checker; `models.spec.ts` the inventory tab; `usage-audit.spec.ts` the export and the
+  dual-control flow with a second signed-in admin. The full sweeps run at the release (B-5101).
+- **Registry: HTTP tools and allowed hosts** (B-8904, Sprint 37a): the entry form's Kind select offers Tool (HTTP
+  request), which swaps the fields inside the same dialog so focus stays in it. Every HTTP field is labelled with a
+  hint (method, URL template, input schema, query parameters, headers, body, response mapping, cap and timeout); the
+  side-effect select is disabled for GET with the reason in its hint; the vault reference picker is a labelled select
+  of the paths the caller may read, a labelled key field and an Insert button that writes the reference into the
+  headers field, so nothing is picked by pointer alone. "Fill from the URL" fills the input schema from the URL's
+  placeholders. A refused save (a literal credential) is a problem panel with the server's words in the inspector, not
+  only a toast. The inspector's HTTP rows (request, parameters, headers, response, calls in the last day, the outbound
+  guard) are text in the key and value list. Allowed hosts is a drawer with a labelled host field, an Add button and a
+  Remove button per host whose accessible name names the host; changes are announced by toast and stay visible in the
+  list. `e2e/tests/registry-http.spec.ts` creates, tests and publishes an HTTP tool from the console and keeps the
+  allowed hosts; `y-accessibility.spec.ts`, `y-reflow.spec.ts` and `y-reflow-overlays.spec.ts` (with
+  `E2E_ONLY=registry,guardrails,profiles`) found nothing on the screen, its two new design states (HTTP host refused,
+  Literal credential refused), the form and the drawer, Standard and Enhanced, light and dark, at 320 and 640 px.
+- **Guardrails: the untrusted-content checkpoint** (B-6902, Sprint 37a): a twelfth checkpoint in the list. Its
+  Prompt-injection defence panel states the mode as a pill with its word (annotate, block, off) and a sentence saying
+  what it does; detections by source and the recent detections are tables with column headers, actions as pills with
+  words (annotated, blocked), scores as numbers; the CI corpus rates are a sentence. Add a blocking rule is a button
+  that is disabled with its reason (`title`) where it does not apply (the platform baseline, a set that already has
+  it) and goes through a confirm dialog. The rule editor's injection mechanism has a labelled engine select and a
+  threshold or guard profile field with hints. The review bar wraps at narrow widths (it scrolled sideways at 320 px
+  when a draft had all four buttons). The new design state (Poisoned page blocked) is in the sweeps.
+- **Profiles: trust marking** (B-6901, Sprint 37a): a labelled check box, "Mark retrieved and tool text as data",
+  under the field label Untrusted content with a hint saying what it does; the save dialog names the change in words
+  ("Untrusted content marking: on → off") and the saved YAML shows `trustMarking`. `e2e/tests/profiles.spec.ts`
+  switches it off as a new version.
+
+- **Identity: MCP server; Settings: MCP access; MCP servers: OAuth for users** (B-7101 to B-7103, Sprint 37b): the
+  Identity tab list gains MCP server with its published count in text. Each workspace is a table row whose state is a
+  word ("published", "off"), never only a colour; Edit and the copy button carry the workspace's name in their
+  accessible names ("Edit the MCP server of Finance Ops", "Copy the URL of Finance Ops"). The edit drawer is a labelled
+  form: Published and Require DPoP-bound tokens are switches (`role="switch"`, `aria-checked`), the tool groups are
+  checkboxes in a fieldset with a legend, each saying what the group publishes, and the label select has a hint naming
+  the workspace ceiling; the preview below it is a table that updates as groups change. Self-registration is a switch
+  whose state is repeated in text (the registration endpoint, or "not offered"), and turning it on asks for
+  confirmation in a dialog. In Settings, MCP access is one panel of tables with column headers: the connection URLs
+  (copy buttons named per workspace), the calls waiting for approval (Approve and Reject named with the tool, the side
+  effect as a word, the arguments in text, and the approval dialog repeating them in a code block), and the MCP servers
+  that act as you (the connection as words, Connect and Disconnect named per server; Connect opens a dialog that says
+  where the browser will go before it leaves). On MCP servers, OAuth for users is a key-value list with Discover, Enter
+  by hand and Remove buttons; discovery reports each step in a table with the result in words; Enter OAuth by hand is
+  a dialog of labelled fields with hints. Identity's PKCE switch for a public client, which cannot be changed, is now
+  `aria-disabled` (the toast still explains why). `e2e/tests/mcp-server.spec.ts` runs axe-core (Standard and Enhanced)
+  and the in-page checker in light and dark on the MCP server tab and its drawer, MCP access and its approval dialog,
+  the Connect dialog, the OAuth panel, the discovery result and the manual dialog, and checks each for sideways
+  scrolling at 320 and 640 px; the new design states (three on Identity, two on Settings, one on MCP servers) are in
+  the `y-accessibility.spec.ts` sweep.
+
+- **Identity: SCIM provisioning** (B-7201, B-7202, Sprint 37c): under User stores and federation, each SCIM store is a
+  section with a level-2 heading naming it; its status is a key and value list in text (users active of total, groups,
+  the stores its users sign in through, last change), its tokens a table with column headers whose Revoke buttons
+  carry the token's name in their accessible names, and its recent changes a timeline whose tone is also said in words
+  (deactivated, created, access changed). A new token is shown once in a notice with the token in a selectable block
+  and labelled Copy token and Done buttons. Add a SCIM store and New SCIM token are labelled dialogs; the sign-in stores
+  are checkboxes in a fieldset with a legend, and server refusals land in the dialog in the server's words.
+  `e2e/tests/identity-additions.spec.ts` runs the in-page checker and axe-core on the section with a store, a token and
+  a provisioned user, once the toast has gone.
+- **Vault: sharing** (B-4801, Sprint 37c): Share is a labelled button beside Edit metadata; its dialog has labelled
+  selects for the kind of grantee, the grantee and the duration, and a note field. Shared with is a panel whose table
+  names the grantee kind in text and whose Revoke buttons name the grantee; an expired share says "expired" in a pill
+  and its date. Shared with you is a list in the paths column, each entry naming who shared it and until when in text,
+  and "a deny refuses you" when one does. A share refused because a deny wins is a problem panel with the deciding
+  grant in words and an Open Policies button. Share grants carry a "share" pill and their expiry in text in the
+  Policies table. `e2e/tests/vault.spec.ts` runs both checkers with a share shown and checks 320 and 640 px.
+- **Messages and feed: quotes and visibility** (B-4901, Sprint 37c): the composer's Visibility is a labelled select
+  (Workspace, Public, Unlisted (link only)); a post's visibility and quote status are pills in words beside its label,
+  never colour alone. Quote opens a labelled dialog (Your comment, Post in, Visibility) that says the quote's label
+  floor in text; the quoted post is embedded as a quotation block naming its author, time and label, or a sentence
+  saying it is out of reach. A post opened by its link is a region named "Post opened by link" with a notice and a
+  labelled Close button; a refused repost is a problem panel in words. Your unlisted posts is an inspector panel whose
+  Open and Copy link buttons sit beside the post's opening words. `e2e/tests/messages.spec.ts` runs both checkers in
+  Standard and Enhanced on the feed with an unlisted post opened by link.
+
+- **Profiles: Red team** (B-7001, B-7002, Sprint 38b): the panel under the Evaluations tab repeats the evaluations
+  panel's structure: a notice states the gate in words (refused until, allowed) with its actions as buttons, the
+  suites and run history are tables with a header row, every result is a pill with its word (passed, failed, error)
+  beside the count, and Results opens a drawer whose outcome column says resisted or succeeded, never colour alone;
+  the flag of a successful attack is a link named by the flag. The suite modal labels every field with a hint, the
+  categories are labelled checkboxes with their attack counts, and errors land in a notice inside the modal.
+- **Registry: Identity and Red team** (B-7701, B-7001, Sprint 38b): both are modals opened from buttons on the agent
+  card, each with a title naming the agent; roles, ceiling and the on/off switch are labelled fields, keys are a
+  table whose state is a pill with its word, Mint key opens an inline labelled form, and the minted key is announced
+  in a notice marked as shown once. The handoffs field in the agent form is labelled with a hint like the delegates
+  field. Run and gate changes close the modal and confirm in a toast.
+- **Runs: handoffs** (B-7801, Sprint 38b): a run that handed off says who answered in its page head and in the list
+  entry (an arrow to the specialist's name), and a notice explains the handoff with a button to the specialist's run.
+
+- **Chat artifacts and image content credentials (Sprint 39a, B-8001, B-7901).** The chips under an answer are
+  buttons named "Open <file> version n", pressed for the open version; the Artifacts panel has a labelled version
+  select ("Version of <file>") between Earlier and Later buttons (disabled at the ends), and every list entry is a
+  button. An HTML artifact is an `iframe` titled "<file> version n", sandboxed; code and documents are `pre` text that
+  wraps, so nothing scrolls sideways at 320 px. Copy announces its result as a toast. The public link page renders the
+  same controls without a session. On Images, the content-credentials row names its state in words (signed by the
+  tenant CA, or not signed and why) with a "details" link to a dialog of every check as ok/failed/not checked pills
+  with their names; the dialog closes with Close and Escape and returns focus. Checked by `chat.spec.ts` and
+  `images.spec.ts` with axe-core (Standard, light) on the panel and the dialog.
 
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 

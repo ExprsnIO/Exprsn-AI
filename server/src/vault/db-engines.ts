@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import pg from 'pg';
 import mysql from 'mysql2/promise';
+import { MongoClient } from 'mongodb';
+import { mongoAccount } from '../connections/mongo.js';
 import { checkHost, parseAllowList, type AllowList } from '../mcp/hosts.js';
 
 /*
@@ -13,6 +15,11 @@ import { checkHost, parseAllowList, type AllowList } from '../mcp/hosts.js';
  *               ALTER ROLE … VALID UNTIL (renew); REVOKE … then DROP ROLE (revoke and expiry).
  *   MySQL       CREATE USER '<user>'@'<host>' IDENTIFIED BY '<pw>'; GRANT <privileges> ON `<db>`.*; DROP USER.
  *
+ *   MongoDB     (1.6.0, B-4802) createUser in the engine's database (default `admin`) with `read` or `readWrite` on
+ *               each of the role's databases and the lease's expiry in `customData`; updateUser (renew moves
+ *               `customData` only: MongoDB accounts carry no expiry, the sweeper enforces it); killAllSessionsByPattern
+ *               then dropUser (revoke and expiry). Commands are documents, never strings: there is nothing to splice.
+ *
  * Nothing from a request is spliced into SQL as text: user names are generated here (`exai_<role>_<12 hex>`), passwords
  * are random, schema and database names are checked against a strict identifier pattern when they are saved and are
  * quoted per dialect again here, and the only parameters that vary are bound where the protocol allows it (the
@@ -20,12 +27,12 @@ import { checkHost, parseAllowList, type AllowList } from '../mcp/hosts.js';
  * them is generated or validated, then quoted.
  */
 
-export type Dialect = 'postgres' | 'mysql';
-export const DIALECTS: readonly Dialect[] = ['postgres', 'mysql'];
+export type Dialect = 'postgres' | 'mysql' | 'mongodb';
+export const DIALECTS: readonly Dialect[] = ['postgres', 'mysql', 'mongodb'];
 export type Privileges = 'read' | 'readwrite';
 export const PRIVILEGES: readonly Privileges[] = ['read', 'readwrite'];
 
-/** A schema (PostgreSQL) or database (MySQL) name a role may be granted on. */
+/** A schema (PostgreSQL) or database (MySQL, MongoDB) name a role may be granted on. */
 export const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_$-]{0,62}$/;
 /** A role name as saved: it becomes part of generated user names. */
 export const ROLE_NAME = /^[a-z][a-z0-9_]{0,31}$/;
@@ -39,7 +46,7 @@ export interface EngineTarget {
   tls: boolean;
   adminUsername: string;
   adminPassword: string;
-  /** MySQL account host for generated users (`%` by default). */
+  /** MySQL account host for generated users (`%` by default). Unused by PostgreSQL and MongoDB. */
   userHost: string;
 }
 
@@ -159,6 +166,29 @@ export const mysqlStatements = {
   },
   drop(username: string, host: string): string[] {
     return [`DROP USER IF EXISTS ${mysqlStatements.account(username, host)}`];
+  }
+};
+
+/** MongoDB (1.6.0, B-4802): the commands, as documents, run against the engine's user database. */
+export const mongoCommands = {
+  create(username: string, password: string, validUntil: Date, g: LeaseGrant): Record<string, unknown> {
+    assertUser(username);
+    assertSchemas(g);
+    if (g.schemas.some((d) => d.includes('$') || d === 'admin' || d === 'local' || d === 'config')) throw new Error('Refusing a MongoDB database name a lease may not be granted on.');
+    const role = g.privileges === 'readwrite' ? 'readWrite' : 'read';
+    return { createUser: username, pwd: password, roles: g.schemas.map((db) => ({ role, db })), customData: { exprsnLease: true, validUntil: validUntil.toISOString() }, mechanisms: ['SCRAM-SHA-256'] };
+  },
+  extend(username: string, validUntil: Date): Record<string, unknown> {
+    assertUser(username);
+    return { updateUser: username, customData: { exprsnLease: true, validUntil: validUntil.toISOString() } };
+  },
+  killSessions(username: string, userDb: string): Record<string, unknown> {
+    assertUser(username);
+    return { killAllSessionsByPattern: [{ users: [{ user: username, db: userDb }] }] };
+  },
+  drop(username: string): Record<string, unknown> {
+    assertUser(username);
+    return { dropUser: username };
   }
 };
 
@@ -334,8 +364,101 @@ export class MysqlAdmin implements DbAdmin {
   }
 }
 
+/**
+ * MongoDB (1.6.0, B-4802): the admin account needs `createUser`, `dropUser` and `grantRole` on the engine's database
+ * (the userAdmin role there, or userAdminAnyDatabase), and `killAnySession` to end a dropped account's sessions (else
+ * they run until they close). The admin authenticates against `admin` unless its name is written `<authdb>/<user>`;
+ * leased users live in the engine's database (default `admin`) and authenticate there.
+ */
+export class MongoAdmin implements DbAdmin {
+  constructor(
+    private readonly t: EngineTarget,
+    private readonly allow: AllowList
+  ) {}
+
+  private get userDb(): string {
+    return this.t.database || 'admin';
+  }
+
+  private async session<T>(fn: (c: MongoClient) => Promise<T>, timeoutMs = TIMEOUT_MS): Promise<T> {
+    const { host, port } = hostPort(this.t.endpoint, 27017);
+    const { addresses } = await checkHost(host, this.allow);
+    const address = addresses[0]!;
+    // The checked address is pinned through `lookup`, so DNS cannot rebind; TLS still verifies the name.
+    const pinned = (_h: string, opts: { all?: boolean } | number | undefined, cb: (err: Error | null, a: string | { address: string; family: number }[], family?: number) => void) => {
+      const family = isIP(address);
+      if (typeof opts === 'object' && opts?.all) cb(null, [{ address, family }]);
+      else cb(null, address, family);
+    };
+    const { user, authSource } = mongoAccount(this.t.adminUsername, 'admin');
+    const c = new MongoClient(`mongodb://${isIP(host) === 6 ? `[${host}]` : host}:${port}/`, {
+      directConnection: true,
+      tls: this.t.tls,
+      lookup: pinned as never,
+      serverSelectionTimeoutMS: Math.min(timeoutMs, 10_000),
+      connectTimeoutMS: Math.min(timeoutMs, 10_000),
+      socketTimeoutMS: timeoutMs + 5000,
+      maxPoolSize: 1,
+      retryReads: false,
+      retryWrites: false,
+      appName: 'exprsn-ai-leases',
+      auth: { username: user ?? this.t.adminUsername, password: this.t.adminPassword },
+      authSource
+    });
+    await c.connect();
+    try {
+      return await fn(c);
+    } finally {
+      await c.close().catch(() => undefined);
+    }
+  }
+
+  test(timeoutMs: number) {
+    return this.session(async (c) => {
+      const info = (await c.db('admin').command({ buildInfo: 1 })) as { version?: string };
+      const status = (await c.db(this.userDb).command({ connectionStatus: 1, showPrivileges: true })) as { authInfo?: { authenticatedUserPrivileges?: { resource?: { db?: string; anyResource?: boolean; cluster?: boolean }; actions?: string[] }[] } };
+      const privs = status.authInfo?.authenticatedUserPrivileges ?? [];
+      const on = (action: string) => privs.some((p) => (p.actions ?? []).includes(action) && (p.resource?.anyResource || p.resource?.db === '' || p.resource?.db === this.userDb));
+      const canCreate = on('createUser') && on('dropUser') && on('grantRole');
+      return { version: info.version ? `MongoDB ${info.version}` : 'unknown', canCreate, detail: canCreate ? `${this.t.adminUsername} can create users in ${this.userDb}.` : `${this.t.adminUsername} lacks createUser, dropUser or grantRole on ${this.userDb}; leases cannot be issued.` };
+    }, timeoutMs);
+  }
+
+  createUser(username: string, password: string, validUntil: Date, grant: LeaseGrant) {
+    return this.session(async (c) => {
+      await c.db(this.userDb).command(mongoCommands.create(username, password, validUntil, grant));
+    });
+  }
+
+  /** MongoDB accounts carry no expiry: the new time is recorded in `customData`; the sweeper drops the account. */
+  extend(username: string, validUntil: Date) {
+    return this.session(async (c) => {
+      await c.db(this.userDb).command(mongoCommands.extend(username, validUntil));
+    });
+  }
+
+  exists(username: string) {
+    return this.session(async (c) => {
+      const r = (await c.db(this.userDb).command({ usersInfo: { user: username, db: this.userDb } })) as { users?: unknown[] };
+      return (r.users ?? []).length > 0;
+    });
+  }
+
+  dropUser(username: string) {
+    return this.session(async (c) => {
+      // End its sessions where the admin may (killAnySession); dropUser does not end them.
+      await c.db('admin').command(mongoCommands.killSessions(username, this.userDb)).catch(() => undefined);
+      try {
+        await c.db(this.userDb).command(mongoCommands.drop(username));
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11) throw err; // UserNotFound: already gone
+      }
+    });
+  }
+}
+
 /** Engines dial internal hosts only, unless CONNECTIONS_ALLOWED_HOSTS names the host or its network. */
 export const createDbAdmins =
   (allow: AllowList = parseAllowList('')): DbAdminFactory =>
   (t) =>
-    t.dialect === 'postgres' ? new PostgresAdmin(t, allow) : new MysqlAdmin(t, allow);
+    t.dialect === 'postgres' ? new PostgresAdmin(t, allow) : t.dialect === 'mongodb' ? new MongoAdmin(t, allow) : new MysqlAdmin(t, allow);

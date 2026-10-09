@@ -11,6 +11,13 @@ test.describe('Images', () => {
     await toast(page, 'image.generate job queued');
     await expect(page.locator('.images-card img').first()).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('#main')).toContainText('manifest signed by Exprsn-AI');
+    // 1.6.0 (B-7901): the content-credentials row and its details dialog (signed by the tenant CA when the tenant has
+    // an issuing CA; otherwise the reason).
+    await expect(page.locator('#main')).toContainText('Content credentials');
+    await page.locator('[data-cc]').first().click();
+    await expect(page.locator('#overlay .modal')).toContainText('Content credentials');
+    await expect(page.locator('#overlay .modal')).toContainText(/Verified|Manifest/);
+    await page.locator('#overlay .modal [data-close]').click();
     // The image itself loads (the img element has pixels, served by /api/images/:id/image).
     await expect.poll(() => page.locator('.images-card img').first().evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
   });

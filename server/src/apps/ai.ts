@@ -27,6 +27,8 @@ export interface GenerateInput {
   json?: boolean;
   signal?: AbortSignal;
   source: { kind: string; id: string };
+  /** Filled with the call's token counts and the model used (1.6.0, B-8402: fills add them up). */
+  usage?: { prompt: number; output: number; gpuMs: number; model: string | null };
 }
 
 export async function generate(s: Services, input: GenerateInput): Promise<string> {
@@ -71,6 +73,7 @@ export async function generate(s: Services, input: GenerateInput): Promise<strin
     output = Math.ceil(text.length / 4);
   }
   await s.quotas.record({ tenantId: input.tenantId, workspaceId: input.workspaceId, userId: input.userId, kind: 'workflow', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens: prompt, outputTokens: output, gpuMs });
+  if (input.usage) Object.assign(input.usage, { prompt: input.usage.prompt + prompt, output: input.usage.output + output, gpuMs: input.usage.gpuMs + gpuMs, model: r.model.name });
   const d = await s.guardrails.check({ tenantId: input.tenantId, workspaceId: input.workspaceId, checkpoint: 'model-output', text, label: input.label, ...(input.principal ? { principal: input.principal } : {}), source: input.source });
   if (d.action === 'block' || d.action === 'require-approval') throw new ModelUnavailable(`The answer was held by guardrails${d.reason ? `: ${d.reason}` : '.'}`);
   return d.action === 'redact' ? d.text : text;

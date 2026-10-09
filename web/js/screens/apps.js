@@ -137,7 +137,15 @@
       { title: 'Import with bad rows', tone: 'info', text: 'The import job writes the good rows and reports the bad ones (row, problem), up to 500.',
         apply(ctx) { const st = ctx.state; st.tab = 'records'; st.openImport = true; ctx.rerender(); } },
       { title: 'Bundle refused', tone: 'danger', text: 'A bundle changed after signing, signed elsewhere or naming another key is 422. Nothing is created and the refusal is audited.',
-        apply(ctx) { const st = ctx.state; st.bundleProblem = { title: 'Bundle refused', text: 'The signature does not cover what arrived: the bundle was changed after signing, signed by another instance or names another key. Nothing was created; audited as app.import.refused.', trace: false }; ctx.rerender(); } }
+        apply(ctx) { const st = ctx.state; st.bundleProblem = { title: 'Bundle refused', text: 'The signature does not cover what arrived: the bundle was changed after signing, signed by another instance or names another key. Nothing was created; audited as app.import.refused.', trace: false }; ctx.rerender(); } },
+      { title: 'Promotion waits for approval', tone: 'info', text: 'A promotion to production starts the pipeline\'s approval workflow with the deployment as its input and waits (awaiting-approval). The approver decides it on Workflows; a rejection ends the deployment and tells the requester.',
+        apply(ctx) { const st = ctx.state; st.tab = 'deployments'; st.depProblem = null; st.depNote = { kind: 'warn', text: 'Deployment to production is awaiting approval: the run of the approval workflow started with the deployment as its input. Nothing else moves until an approver decides it on Workflows.' }; ctx.rerender(); } },
+      { title: 'Stage cannot be skipped', tone: 'warn', text: 'Production takes the exact package the last successful promotion to test landed. Before anything passed test, a promotion to production is 409 "Nothing has passed test yet".',
+        apply(ctx) { const st = ctx.state; st.tab = 'deployments'; st.depProblem = { title: 'Nothing has passed test yet', text: 'Promote to test first: a stage cannot be skipped, and production only ever lands a package that passed test (409).' }; ctx.rerender(); } },
+      { title: 'Rollback restores the backup', tone: 'neutral', text: 'Every deployment backs the target up first. A rollback deploys that backup onto the same stage, as its own deployment with its own backup, and is audited app.package.rolled_back. An entity that still holds records is kept and reported.',
+        apply(ctx) { const st = ctx.state; st.tab = 'deployments'; st.depProblem = null; st.depNote = { kind: 'ok', text: 'Rolled back: the backup taken before the deployment was deployed onto the same stage. Entities that still hold records were kept and are listed in the report. Audit event app.package.rolled_back written.' }; ctx.rerender(); } },
+      { title: 'Package refused from git', tone: 'danger', text: 'A package read from a repository is verified like one pasted in: a file edited after the push no longer matches the signature in package.json, the import is 422 and audited app.import.refused.',
+        apply(ctx) { const st = ctx.state; st.tab = 'deployments'; st.depProblem = { title: 'Package refused', text: 'entities/vendor.json was changed after the package was signed: the signature in package.json does not verify. Nothing was created; audited as app.import.refused.' }; ctx.rerender(); } },
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -177,7 +185,7 @@
 
       if (ctx.params.app) { const p = st.apps.find((a) => a.id === ctx.params.app || a.name === ctx.params.app); if (p) st.app = p.id; delete ctx.params.app; }
       if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
-      if (!design && st.tab === 'triggers') st.tab = 'entities';
+      if (!design && (st.tab === 'triggers' || st.tab === 'api' || st.tab === 'embed')) st.tab = 'entities';
       if (!st.app || !st.apps.some((a) => a.id === st.app)) st.app = st.apps[0] ? st.apps[0].id : null;
       const appSummary = st.apps.find((a) => a.id === st.app) || null;
 
@@ -211,11 +219,15 @@
       } else {
         if (!st.entity || !app.entities.some((e) => e.id === st.entity)) st.entity = app.entities[0] ? app.entities[0].id : null;
         const ent = app.entities.find((e) => e.id === st.entity) || null;
-        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }] : []), st.tab);
+        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'policies', label: 'Policies', count: st.polKey === app.id && st.pol ? (st.pol.policies || []).length : null }, { id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }, { id: 'deployments', label: 'Deployments', count: st.depKey === app.id && st.dep ? st.dep.history.length : null }, { id: 'api', label: 'API', count: st.schemaKey === app.id && st.schema ? st.schema.version : null }, { id: 'embed', label: 'Embed', count: st.embedKey === app.id && st.embed ? (st.embed.keys.filter((k) => k.state === 'active').length + st.embed.pages.length) : null }] : []), st.tab);
         let body = '';
         if (st.tab === 'entities') body = renderEntities(ctx, app, ent, design);
         else if (st.tab === 'records') { const r = renderRecords(ctx, app, ent, design, canWrite); body = r.body; inspector = r.inspector; }
         else if (st.tab === 'forms') body = renderForms(ctx, app, design, canWrite);
+        else if (st.tab === 'policies' && design) body = renderPolicies(ctx, app);
+        else if (st.tab === 'deployments' && design) body = renderDeployments(ctx, app);
+        else if (st.tab === 'api' && design) body = renderApi(ctx, app);
+        else if (st.tab === 'embed' && design) body = renderEmbed(ctx, app);
         else body = renderTriggers(ctx, app);
         const scope = app.scope === 'tenant' ? 'Tenant-wide' : 'Workspace ' + wsName(app.workspaceId);
         page = UI.pagehead(app.title || app.name, (app.description ? esc(app.description) + ' ' : '') + '<span class="muted">' + esc(scope) + ', by ' + esc(who(app.createdBy)) + ', updated ' + esc(when(app.updatedAt)) + '</span>', UI.label(app.label) + (design ? UI.btn('Edit app', { size: 'sm', icon: 'edit', attrs: 'data-editapp' }) + UI.btn('Delete app', { size: 'sm', kind: 'ghost', attrs: 'data-delapp' }) : ''))
@@ -364,7 +376,7 @@
 
   function renderEntities(ctx, app, ent, design) {
     const st = ctx.state;
-    const list = '<div class="hstack wrap gap6">' + (app.entities.length ? UI.seg(app.entities.map((e) => ({ id: e.id, label: e.title || e.name })), ent ? ent.id : '', 'data-entityseg') : '') + (design ? UI.btn('New entity', { size: 'sm', icon: 'plus', attrs: 'data-newentity' }) + UI.btn('Draft with a model', { size: 'sm', icon: 'brain', attrs: 'data-draft' }) : '') + '</div>';
+    const list = '<div class="hstack wrap gap6">' + (app.entities.length ? UI.seg(app.entities.map((e) => ({ id: e.id, label: e.title || e.name })), ent ? ent.id : '', 'data-entityseg') : '') + (design ? UI.btn('New entity', { size: 'sm', icon: 'plus', attrs: 'data-newentity' }) + UI.btn('Draft the data model', { size: 'sm', icon: 'brain', attrs: 'data-draft' }) : '') + '</div>';
     ctx.on('click', '[data-entityseg] [data-seg]', (e, t) => { st.entity = t.dataset.seg; st.smProblem = null; st.record = null; st.filters = []; st.stateFilter = 'all'; resetPaging(st); st.selected = {}; ctx.rerender(); });
     ctx.on('click', '[data-newentity]', () => openEntityModal(ctx, app, null));
     ctx.on('click', '[data-draft]', () => openDraftModal(ctx, app));
@@ -435,7 +447,7 @@
       });
       ctx.on('click', '[data-deltrans]', (e, t) => { const def = clone(ent.definition); def.states.transitions.splice(+t.dataset.deltrans, 1); smSave(def, 'Transition removed.'); });
     }
-    return list + fieldsPanel + smPanel;
+    return list + fieldsPanel + smPanel + (design ? renderAiFills(ctx, app, ent) + renderSource(ctx, app, ent) : '');
   }
 
   function openEntityModal(ctx, app, ent) {
@@ -509,7 +521,7 @@
           const ex = tb.querySelector('[data-ff="expression"]');
           if (ex) { const out = tb.querySelector('[data-fcheck]'); const run = () => { const p = checkFormula(ex.value, fields); out.innerHTML = p ? '<span style="color:var(--danger-fg)">' + esc(p) + '</span>' : '<span style="color:var(--ok-fg)">Looks right; the server checks it on save.</span>'; }; ex.addEventListener('input', run); run(); }
           const pr = tb.querySelector('[data-ff="prompt"]');
-          if (pr) { const out = tb.querySelector('[data-pcheck]'); const run = () => { const ph = (pr.value.match(/\{\{\s*([a-z0-9_]+)\s*\}\}/g) || []).map((s) => s.replace(/[{}\s]/g, '')); const bad = ph.filter((n) => !fields.some((x) => x.name === n && !computed(x))); out.innerHTML = bad.length ? '<span style="color:var(--danger-fg)">Unknown placeholder ' + esc(bad.join(', ')) + '</span>' : ph.length ? '<span style="color:var(--ok-fg)">Reads ' + esc(ph.join(', ')) + '.</span>' : 'No placeholders yet.'; }; pr.addEventListener('input', run); run(); }
+          if (pr) { const out = tb.querySelector('[data-pcheck]'); const run = () => { const ph = (pr.value.match(/\{\{\s*([^}]+?)\s*\}\}/g) || []).map((s) => s.replace(/^\{\{\s*|\s*\}\}$/g, '')); const plain = fields.filter((x) => !computed(x)); const bad = ph.filter((n) => !(plain.some((x) => x.name === n) || !checkFormula(n, plain))); out.innerHTML = bad.length ? '<span style="color:var(--danger-fg)">Unknown placeholder ' + esc(bad.join(', ')) + '</span>' : ph.length ? '<span style="color:var(--ok-fg)">Reads ' + esc(ph.join(', ')) + '.</span>' : 'No placeholders yet.'; }; pr.addEventListener('input', run); run(); }
         };
         wire();
         m.querySelector('[data-ff="type"]').addEventListener('change', (e) => { tb.innerHTML = typeBody(e.target.value, {}); wire(); });
@@ -541,30 +553,135 @@
   }
 
   async function openDraftModal(ctx, app) {
+    // 1.6.0 (B-8301): a description becomes a draft of the app's whole data model, shown as a diff to accept or edit.
     const st = ctx.state;
     const profiles = await profilesList(ctx);
-    modal(ctx, { title: 'Draft an entity with a model', cls: 'wide', body: UI.notice('A local model, through the gateway and the named published profile, drafts a definition from your description. The draft is validated like a saved one and never saved on its own. Your description passes the user-input checkpoint first.', 'info')
-      + '<div class="formgrid">' + UI.field('Profile', profiles.length ? UI.select(profiles, profiles[0], 'data-dr-profile') : UI.input('', { attrs: 'data-dr-profile', placeholder: 'published profile name' })) + UI.field('Label', UI.select(LABELS.filter((l) => rank(l) <= rank(app.label) && rank(l) <= rank(clearance())), 'internal', 'data-dr-label')) + '</div>'
-      + UI.field('Describe it', UI.textarea('', { rows: 3, attrs: 'data-dr-prompt', placeholder: 'An insurance certificate per vendor: insurer, policy number (unique), cover amount in EUR, valid from and to.' })) + '<div data-dr-out aria-live="polite"></div>',
-    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-dr-go' }) + UI.btn('Save as entity', { attrs: 'data-dr-save', disabled: true }),
+    modal(ctx, { title: 'Draft the data model with a model', cls: 'wide', body: UI.notice('A local model, through the gateway and the named published profile, drafts entities, fields, relations, formulas, state machines and record triggers from your description. The draft is validated like a saved entity, compared with what the app already has, and never saved on its own: accept the diff, or edit the JSON first. Audited app.model.drafted.', 'info')
+      + '<div class="formgrid">' + UI.field('Profile', profiles.length ? UI.select(profiles, profiles[0], 'data-dr-profile') : UI.input('', { attrs: 'data-dr-profile', placeholder: 'published profile name' })) + UI.field('Label of the draft', UI.select(LABELS.filter((l) => rank(l) <= rank(clearance())), 'internal', 'data-dr-label')) + '</div>'
+      + UI.field('Describe the app', UI.textarea('', { rows: 3, attrs: 'data-dr-prompt', placeholder: 'A leave request app: employees submit requests for a date range with a reason; a manager approves or rejects them.' })) + '<div data-dr-out aria-live="polite"></div>',
+    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-dr-go' }) + UI.btn('Accept the diff', { attrs: 'data-dr-save', disabled: true }),
     onMount(m) {
       let draft = null;
       const out = m.querySelector('[data-dr-out]'); const save = m.querySelector('[data-dr-save]');
       m.querySelector('[data-dr-go]').addEventListener('click', async () => {
         const profile = m.querySelector('[data-dr-profile]').value.trim(); const prompt = m.querySelector('[data-dr-prompt]').value.trim();
-        if (!profile || prompt.length < 3) { out.innerHTML = UI.notice('Pick a profile and describe the entity.', 'warn'); return; }
+        if (!profile || prompt.length < 3) { out.innerHTML = UI.notice('Pick a profile and describe the app.', 'warn'); return; }
         out.innerHTML = '<div class="muted" style="font-size:12px">Asking ' + esc(profile) + '…</div>'; save.disabled = true;
         try {
-          const r = await App.post('/api/apps/drafts', { kind: 'entity', prompt, profile, label: m.querySelector('[data-dr-label]').value });
-          draft = r.valid ? r.draft : null;
-          out.innerHTML = UI.code(JSON.stringify(r.draft, null, 2), 'json') + (r.valid ? UI.notice('<b>Draft is valid.</b> Review it, then save it as an entity of ' + esc(app.title || app.name) + '.', 'ok') : UI.notice('<b>Draft is not valid.</b> ' + esc((r.problems || []).join('; ')), 'warn'));
-          save.disabled = !r.valid;
+          const r = await App.post(A(app.id) + '/model/draft', { prompt, profile, label: m.querySelector('[data-dr-label]').value });
+          draft = r.draft;
+          const rows = r.diff.map((d) => [ '<span class="mono">' + esc(d.entity) + '</span>', UI.pill(d.change, d.change === 'new' ? 'ok' : d.change === 'changed' ? 'accent' : 'outline'), d.addedFields.map((f) => UI.pill('+ ' + f, 'ok')).join(' ') || '<span class="muted">none</span>', d.changedFields.map((f) => UI.pill('~ ' + f, 'warn')).join(' ') || '<span class="muted">none</span>', d.removedFields.length ? d.removedFields.map((f) => UI.pill(f, 'outline')).join(' ') + ' <span class="muted">kept</span>' : '<span class="muted">none</span>', d.states ? UI.pill('state machine ' + d.states, 'accent') : '<span class="muted">none</span>', d.problems.length ? '<span style="color:var(--danger-fg)">' + esc(d.problems.join('; ')) + '</span>' : '' ]);
+          const trig = (r.triggers || []).map((t) => '<li><span class="mono">' + esc(t.entity) + '</span> on ' + esc(t.events.join(', ')) + ' → workflow <span class="mono">' + esc(t.workflow) + '</span> ' + (t.ok ? UI.pill('exists', 'ok') : UI.pill(t.problem || 'skipped', 'warn')) + '</li>').join('');
+          out.innerHTML = (rows.length ? UI.table(['Entity', 'Change', 'Fields added', 'Fields changed', 'Fields the draft omits', 'States', 'Problems'], rows, { clickable: false, minWidth: '0' }) : UI.notice('The model drafted no entity.', 'warn'))
+            + (trig ? '<p class="fg2" style="margin:8px 0 0">Triggers</p><ul class="fg2" style="margin:4px 0 0 18px">' + trig + '</ul>' : '')
+            + '<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Draft JSON (edit before accepting)</summary>' + UI.textarea(JSON.stringify(draft, null, 2), { rows: 10, attrs: 'data-dr-json spellcheck="false"' }) + '</details>'
+            + (r.valid ? UI.notice('<b>Draft is valid.</b> Accepting creates the new entities (after what they reference), adds the drafted fields and state machines to existing ones (nothing is removed) and creates the triggers whose workflow exists, in one request. Audited <span class="mono">app.model.applied</span>.', 'ok') : UI.notice('<b>Draft is not valid.</b> ' + esc(r.problems.join('; ')) + ' Edit the JSON and accept, or draft again.', 'warn'));
+          save.disabled = !draft || !draft.entities || !draft.entities.length;
+          App.a11yPass(out); // the diff table arrived after the dialog's own pass: a scrolling table needs its keyboard stop
         } catch (err) { draft = null; out.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); }
       });
       save.addEventListener('click', async () => {
         if (!draft) return;
-        try { const e = await App.post(A(app.id) + '/entities', Object.assign({ name: draft.name, definition: draft.definition }, draft.title ? { title: draft.title } : {})); st.entity = e.id; st.tab = 'entities'; afterChange(ctx, {}); ctx.toast('Entity ' + esc(draft.title || draft.name) + ' created from the draft. Audited app.draft.created and app.entity.created.', 'ok', 4500); }
-        catch (err) { out.insertAdjacentHTML('beforeend', UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger')); }
+        const raw = m.querySelector('[data-dr-json]');
+        if (raw) { try { draft = JSON.parse(raw.value); } catch (x) { out.insertAdjacentHTML('beforeend', UI.notice('The edited draft is not JSON.', 'danger')); return; } }
+        try {
+          const r = await App.post(A(app.id) + '/model/apply', { entities: draft.entities, triggers: draft.triggers || [] });
+          st.entity = null; st.tab = 'entities'; afterChange(ctx, {});
+          ctx.toast('Model applied: ' + r.created.length + ' created, ' + r.updated.length + ' updated' + (r.triggers.length ? ', ' + r.triggers.filter((t) => t.created).length + ' of ' + r.triggers.length + ' triggers' : '') + '. Audited app.model.applied.', 'ok', 5000);
+        } catch (err) { out.insertAdjacentHTML('beforeend', UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)) + (err.problem && err.problem.problems ? ' ' + esc(err.problem.problems.join('; ')) : ''), 'danger')); }
+      });
+    } });
+  }
+
+  // ---------- AI fills over every row (1.6.0, B-8402) ----------
+  function renderAiFills(ctx, app, ent) {
+    const st = ctx.state;
+    const aiFields = fieldsOf(ent).filter((f) => f.type === 'ai');
+    if (!aiFields.length) return '';
+    st.fills = st.fills || {}; st.fillEstimate = st.fillEstimate || {};
+    const key = app.id + '/' + ent.id;
+    const cur = st.fills[key];
+    if (!cur || cur.stale) {
+      if (!st.fillsBusy) { st.fillsBusy = true; App.get(E(app.id, ent.id) + '/ai/fills').then((d) => { st.fills[key] = { fills: d.fills, at: Date.now() }; }).catch(() => { st.fills[key] = { fills: [], at: Date.now() }; }).finally(() => { st.fillsBusy = false; if (App.state.route === 'apps') ctx.rerender(); }); }
+    }
+    const fills = cur ? cur.fills : [];
+    const live = fills.some((x) => x.state === 'running' || x.state === 'queued');
+    if (live && !st.fillTimer) st.fillTimer = setTimeout(() => { st.fillTimer = null; if (st.fills[key]) st.fills[key].stale = true; if (App.state.route === 'apps') ctx.rerender(); }, 1500);
+    const est = st.fillEstimate[key];
+    const rowsF = aiFields.map((f) => [ '<span class="mono">' + esc(f.name) + '</span>', esc(f.profile), '<span class="mono" style="font-size:12px">' + esc((f.prompt || '').slice(0, 80)) + ((f.prompt || '').length > 80 ? '…' : '') + '</span>', UI.btn('Estimate', { size: 'sm', attrs: 'data-fill-est="' + esc(f.name) + '"' }) + ' ' + UI.btn('Fill empty', { size: 'sm', kind: 'primary', attrs: 'data-fill-go="' + esc(f.name) + '" data-scope="empty"' }) + ' ' + UI.btn('Refresh all', { size: 'sm', attrs: 'data-fill-go="' + esc(f.name) + '" data-scope="all"' }) ]);
+    const estHtml = est ? (est.busy ? '<div class="muted" style="font-size:12px">Estimating…</div>' : est.error ? UI.notice(esc(est.error), 'danger') : UI.notice('<b>Estimate for ' + esc(est.field) + ' (' + esc(est.scope) + '):</b> ' + est.records + (est.capped ? '+' : '') + ' records, about ' + Number(est.promptTokens).toLocaleString() + ' prompt and ' + Number(est.outputTokens).toLocaleString() + ' output tokens' + (est.model ? ' on ' + esc(est.model) : '') + (est.cost != null ? ', about ' + Number(est.cost).toFixed(2) + ' ' + esc(est.currency) + ' at the tenant\'s price' : ', no price set for the model') + '. Each record passes the profile\'s guardrails and the tenant quota, and is metered.', 'info')) : '';
+    const when = (t) => (t ? new Date(t).toLocaleString() : '');
+    const fillRows = fills.map((x) => { const pct = x.total ? Math.round(((x.done + x.failed + x.skipped) * 100) / x.total) : 100; return { attrs: 'data-fill="' + esc(x.id) + '"', cells: [ '<span class="mono">' + esc(x.field) + '</span>', esc(x.scope), UI.pill(x.state, x.state === 'succeeded' ? 'ok' : x.state === 'running' || x.state === 'queued' ? 'accent' : x.state === 'cancelled' ? 'outline' : 'danger'), x.state === 'running' || x.state === 'queued' ? UI.meter('', (x.done + x.failed) + ' of ' + x.total, pct, 'accent') : (x.done + ' done, ' + x.failed + ' failed' + (x.skipped ? ', ' + x.skipped + ' skipped' : '')), Number(x.promptTokens).toLocaleString() + ' / ' + Number(x.outputTokens).toLocaleString(), esc(when(x.finishedAt || x.createdAt)), (x.state === 'running' || x.state === 'queued') ? UI.btn('Cancel', { size: 'sm', kind: 'danger', attrs: 'data-fill-cancel="' + esc(x.id) + '"' }) : (x.error ? '<span class="muted" style="font-size:12px">' + esc(x.error) + '</span>' : '') ] }; });
+    const html = UI.panel('AI fills over every row', UI.notice('A fill or refresh of an AI field over every record runs as one job (<span class="mono">apps.ai-fill-all</span>): an estimate first, progress as it runs, a cancel that stops it between records. Prompts may read fields and formulas, <span class="mono">{{upper(name)}}</span>; an edit regenerates only the fields that read what changed, once per quiet window.', 'info')
+      + UI.table(['AI field', 'Profile', 'Prompt', { label: '', right: true }], rowsF, { clickable: false, minWidth: '0' }) + estHtml
+      + UI.table(['Field', 'Scope', 'State', 'Progress', 'Tokens in / out', 'When', { label: '', right: true }], fillRows, { clickable: false, minWidth: '860px', emptyTitle: cur ? 'No fills yet' : 'Loading fills…', emptyText: cur ? 'Estimate, then fill the empty values or refresh them all.' : '' }));
+    const reload = () => { if (st.fills[key]) st.fills[key].stale = true; ctx.rerender(); };
+    ctx.on('click', '[data-fill-est]', async (e, t) => { const field = t.dataset.fillEst; st.fillEstimate[key] = { busy: true }; ctx.rerender(); try { const r = await App.post(E(app.id, ent.id) + '/ai/estimate', { field, scope: 'empty' }); st.fillEstimate[key] = Object.assign({ field, scope: 'empty' }, r); } catch (err) { st.fillEstimate[key] = { error: detailOf(err) }; } ctx.rerender(); });
+    ctx.on('click', '[data-fill-go]', async (e, t) => {
+      const field = t.dataset.fillGo; const scope = t.dataset.scope;
+      try {
+        const est = await App.post(E(app.id, ent.id) + '/ai/estimate', { field, scope });
+        const ok = await ctx.confirm({ title: (scope === 'all' ? 'Refresh ' : 'Fill ') + field + ' for every record', tag: 'model spend', body: '<p class="fg2" style="margin:0">' + est.records + (est.capped ? '+' : '') + ' records, about ' + Number(est.promptTokens).toLocaleString() + ' prompt and ' + Number(est.outputTokens).toLocaleString() + ' output tokens' + (est.cost != null ? ', about ' + Number(est.cost).toFixed(2) + ' ' + esc(est.currency) : '') + '. Runs as one job; cancel it from this panel.</p>' });
+        if (!ok) return;
+        const r = await App.post(E(app.id, ent.id) + '/ai/fills', { field, scope });
+        ctx.toast('Fill ' + esc(r.id.slice(-6)) + ' started over ' + r.total + ' records (job apps.ai-fill-all). Audited app.ai.fill.started.', 'ok', 4500);
+        reload();
+      } catch (err) { App.fail(err, 'Could not start the fill'); }
+    });
+    ctx.on('click', '[data-fill-cancel]', async (e, t) => { try { await App.post(E(app.id, ent.id) + '/ai/fills/' + enc(t.dataset.fillCancel) + '/cancel'); ctx.toast('Fill cancelled between records; filled values stay. Audited app.ai.fill.cancelled.', 'ok'); } catch (err) { App.fail(err, 'Could not cancel the fill'); } reload(); });
+    return html;
+  }
+
+  // ---------- outside tables (1.6.0, B-8501) ----------
+  function renderSource(ctx, app, ent) {
+    const st = ctx.state;
+    const src = (app.sources || []).find((x) => x.entity === ent.name) || null;
+    const canAttach = App.can('connections:manage');
+    if (!src) {
+      const html = UI.panel('Outside table', UI.empty('Not backed by an outside table', 'Attach a table of a PostgreSQL or MySQL data connection: a pull brings its rows in as records (keyed by the table\'s key column), and with writes on an app edit reaches the table at once.' + (canAttach ? '' : ' Attaching needs connections:manage as well as apps:design.'), canAttach ? UI.btn('Attach an outside table', { attrs: 'data-src-attach' }) : ''));
+      ctx.on('click', '[data-src-attach]', () => openSourceModal(ctx, app, ent, null));
+      return html;
+    }
+    const lp = src.lastPull;
+    const when = (t) => (t ? new Date(t).toLocaleString() : '');
+    const kv = UI.kv([
+      ['Connection', '<span class="mono">' + esc(src.connection || src.connectionId) + '</span> <span class="muted">' + esc(src.engine || '') + '</span>'], ['Table', '<span class="mono">' + esc(src.object) + '</span>'],
+      ['Key', '<span class="mono">' + esc(src.keyColumn) + '</span> → ' + (src.keyField ? 'field <span class="mono">' + esc(src.keyField) + '</span>' : 'the record id')], ['State column', src.stateColumn ? '<span class="mono">' + esc(src.stateColumn) + '</span>' : '<span class="muted">none</span>'],
+      ['Writes', src.writes ? UI.pill('through to the table at once', 'ok') : UI.pill('off: records are read-only here', 'outline')], ['Pull', src.pullMinutes ? 'every ' + src.pullMinutes + ' min' + (src.nextPullAt ? ', next ' + esc(when(src.nextPullAt)) : '') : 'on demand'],
+      ['Rows gone outside', src.deleteMissing ? 'remove their records' : 'keep their records'], ['Last pull', lp ? esc(when(src.lastPullAt)) + ': ' + lp.rows + ' rows, ' + lp.created + ' created, ' + lp.updated + ' updated, ' + lp.deleted + ' deleted, ' + lp.unchanged + ' unchanged' + (lp.failed ? ', <b>' + lp.failed + ' failed</b>' : '') + ' in ' + lp.ms + ' ms' + (lp.error ? ' <span style="color:var(--danger-fg)">' + esc(lp.error) + '</span>' : '') : '<span class="muted">never</span>']
+    ], 2);
+    const problems = lp && lp.problems && lp.problems.length ? UI.notice('<b>Rows the last pull could not write:</b><ul style="margin:4px 0 0 18px">' + lp.problems.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>', 'warn') : '';
+    const html = UI.panel('Outside table', UI.notice('Records of this entity are pulled from the table (unmasked, through the connection\'s allow-list) and sealed like any record; searches, policies and labels apply as usual. Audited app.entity.source.pulled per pull.', 'info') + kv + problems
+      + '<div class="hstack gap6 wrap">' + UI.btn('Pull now', { kind: 'primary', size: 'sm', attrs: 'data-src-pull' }) + (canAttach ? UI.btn('Edit', { size: 'sm', attrs: 'data-src-edit' }) + UI.btn('Detach', { size: 'sm', kind: 'ghost', attrs: 'data-src-detach' }) : '') + '</div>');
+    ctx.on('click', '[data-src-pull]', async () => { try { await App.post(E(app.id, ent.id) + '/source/pull'); ctx.toast('Pull queued as job apps.source-pull; the result shows here when it ends.', 'ok'); setTimeout(() => { st.detailKey = st.busyDetail = null; st.recsKey = st.busyRecs = null; if (App.state.route === 'apps') ctx.rerender(); }, 1500); } catch (err) { App.fail(err, 'Could not queue the pull'); } });
+    ctx.on('click', '[data-src-edit]', () => openSourceModal(ctx, app, ent, src));
+    ctx.on('click', '[data-src-detach]', async () => { const ok = await ctx.confirm({ title: 'Detach ' + (ent.title || ent.name) + ' from ' + src.object, tag: 'keeps records', body: '<p class="fg2" style="margin:0">The records stay as ordinary records; nothing is written to the table. Audited app.entity.source.removed.</p>' }); if (!ok) return; try { await App.del(E(app.id, ent.id) + '/source'); afterChange(ctx, {}); ctx.toast('Detached. Audited app.entity.source.removed.', 'ok'); } catch (err) { App.fail(err, 'Could not detach'); } });
+    return html;
+  }
+
+  async function openSourceModal(ctx, app, ent, cur) {
+    let conns = [];
+    try { const list = await App.get('/api/admin/connections'); conns = (Array.isArray(list) ? list : list.connections || []).filter((c) => c.engine === 'postgres' || c.engine === 'mysql'); } catch (err) { App.fail(err, 'Could not list the connections'); return; }
+    if (!conns.length) { ctx.toast('No PostgreSQL or MySQL connection is registered; add one on the Connections screen first.', 'warn'); return; }
+    const sel = cur ? conns.find((c) => c.id === cur.connectionId) || conns[0] : conns[0];
+    const objectsOf = (c) => (c.allowList || []);
+    const plain = fieldsOf(ent).filter((f) => !computed(f));
+    modal(ctx, { title: (cur ? 'Edit the outside table of ' : 'Attach an outside table to ') + esc(ent.title || ent.name), cls: 'wide', body: UI.notice('The table must be on the connection\'s schema allow-list, and the entity\'s label (' + esc(ent.label) + ') must cover the connection\'s. Fields map to the columns of the same name unless mapped below; the key column maps to a string or number field, or to the record id when no field is picked (then the column must take text).', 'info')
+      + '<div class="formgrid">' + UI.field('Connection', UI.select(conns.map((c) => ({ value: c.id, label: c.name + ' (' + c.engine + ', ' + c.label + ')' })), sel.id, 'data-sr-conn')) + UI.field('Table', objectsOf(sel).length ? UI.select(objectsOf(sel), cur ? cur.object : objectsOf(sel)[0], 'data-sr-object') : UI.input(cur ? cur.object : '', { attrs: 'data-sr-object', placeholder: 'schema.table on the allow-list' }))
+      + UI.field('Key column', UI.input(cur ? cur.keyColumn : 'id', { attrs: 'data-sr-key' })) + UI.field('Key field', UI.select([{ value: '', label: 'the record id' }].concat(plain.filter((f) => f.type === 'string' || f.type === 'number').map((f) => ({ value: f.name, label: f.name }))), cur && cur.keyField ? cur.keyField : '', 'data-sr-keyfield'))
+      + UI.field('State column', UI.input(cur && cur.stateColumn ? cur.stateColumn : '', { attrs: 'data-sr-state', placeholder: smOf(ent) ? 'column holding the state' : 'the entity has no state machine' })) + UI.field('Pull every (minutes)', UI.input(cur && cur.pullMinutes ? cur.pullMinutes : '', { type: 'number', attrs: 'data-sr-min', placeholder: 'empty: on demand only' }))
+      + '<div class="span2">' + UI.field('Column mapping (field=column, one per line)', UI.textarea(cur && cur.columns ? Object.keys(cur.columns).map((k) => k + '=' + cur.columns[k]).join('\n') : '', { rows: 2, attrs: 'data-sr-cols spellcheck="false"' })) + '</div>'
+      + '</div>' + UI.check('Writes through: a record created, changed, moved or deleted here reaches the table first', !!(cur && cur.writes), 'data-sr-writes') + UI.check('Rows gone from the table remove their records', cur ? cur.deleteMissing !== false : true, 'data-sr-delete') + '<div data-sr-err></div>',
+    actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(cur ? 'Save' : 'Attach', { kind: 'primary', attrs: 'data-sr-ok' }),
+    onMount(m) {
+      m.querySelector('[data-sr-conn]').addEventListener('change', (e) => { const c = conns.find((x) => x.id === e.target.value); const o = m.querySelector('[data-sr-object]'); if (o && o.tagName === 'SELECT') o.innerHTML = objectsOf(c).map((x) => '<option>' + esc(x) + '</option>').join(''); });
+      m.querySelector('[data-sr-ok]').addEventListener('click', async () => {
+        const errEl = m.querySelector('[data-sr-err]');
+        const columns = {}; (m.querySelector('[data-sr-cols]').value || '').split('\n').map((l) => l.trim()).filter(Boolean).forEach((l) => { const i = l.indexOf('='); if (i > 0) columns[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+        const min = parseInt(m.querySelector('[data-sr-min]').value, 10);
+        const body = { connectionId: m.querySelector('[data-sr-conn]').value, object: m.querySelector('[data-sr-object]').value.trim(), keyColumn: m.querySelector('[data-sr-key]').value.trim(), keyField: m.querySelector('[data-sr-keyfield]').value || null, columns, stateColumn: m.querySelector('[data-sr-state]').value.trim() || null, writes: m.querySelector('[data-sr-writes]').checked, deleteMissing: m.querySelector('[data-sr-delete]').checked, pullMinutes: Number.isFinite(min) && min > 0 ? min : null, enabled: true };
+        try { await App.put(E(app.id, ent.id) + '/source', body); afterChange(ctx, {}); ctx.toast(cur ? 'Source updated. Audited app.entity.source.updated.' : 'Table attached; pull it now to bring its rows in. Audited app.entity.source.set.', 'ok', 4500); }
+        catch (err) { errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); }
       });
     } });
   }
@@ -974,6 +1091,342 @@
   }
 
   // ---------- triggers ----------
+  // ---------- Policies tab (1.6.0, B-8101 to B-8103) ----------
+  const MASKS = ['last4', 'hash', 'hidden'];
+  const SUBJECT_KINDS = ['everyone', 'role', 'group', 'workspace', 'user'];
+  const PLACEHOLDER_RE = /^\$user\.(id|username|clearance|roles|groups|workspaces|attributes\.[a-z][a-z0-9_]{0,62})$/;
+  const LIST_PLACEHOLDERS = ['$user.roles', '$user.groups', '$user.workspaces'];
+  const subjectText = (s) => (s.kind === 'everyone' ? 'everyone' : s.kind + ' ' + s.value);
+  const rowsText = (p) => (p.rows ? ('field' in p.rows ? p.rows.field + ' ' + p.rows.op + ' ' + (Array.isArray(p.rows.value) ? p.rows.value.join(', ') : p.rows.value) : JSON.stringify(p.rows)) : 'every row');
+  const fieldsText = (p) => { const named = Object.keys(p.fields || {}); return named.length ? named.map((f) => { const g = p.fields[f]; return f + ': ' + (!g.read ? 'hidden' : !g.unmasked ? 'masked ' + g.mask : 'read') + (g.update === false ? ', no update' : '') + (g.create === false ? ', no create' : ''); }).join('; ') : 'every field in full'; };
+
+  function renderPolicies(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.polKey !== key && st.polBusy !== key) {
+      st.polBusy = key;
+      App.get(A(app.id) + '/policies')
+        .then((d) => { st.pol = d; st.polKey = key; st.polError = null; })
+        .catch((err) => { st.polError = err; st.polKey = key; })
+        .finally(() => { st.polBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.polKey !== key) return UI.notice('Loading policies…', 'info');
+    if (st.polError) return UI.problem('Policies could not be loaded', detailOf(st.polError), traceOf(st.polError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-polreload' }) + '</div>';
+    const policies = st.pol.policies || [];
+    const rows = policies.map((p) => ({ cells: ['<b>' + esc(p.name) + '</b>' + (p.description ? '<div class="muted" style="font-size:12px">' + esc(p.description) + '</div>' : ''), p.entity ? esc(p.entity) : '<span class="muted">every entity</span>', esc(p.subjects.map(subjectText).join(', ')), '<span class="mono" style="font-size:12px">' + esc(rowsText(p)) + '</span>', esc(fieldsText(p)), UI.pill(p.enabled ? 'enabled' : 'off', p.enabled ? 'ok' : ''), UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-editpolicy="' + esc(p.id) + '"' }) + ' ' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-delpolicy="' + esc(p.id) + '"' })], attrs: 'data-policy="' + esc(p.id) + '"' }));
+    const table = UI.panel('Row and field policies', UI.notice('A policy names who it applies to, the rows they reach (a condition on an indexed field compared with the reader: <span class="mono">$user.attributes.region</span>, <span class="mono">$user.id</span>, <span class="mono">$user.groups</span>…) and what each field shows: read, read unmasked, create, update, with a mask (<span class="mono">last4</span>, <span class="mono">hash</span>, <span class="mono">hidden</span>) for readers without unmasked. Once an entity has a policy, a reader no policy names reaches nothing. Designers are not subject to policies. Labels still apply first.', 'info')
+      + (st.polProblem ? UI.problem(st.polProblem.title, st.polProblem.text, st.polProblem.trace) : '')
+      + UI.table(['Policy', 'Entity', 'Subjects', 'Rows', 'Fields', 'State', { label: '', right: true }], rows, { clickable: false, minWidth: '960px', emptyTitle: 'No policies', emptyText: 'Every member of the workspace reads every record within their clearance. Add a policy to narrow rows and fields per role, group, workspace or user.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('New policy', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newpolicy' }) + '</div>');
+
+    // ----- explain (B-8103) -----
+    const ex = st.explain || (st.explain = { username: '', entity: app.entities[0] ? app.entities[0].name : '', recordId: '', field: '' });
+    if (!app.entities.some((e) => e.name === ex.entity)) ex.entity = app.entities[0] ? app.entities[0].name : '';
+    const exEnt = app.entities.find((e) => e.name === ex.entity) || null;
+    const r = st.explainResult && st.explainResult.key === key ? st.explainResult : null;
+    const pillFor = (t) => UI.pill(t, /^no /.test(t) ? 'warn' : /masked/.test(t) ? 'info' : 'ok');
+    const result = !r ? '' : r.error ? UI.problem('Explain failed', detailOf(r.error), traceOf(r.error)) : (() => {
+      const u = r.data.user;
+      const rec = r.data.record;
+      const f = r.data.field;
+      return UI.kv([
+        ['Reader', esc(u.username) + (u.designer ? ' ' + UI.pill('designer', 'accent') : '') + ', clearance ' + UI.label(u.clearance, { sm: true })],
+        ['Compared by', 'roles ' + esc(u.roles.join(', ') || 'none') + '; groups ' + esc(u.groups.join(', ') || 'none') + '; workspaces ' + esc(String(u.workspaces.length)) + '; attributes ' + esc(Object.keys(u.attributes).length ? JSON.stringify(u.attributes) : 'none')],
+        ['Policies on ' + esc(ex.entity), r.data.policed ? (r.data.none ? UI.pill('none name this reader', 'danger') + ' they reach no record' : r.data.policies.filter((p) => p.matches).length + ' of ' + r.data.policies.length + ' name this reader') : u.designer ? 'a designer is not subject to policies' : 'none: every record within their clearance'],
+        ['Record', rec ? (rec.reachable ? UI.pill('reachable', 'ok') + (rec.by ? ' by ' + esc(rec.by) : '') : UI.pill('not reachable', 'danger') + (rec.by ? ' ' + esc(rec.by) : '')) : '<span class="muted">none asked</span>'],
+        ['Field', f ? [f.read ? 'read' : 'no read', f.unmasked ? 'unmasked' : 'masked ' + f.mask, f.create ? 'create' : 'no create', f.update ? 'update' : 'no update'].map(pillFor).join(' ') + (f.by ? ' by ' + esc(f.by) : '') : '<span class="muted">none asked</span>']
+      ], 1) + (r.data.policies.length ? UI.table(['Policy', 'Names the reader', 'Why', 'Rows'], r.data.policies.map((p) => [esc(p.name), p.matches ? UI.pill('yes', 'ok') : UI.pill('no', ''), esc(p.reason), p.rows ? '<span class="mono" style="font-size:12px">' + esc(rowsText({ rows: p.rows })) + '</span>' : '<span class="muted">every row</span>']), { clickable: false, cls: 'bare', minWidth: '0' }) : '');
+    })();
+    const explain = UI.panel('Explain: what a reader gets', '<div class="formgrid">'
+      + UI.field('Reader (username)', UI.input(ex.username, { placeholder: 'ana', attrs: 'data-exuser aria-label="Reader username"' }))
+      + UI.field('Entity', UI.select(app.entities.map((e) => ({ value: e.name, label: e.title || e.name })), ex.entity, 'data-exentity aria-label="Entity"'))
+      + UI.field('Record id (optional)', UI.input(ex.recordId, { placeholder: '26 characters', attrs: 'data-exrecord aria-label="Record id"' }))
+      + UI.field('Field (optional)', UI.select([{ value: '', label: 'none' }].concat(exEnt ? fieldsOf(exEnt).map((f) => ({ value: f.name, label: f.name })) : []), ex.field, 'data-exfield aria-label="Field"'))
+      + '</div><div class="hstack gap6">' + UI.btn('Explain', { size: 'sm', attrs: 'data-explain' }) + '<span class="muted" style="font-size:12px">Which policy names the reader, whether the record is in their reach and what the field shows.</span></div>'
+      + result);
+
+    ctx.on('click', '[data-polreload]', () => { st.polKey = st.polBusy = null; st.polError = null; ctx.rerender(); });
+    ctx.on('input', '[data-exuser]', (e, t) => { ex.username = t.value; });
+    ctx.on('input', '[data-exrecord]', (e, t) => { ex.recordId = t.value.trim(); });
+    ctx.on('change', '[data-exentity]', (e, t) => { ex.entity = t.value; ex.field = ''; ctx.rerender(); });
+    ctx.on('change', '[data-exfield]', (e, t) => { ex.field = t.value; });
+    ctx.on('click', '[data-explain]', async () => {
+      if (!ex.username.trim()) { ctx.toast('Name the reader.', 'warn'); return; }
+      const body = { username: ex.username.trim() }; if (ex.recordId) body.recordId = ex.recordId; if (ex.field) body.field = ex.field;
+      try { const data = await App.post(E(app.id, ex.entity) + '/policies/explain', body); st.explainResult = { key, data }; } catch (err) { st.explainResult = { key, error: err }; }
+      ctx.rerender();
+    });
+    ctx.on('click', '[data-newpolicy]', () => openPolicyModal(ctx, app, null));
+    ctx.on('click', '[data-editpolicy]', (e, t) => openPolicyModal(ctx, app, policies.find((p) => p.id === t.dataset.editpolicy)));
+    ctx.on('click', '[data-delpolicy]', async (e, t) => {
+      const p = policies.find((x) => x.id === t.dataset.delpolicy); if (!p) return;
+      const ok = await ctx.confirm({ title: 'Remove ' + p.name, tone: 'danger', body: '<p class="fg2" style="margin:0">Readers it named lose what it granted at once. Audited app.policy.deleted.</p>', ok: 'Remove' });
+      if (!ok) return;
+      try { await App.del(A(app.id) + '/policies/' + enc(p.id)); st.polKey = null; st.polProblem = null; ctx.rerender(); ctx.toast('Policy ' + esc(p.name) + ' removed. Audited app.policy.deleted.', 'ok'); } catch (err) { App.fail(err, 'Could not remove the policy'); }
+    });
+    return table + explain;
+  }
+
+  function openPolicyModal(ctx, app, existing) {
+    const st = ctx.state;
+    const p = existing ? clone(existing) : { name: '', description: '', enabled: true, entity: app.entities[0] ? app.entities[0].name : null, subjects: [{ kind: 'role', value: 'member' }], rows: null, fields: {}, otherFields: { read: true, unmasked: true, create: true, update: true } };
+    const entOf = (name) => app.entities.find((e) => e.name === name) || null;
+    const leaf = p.rows && 'field' in p.rows ? p.rows : null;
+    const draft = { entity: p.entity || '', subjects: p.subjects.slice(), rowField: leaf ? leaf.field : '', rowOp: leaf ? leaf.op : 'eq', rowValue: leaf ? (Array.isArray(leaf.value) ? leaf.value.join(', ') : String(leaf.value)) : '$user.attributes.region', fields: clone(p.fields || {}), enabled: p.enabled !== false, name: p.name, description: p.description || '' };
+    const body = () => {
+      const ent = entOf(draft.entity);
+      const covered = ent ? [ent] : app.entities;
+      const indexed = covered.length ? covered[0] : null;
+      const fieldNames = ent ? fieldsOf(ent).map((f) => f.name) : app.entities.length ? fieldsOf(app.entities[0]).map((f) => f.name).filter((n) => app.entities.every((e) => fieldsOf(e).some((f) => f.name === n))) : [];
+      const grantRow = (name) => { const g = draft.fields[name] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; const f = ent ? fieldByName(ent, name) : null; return '<tr><td class="mono">' + esc(name) + (f && !(f.indexed || f.unique) ? ' <span class="muted">(not indexed)</span>' : '') + '</td>' + ['read', 'unmasked', 'create', 'update'].map((k) => '<td style="text-align:center"><input type="checkbox" data-grant="' + esc(name) + ':' + k + '"' + (g[k] !== false ? ' checked' : '') + ' aria-label="' + esc(name + ' ' + k) + '"></td>').join('') + '<td>' + UI.select(MASKS, g.mask || 'hidden', 'data-grant="' + esc(name) + ':mask" aria-label="' + esc(name) + ' mask"') + '</td></tr>'; };
+      const subjRows = draft.subjects.map((s, i) => '<div class="hstack gap6" style="margin-bottom:6px">' + UI.select(SUBJECT_KINDS, s.kind, 'data-skind="' + i + '" aria-label="Subject kind"') + UI.input(s.value || '', { placeholder: 'member, finance-ops, a workspace id, a username', attrs: 'data-svalue="' + i + '" aria-label="Subject value"' }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-sdel="' + i + '" aria-label="Remove subject"' }) + '</div>').join('');
+      return '<div class="formgrid">' + UI.field('Name', UI.input(draft.name, { attrs: 'data-pname aria-label="Policy name"' })) + UI.field('Description', UI.input(draft.description, { attrs: 'data-pdesc aria-label="Description"' }))
+        + UI.field('Entity', UI.select([{ value: '', label: 'Every entity of the app' }].concat(app.entities.map((e) => ({ value: e.name, label: e.title || e.name }))), draft.entity, 'data-pentity aria-label="Entity"'), 'An app-wide policy may only use fields every entity has.')
+        + UI.field('Enabled', UI.toggle('In force', draft.enabled, 'data-penabled')) + '</div>'
+        + '<div class="eyebrow" style="margin-top:10px">Applies to</div>' + subjRows + UI.btn('Add subject', { size: 'xs', kind: 'ghost', attrs: 'data-sadd' })
+        + '<div class="eyebrow" style="margin-top:10px">Rows</div><div class="hstack gap6 wrap">' + UI.select([{ value: '', label: 'Every row' }].concat((indexed ? fieldNames.filter((n) => covered.every((e) => { const f = fieldByName(e, n); return f && (f.indexed || f.unique); })) : []).concat(SYSTEM_FIELDS).map((n) => ({ value: n, label: n }))), draft.rowField, 'data-prfield aria-label="Row field"') + UI.select(OPS.filter((o) => o !== 'exists'), draft.rowOp, 'data-prop aria-label="Operator"') + UI.input(draft.rowValue, { attrs: 'data-prvalue aria-label="Value"' }) + '</div><div class="muted" style="font-size:12px">Only indexed or unique fields, or id, state, createdAt, updatedAt, createdBy. A value starting with $user. is the reader\'s fact ($user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces, $user.attributes.&lt;name&gt;); the list placeholders go with in. Several values for in: comma-separated.</div>'
+        + '<div class="eyebrow" style="margin-top:10px">Fields' + (ent ? ' of ' + esc(ent.title || ent.name) : ' every entity has') + '</div><div class="tablewrap"><table class="table bare" style="min-width:0"><thead><tr><th>Field</th><th>Read</th><th>Unmasked</th><th>Create</th><th>Update</th><th>Mask</th></tr></thead><tbody>' + fieldNames.map(grantRow).join('') + '</tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">A field left in full stays in full. Masks apply to readers with read but not unmasked: last4 keeps the last four letters or digits (***-**-1234), hash shows a short SHA-256, hidden shows nothing.</div>';
+    };
+    const capture = (m) => {
+      draft.name = m.querySelector('[data-pname]').value; draft.description = m.querySelector('[data-pdesc]').value; draft.entity = m.querySelector('[data-pentity]').value; draft.enabled = m.querySelector('[data-penabled]').classList.contains('on');
+      draft.subjects = [...m.querySelectorAll('[data-skind]')].map((el) => ({ kind: el.value, value: m.querySelector('[data-svalue="' + el.dataset.skind + '"]').value.trim() }));
+      draft.rowField = m.querySelector('[data-prfield]').value; draft.rowOp = m.querySelector('[data-prop]').value; draft.rowValue = m.querySelector('[data-prvalue]').value.trim();
+      const fields = {}; m.querySelectorAll('[data-grant]').forEach((el) => { const i = el.dataset.grant.lastIndexOf(':'); const f = el.dataset.grant.slice(0, i), k = el.dataset.grant.slice(i + 1); fields[f] = fields[f] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; fields[f][k] = k === 'mask' ? el.value : el.checked; });
+      draft.fields = fields;
+    };
+    const repaint = (m) => { capture(m); m.querySelector('[data-pbody]').innerHTML = body(); };
+    modal(ctx, {
+      title: existing ? 'Edit ' + existing.name : 'New policy', cls: 'wide',
+      body: '<div data-pbody>' + body() + '</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(existing ? 'Save' : 'Create policy', { kind: 'primary', attrs: 'data-psave' }),
+      onMount(m) {
+        m.addEventListener('change', (e) => { if (e.target.matches('[data-pentity]')) repaint(m); });
+        m.addEventListener('click', (e) => {
+          const t = e.target.closest('[data-penabled],[data-sadd],[data-sdel]'); if (!t) return;
+          if (t.matches('[data-penabled]')) { t.classList.toggle('on'); t.setAttribute('aria-checked', t.classList.contains('on')); return; }
+          capture(m);
+          if (t.matches('[data-sadd]')) draft.subjects.push({ kind: 'role', value: '' }); else draft.subjects.splice(+t.dataset.sdel, 1);
+          m.querySelector('[data-pbody]').innerHTML = body();
+        });
+        m.querySelector('[data-psave]').addEventListener('click', async () => {
+          capture(m);
+          const name = draft.name.trim(); if (!name) { ctx.toast('A policy needs a name.', 'warn'); return; }
+          const subjects = draft.subjects.map((s) => (s.kind === 'everyone' ? { kind: 'everyone' } : { kind: s.kind, value: s.value })); if (!subjects.length || subjects.some((s) => s.kind !== 'everyone' && !s.value)) { ctx.toast('Every subject other than everyone needs a value.', 'warn'); return; }
+          const v = draft.rowValue;
+          if (v.startsWith('$user.') && !PLACEHOLDER_RE.test(v)) { ctx.toast('Unknown placeholder ' + esc(v) + '. Use $user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces or $user.attributes.<name>.', 'danger', 6000); return; }
+          if (LIST_PLACEHOLDERS.includes(v) && draft.rowOp !== 'in') { ctx.toast(esc(v) + ' is a list: compare it with in.', 'danger'); return; }
+          const ent = entOf(draft.entity); const f = ent && draft.rowField ? fieldByName(ent, draft.rowField) : null;
+          const typed = (x) => (f && f.type === 'number' && x !== '' && !isNaN(Number(x)) ? Number(x) : f && f.type === 'boolean' ? x === 'true' : x);
+          const rows = draft.rowField ? { field: draft.rowField, op: draft.rowOp, value: draft.rowOp === 'in' ? (v.startsWith('$user.') ? [v] : v.split(',').map((x) => typed(x.trim())).filter((x) => x !== '')) : typed(v) } : null;
+          const fields = {}; Object.keys(draft.fields).forEach((k) => { const g = draft.fields[k]; if (!(g.read && g.unmasked && g.create && g.update)) fields[k] = { read: !!g.read, unmasked: !!g.unmasked, create: !!g.create, update: !!g.update, mask: g.mask || 'hidden' }; });
+          const payload = { name, description: draft.description.trim() || null, enabled: draft.enabled, entity: draft.entity || null, subjects, rows, fields, otherFields: p.otherFields || { read: true, unmasked: true, create: true, update: true } };
+          try {
+            if (existing) await App.put(A(app.id) + '/policies/' + enc(existing.id), payload); else await App.post(A(app.id) + '/policies', payload);
+            st.polKey = null; st.polProblem = null; App.closeOverlay(); ctx.rerender(); ctx.toast('Policy ' + esc(name) + (existing ? ' saved' : ' created') + '. Audited app.policy.' + (existing ? 'updated' : 'created') + '.', 'ok');
+          } catch (err) { st.polProblem = { title: existing ? 'Policy not saved' : 'Policy not created', text: detailOf(err), trace: traceOf(err) }; App.closeOverlay(); ctx.rerender(); }
+        });
+      }
+    });
+  }
+
+  // ---------- deployments: packages, environments, promotion, history (1.6.0, B-8201 to B-8204) ----------
+
+  const STAGES = ['development', 'test', 'production'];
+  const DEPLOY_STATES = { 'awaiting-approval': 'warn', queued: '', running: 'info', succeeded: 'ok', failed: 'danger', rejected: 'danger' };
+  const stageLabel = (x) => x === 'development' ? 'Development' : x === 'test' ? 'Test' : x === 'production' ? 'Production' : String(x || '');
+  const whenAt = (t) => t ? new Date(t).toLocaleString() : '';
+  const reportLine = (r) => !r ? '' : ['entities ' + (r.entities.created.length + r.entities.updated.length + r.entities.removed.length) + ' changed' + (r.entities.kept.length ? ', ' + r.entities.kept.length + ' kept (records)' : ''), 'forms ' + (r.forms.created.length + r.forms.updated.length + r.forms.removed.length) + ' changed', r.triggers ? 'triggers ' + r.triggers.created + (r.triggers.skipped.length ? ' (' + r.triggers.skipped.length + ' skipped)' : '') : null, r.policies ? 'policies ' + r.policies.created : null, r.records && r.records.created ? 'records ' + r.records.created : null].filter(Boolean).join(' · ');
+  const bytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+  const shortHash = (h) => h ? h.slice(0, 4) + '…' + h.slice(-4) : '';
+
+  function loadDeployments(ctx, app) {
+    const st = ctx.state; const key = app.id;
+    st.depBusy = key;
+    Promise.all([App.get(A(app.id) + '/packages'), App.get('/api/apps/pipelines')])
+      .then(async ([pk, pl]) => {
+        const pipeline = (pl.pipelines || []).find((x) => STAGES.some((sg) => x.stages[sg] && x.stages[sg].id === app.id)) || null;
+        const history = pipeline ? (await App.get('/api/apps/pipelines/' + enc(pipeline.id) + '/deployments')).deployments : [];
+        st.dep = { packages: pk.packages || [], stage: pk.stage, pipeline, history, pipelines: pl.pipelines || [] }; st.depKey = key; st.depError = null;
+      })
+      .catch((err) => { st.depError = err; st.depKey = key; })
+      .finally(() => { st.depBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+  }
+
+  function renderDeployments(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.depKey !== key && st.depBusy !== key) loadDeployments(ctx, app);
+    if (st.depKey !== key) return UI.notice('Loading packages and deployments…', 'info');
+    if (st.depError) return UI.problem('Deployments could not be loaded', detailOf(st.depError), traceOf(st.depError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-depreload' }) + '</div>';
+    const d = st.dep;
+    const pipeline = d.pipeline;
+    const reload = () => { st.depKey = null; ctx.rerender(); };
+    const fail = (err, title) => { st.depProblem = { title: (err.problem && err.problem.title) || title, text: detailOf(err), trace: traceOf(err) }; ctx.rerender(); };
+    const active = pipeline && pipeline.activeDeployment ? d.history.find((h) => h.id === pipeline.activeDeployment) : null;
+    if (active && !st.depPoll) { st.depPoll = setTimeout(() => { st.depPoll = null; if (App.state.route === 'apps' && st.tab === 'deployments' && !overlayOpen()) reload(); }, 3000); }
+
+    const problem = (st.depProblem ? UI.problem(st.depProblem.title, st.depProblem.text, st.depProblem.trace) : '') + (st.depNote ? UI.notice(esc(st.depNote.text), st.depNote.kind === 'ok' ? 'ok' : 'warn') : '');
+
+    // ----- environments -----
+    const stageCard = (name) => { const sg = pipeline.stages[name]; const last = name === 'test' ? pipeline.last.test : name === 'production' ? pipeline.last.production : null; return '<div class="panel apps-stage" data-stage="' + name + '"><div class="eyebrow">' + stageLabel(name) + '</div><div><b>' + esc(sg.title || sg.name) + '</b>' + (sg.id === app.id ? ' ' + UI.pill('this app', 'accent') : '') + '</div><div class="muted" style="font-size:12px">' + esc(sg.scope === 'tenant' ? 'Tenant-wide' : wsName(sg.workspaceId)) + '</div><div style="margin-top:6px">' + (name === 'development' ? UI.pill((d.stage && d.stage.stage === 'development' ? d.packages.length : 0) + ' packages', '') : last ? UI.pill('v' + last.version, name === 'production' ? 'ok' : 'accent') + ' <span class="muted" style="font-size:12px">' + esc(whenAt(last.finishedAt)) + '</span>' : UI.pill('nothing deployed', '')) + '</div></div>'; };
+    const env = !pipeline
+      ? UI.panel('Environments', UI.empty('No pipeline', 'A pipeline gives this app three stages, each an app of its own (usually in three workspaces): development, test and production. A package moves stage to stage, never skipping one, and production waits for the Workflows approval step.') + '<div class="hstack gap6 wrap">' + UI.btn('Create a pipeline', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-pl-new' }) + '</div>')
+      : UI.panel('Environments: ' + esc(pipeline.name), '<div class="apps-stages">' + stageCard('development') + '<div class="apps-arrow" aria-hidden="true">→</div>' + stageCard('test') + '<div class="apps-arrow" aria-hidden="true">→</div>' + stageCard('production') + '</div>'
+        + UI.kv([['Approval before production', pipeline.approvalWorkflow ? esc(pipeline.approvalWorkflow.name) + ' <span class="muted">(its run starts with the deployment as input; the approver decides it on Workflows)</span>' : '<span class="muted">none: a promotion to production is refused until a workflow with an approval step is named</span>'], ['Backups', 'before every deployment, kept as packages of the target']])
+        + (active ? UI.notice('Deployment ' + esc(active.id.slice(-6)) + ' to ' + esc(active.to) + ' is ' + esc(active.state) + (active.state === 'awaiting-approval' ? ': waiting for an approver on Workflows. Nothing else moves until it is decided.' : '. This page refreshes until it ends.'), 'warn') : '')
+        + '<div class="hstack gap6 wrap">' + UI.btn('Promote development → test', { kind: 'primary', size: 'sm', icon: 'play', attrs: 'data-promote="test"' + (active ? ' disabled' : '') }) + UI.btn('Promote test → production', { size: 'sm', icon: 'play', attrs: 'data-promote="production"' + (active ? ' disabled' : '') }) + UI.btn('Edit pipeline', { size: 'sm', attrs: 'data-pl-edit' }) + UI.btn('Delete pipeline', { size: 'sm', kind: 'danger', attrs: 'data-pl-del' }) + '</div>');
+
+    // ----- packages -----
+    const pkgRows = d.packages.map((p) => ({ cells: ['<b>v' + p.version + '</b>', UI.pill(p.source, p.source === 'backup' ? '' : p.source === 'promotion' ? 'accent' : p.source === 'git' ? 'info' : 'outline'), '<span class="mono" title="' + esc(p.hash) + '">' + esc(shortHash(p.hash)) + '</span>', p.withData ? 'design and records' : 'design only', esc(bytes(p.size)), p.note ? esc(p.note) : '<span class="muted">none</span>', esc(whenAt(p.createdAt)), '<div class="hstack gap6 right">' + UI.btn('Download', { size: 'sm', attrs: 'data-pkg-dl="' + esc(p.id) + '"' }) + UI.btn('Push to git', { size: 'sm', icon: 'upload', attrs: 'data-pkg-git="' + esc(p.id) + '"' }) + '</div>'], attrs: 'data-pkg="' + esc(p.id) + '"' }));
+    const packages = UI.panel('Packages', UI.notice('A package is the whole design (entities, fields, formulas, forms, state machines, triggers, the workflows they name, policies), versioned per app and signed with the KMS key; records only when asked. Every promotion, every backup taken before a deployment and every import from git is a package here. Import verifies the signature over exactly what arrived, before anything is read.', 'info')
+      + UI.table(['Version', 'Source', 'Hash', 'Contents', 'Size', 'Note', 'Made', { label: '', right: true }], pkgRows, { clickable: false, minWidth: '1040px', emptyTitle: 'No packages yet', emptyText: 'Make a package to version this design, or promote it through a pipeline.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('Make a package', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-pkg-new' }) + UI.btn('Import a package', { size: 'sm', icon: 'upload', attrs: 'data-pkg-import' }) + UI.btn('Import from git', { size: 'sm', icon: 'download', attrs: 'data-pkg-gitimport' }) + '</div>');
+
+    // ----- history -----
+    const histRows = d.history.map((h) => ({ cells: ['<span class="mono">' + esc(h.id.slice(-6)) + '</span>', h.kind === 'rollback' ? UI.pill('rollback', 'warn') + (h.rollbackOf ? ' of ' + esc(h.rollbackOf.slice(-6)) : '') : esc(stageLabel(h.from)) + ' → ' + esc(stageLabel(h.to)), 'v' + h.version, UI.pill(h.state, DEPLOY_STATES[h.state] || '') + (h.error ? '<div class="muted" style="font-size:12px;max-width:360px">' + esc(h.error) + '</div>' : ''), esc(h.createdByName || h.createdBy || ''), esc(whenAt(h.finishedAt || h.createdAt)), h.report ? '<span style="font-size:12px">' + esc(reportLine(h.report)) + '</span>' : '<span class="muted">—</span>', '<div class="hstack gap6 right">' + (h.state === 'succeeded' && h.backupPackageId && !active ? UI.btn('Roll back', { size: 'sm', attrs: 'data-rollback="' + esc(h.id) + '"' }) : '') + '</div>'], attrs: 'data-dep="' + esc(h.id) + '"' }));
+    const history = UI.panel('Deployment history', UI.table(['Deployment', 'Stages', 'Version', 'State', 'Who', 'When', 'Report', { label: '', right: true }], histRows, { clickable: false, minWidth: '1100px', emptyTitle: 'No deployments', emptyText: 'Promotions and rollbacks appear here with their package, their backup and what they changed. Audited app.package.promoted, app.package.rolled_back and app.package.deployment.failed.' }));
+
+    ctx.on('click', '[data-depreload]', reload);
+    ctx.on('click', '[data-pkg-new]', () => modal(ctx, { title: 'Make a package of ' + esc(app.title || app.name), body: UI.notice('The design is read now and signed with the KMS key; the package is kept sealed with the tenant key and numbered v' + (d.packages.length ? d.packages[0].version + 1 : 1) + '.', 'info') + '<div class="formgrid">' + UI.field('Contents', UI.select([{ value: 'design', label: 'Design only' }, { value: 'data', label: 'Design and records' }], 'design', 'data-pk-data')) + UI.field('Note', UI.input('', { placeholder: 'what changed', attrs: 'data-pk-note' })) + '</div><div data-pk-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Make the package', { kind: 'primary', attrs: 'data-pk-ok' }), onMount(m) { m.querySelector('[data-pk-ok]').addEventListener('click', async () => { const errEl = m.querySelector('[data-pk-err]'); errEl.innerHTML = ''; try { const out = await App.post(A(app.id) + '/packages', { withData: m.querySelector('[data-pk-data]').value === 'data', note: m.querySelector('[data-pk-note]').value.trim() || null }); App.closeOverlay(); st.depNote = null; st.depProblem = null; ctx.toast('Package v' + out.version + ' made and signed. Audit event app.package.created written.', 'ok'); reload(); } catch (err) { errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); } }); } }));
+    ctx.on('click', '[data-pkg-dl]', async (e, t) => { try { const out = await App.get(A(app.id) + '/packages/' + enc(t.dataset.pkgDl)); const text = JSON.stringify(out.package, null, 2); const url = URL.createObjectURL(new Blob([text], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = app.name + '-v' + out.version + '.app.json'; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (err) { App.fail(err, 'Could not download the package'); } });
+    ctx.on('click', '[data-pkg-git]', (e, t) => { const p = d.packages.find((x) => x.id === t.dataset.pkgGit); modal(ctx, { title: 'Push v' + p.version + ' to a repository', cls: 'wide', body: UI.notice('One file per object (package.json with the signature, app.json, entities/, forms/, triggers/, policies/, workflows/, records/), pretty-printed with sorted keys so the diff reads as the design change. A token only as a vault reference, answered to git through a credential helper, never on the command line.', 'info') + '<div class="formgrid">' + UI.field('Repository (https)', UI.input(st.gitUrl || '', { placeholder: 'https://git.example.com/team/apps.git', attrs: 'data-g-url' })) + UI.field('Branch', UI.input(st.gitRef || 'main', { attrs: 'data-g-ref' })) + UI.field('Path', UI.input('apps/' + app.name, { attrs: 'data-g-path' })) + UI.field('Credential (vault reference, optional)', UI.input('', { placeholder: 'vault:team/git#token', attrs: 'data-g-cred' })) + '<div class="span2">' + UI.field('Commit message', UI.input(app.name + ' v' + p.version, { attrs: 'data-g-msg' })) + '</div></div><div data-g-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Push', { kind: 'primary', attrs: 'data-g-ok' }), onMount(m) { m.querySelector('[data-g-ok]').addEventListener('click', async () => { const errEl = m.querySelector('[data-g-err]'); errEl.innerHTML = ''; const body = { url: m.querySelector('[data-g-url]').value.trim(), ref: m.querySelector('[data-g-ref]').value.trim() || null, path: m.querySelector('[data-g-path]').value.trim(), message: m.querySelector('[data-g-msg]').value.trim() || null, credential: m.querySelector('[data-g-cred]').value.trim() || null }; try { st.gitUrl = body.url; st.gitRef = body.ref; const out = await App.post(A(app.id) + '/packages/' + enc(p.id) + '/git', body); App.closeOverlay(); ctx.toast('Pushed v' + p.version + ' as ' + out.files + ' files, commit ' + out.commit.slice(0, 7) + '. Audit event app.package.pushed written.', 'ok', 5000); } catch (err) { errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); } }); } }); });
+    ctx.on('click', '[data-pkg-import]', () => { const scopes = ((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name })).concat([{ value: '', label: 'Tenant-wide' }]); modal(ctx, { title: 'Import a package', cls: 'wide', body: UI.notice('The signature is verified over exactly what arrived before anything is read. A package changed after signing, signed elsewhere or naming another key is refused (422) and audited app.import.refused.', 'info') + UI.field('Package (exprsn-app/2 JSON)', UI.textarea('', { rows: 6, placeholder: '{"format":"exprsn-app/2", …}', attrs: 'data-pi-json spellcheck="false"' })) + '<div class="formgrid">' + UI.field('Name (optional)', UI.input('', { placeholder: 'defaults to the package\'s name', attrs: 'data-pi-name' })) + UI.field('Workspace', UI.select(scopes, (App.me && App.me.workspace) || '', 'data-pi-ws')) + '</div><div data-pi-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Verify and import', { kind: 'primary', attrs: 'data-pi-ok' }), onMount(m) { m.querySelector('[data-pi-ok]').addEventListener('click', async () => { const errEl = m.querySelector('[data-pi-err]'); errEl.innerHTML = ''; let pkg; try { pkg = JSON.parse(m.querySelector('[data-pi-json]').value); } catch (x) { errEl.innerHTML = UI.notice('The package is not JSON.', 'danger'); return; } const body = { package: pkg, workspaceId: m.querySelector('[data-pi-ws]').value || null }; const name = m.querySelector('[data-pi-name]').value.trim(); if (name) body.name = name; try { const out = await App.post('/api/apps/packages/import', body); st.app = out.id; st.tab = 'entities'; st.depProblem = null; afterChange(ctx, { apps: true }); ctx.toast('Signature verified. App ' + esc(out.name) + ' created from the package: ' + esc(reportLine(out.report)) + '. Audited app.imported.', 'ok', 6000); } catch (err) { if (err.status === 422) { App.closeOverlay(); fail(err, 'Package refused'); return; } errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); } }); } }); });
+    ctx.on('click', '[data-pkg-gitimport]', () => { const scopes = ((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name })).concat([{ value: '', label: 'Tenant-wide' }]); modal(ctx, { title: 'Import a package from a repository', cls: 'wide', body: UI.notice('The files under the path are reassembled into the package and verified like one pasted in: the signature in package.json must cover them.', 'info') + '<div class="formgrid">' + UI.field('Repository (https)', UI.input(st.gitUrl || '', { placeholder: 'https://git.example.com/team/apps.git', attrs: 'data-gi-url' })) + UI.field('Branch', UI.input(st.gitRef || 'main', { attrs: 'data-gi-ref' })) + UI.field('Path', UI.input('apps/' + app.name, { attrs: 'data-gi-path' })) + UI.field('Credential (vault reference, optional)', UI.input('', { placeholder: 'vault:team/git#token', attrs: 'data-gi-cred' })) + UI.field('Name (optional)', UI.input('', { placeholder: 'defaults to the package\'s name', attrs: 'data-gi-name' })) + UI.field('Workspace', UI.select(scopes, (App.me && App.me.workspace) || '', 'data-gi-ws')) + '</div><div data-gi-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Read and import', { kind: 'primary', attrs: 'data-gi-ok' }), onMount(m) { m.querySelector('[data-gi-ok]').addEventListener('click', async () => { const errEl = m.querySelector('[data-gi-err]'); errEl.innerHTML = ''; const body = { url: m.querySelector('[data-gi-url]').value.trim(), ref: m.querySelector('[data-gi-ref]').value.trim() || null, path: m.querySelector('[data-gi-path]').value.trim(), credential: m.querySelector('[data-gi-cred]').value.trim() || null, workspaceId: m.querySelector('[data-gi-ws]').value || null }; const name = m.querySelector('[data-gi-name]').value.trim(); if (name) body.name = name; try { st.gitUrl = body.url; st.gitRef = body.ref; const out = await App.post('/api/apps/packages/git-import', body); st.app = out.id; st.tab = 'entities'; st.depProblem = null; afterChange(ctx, { apps: true }); ctx.toast('Package read from ' + esc(out.commit.slice(0, 7)) + ' and verified. App ' + esc(out.name) + ' created. Audited app.imported.', 'ok', 6000); } catch (err) { if (err.status === 422) { App.closeOverlay(); fail(err, 'Package refused'); return; } errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); } }); } }); });
+    ctx.on('click', '[data-pl-new], [data-pl-edit]', () => { const apps = (st.apps || []).map((a) => ({ value: a.name, label: a.title + ' (' + a.name + ')' })); const cur = pipeline || null; const sel = (stage, dflt) => UI.select(apps, cur ? cur.stages[stage].name : dflt, 'data-p-' + stage); modal(ctx, { title: cur ? 'Edit pipeline' : 'Create a pipeline', cls: 'wide', body: UI.notice('Three different apps you may design, one per stage, usually in three workspaces. A promotion to production needs a published workflow with an approval step; name it by its name.', 'info') + '<div class="formgrid">' + UI.field('Name', UI.input(cur ? cur.name : (app.title || app.name), { attrs: 'data-p-name' })) + UI.field('Approval workflow (name, optional)', UI.input(cur && cur.approvalWorkflow ? cur.approvalWorkflow.name : '', { placeholder: 'a published workflow with an approval step', attrs: 'data-p-wf' })) + UI.field('Development', sel('development', app.name)) + UI.field('Test', sel('test', app.name)) + UI.field('Production', sel('production', app.name)) + '</div><div data-p-err></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(cur ? 'Save' : 'Create pipeline', { kind: 'primary', attrs: 'data-p-ok' }), onMount(m) { m.querySelector('[data-p-ok]').addEventListener('click', async () => { const errEl = m.querySelector('[data-p-err]'); errEl.innerHTML = ''; const body = { name: m.querySelector('[data-p-name]').value.trim(), development: m.querySelector('[data-p-development]').value, test: m.querySelector('[data-p-test]').value, production: m.querySelector('[data-p-production]').value, approvalWorkflow: m.querySelector('[data-p-wf]').value.trim() || null }; try { if (cur) await App.patch('/api/apps/pipelines/' + enc(cur.id), body); else await App.post('/api/apps/pipelines', body); App.closeOverlay(); st.depProblem = null; ctx.toast('Pipeline ' + esc(body.name) + (cur ? ' saved' : ' created') + '. Audit event app.pipeline.' + (cur ? 'updated' : 'created') + ' written.', 'ok'); reload(); } catch (err) { errEl.innerHTML = UI.notice('<b>' + esc(String(err.status || '')) + '</b> ' + esc(detailOf(err)), 'danger'); } }); } }); });
+    ctx.on('click', '[data-pl-del]', async () => { const ok = await ctx.confirm({ title: 'Delete the pipeline ' + esc(pipeline.name), tone: 'danger', body: '<p>The pipeline and its deployment history are deleted; the three apps and their packages stay.</p>', ok: 'Delete' }); if (!ok) return; try { await App.del('/api/apps/pipelines/' + enc(pipeline.id)); ctx.toast('Pipeline deleted. Audit event app.pipeline.deleted written.', 'ok'); reload(); } catch (err) { fail(err, 'Could not delete the pipeline'); } });
+    ctx.on('click', '[data-promote]', async (e, t) => {
+      const to = t.dataset.promote;
+      const tested = pipeline.last.test;
+      const body = to === 'test' ? '<p>The development app <b>' + esc(pipeline.stages.development.name) + '</b> is packaged now and deployed onto <b>' + esc(pipeline.stages.test.name) + '</b>. The test app is backed up first.</p>' : tested ? '<p>The package that passed test, <b>v' + tested.version + '</b>, is deployed onto <b>' + esc(pipeline.stages.production.name) + '</b> once ' + (pipeline.approvalWorkflow ? esc(pipeline.approvalWorkflow.name) + ' approves it' : 'an approval workflow approves it') + '. The production app is backed up first.</p>' : '<p>Nothing has passed test yet; the server will refuse this (a stage cannot be skipped).</p>';
+      const ok = await ctx.confirm({ title: 'Promote to ' + stageLabel(to), body, ok: 'Promote' });
+      if (!ok) return;
+      try { const out = await App.post('/api/apps/pipelines/' + enc(pipeline.id) + '/promote', { to }); st.depProblem = null; st.depNote = null; ctx.toast(out.state === 'awaiting-approval' ? 'Deployment to production waits for an approver on Workflows. Audit event app.package.promotion.requested written.' : 'Deployment to ' + to + ' queued (v' + out.version + '). Audit event app.package.promotion.requested written.', 'ok', 5000); reload(); } catch (err) { fail(err, 'Promotion refused'); }
+    });
+    ctx.on('click', '[data-rollback]', async (e, t) => {
+      const h = d.history.find((x) => x.id === t.dataset.rollback);
+      const target = pipeline.stages[h.to];
+      const ok = await ctx.confirm({ title: 'Roll back deployment ' + esc(h.id.slice(-6)), tone: 'danger', body: '<p>The backup taken before this deployment is deployed onto <b>' + esc(target ? target.name : h.to) + '</b> as a deployment of its own, with its own backup. Entities that still hold records are kept and reported; forms, triggers and policies return to the backup\'s.</p>', ok: 'Roll back' });
+      if (!ok) return;
+      try { await App.post('/api/apps/deployments/' + enc(h.id) + '/rollback', {}); st.depProblem = null; st.depNote = null; ctx.toast('Rollback queued. Audit event app.package.rollback.requested written.', 'ok'); reload(); } catch (err) { fail(err, 'Rollback refused'); }
+    });
+
+    return '<style>#main .apps-stages{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:stretch;margin-bottom:10px}#main .apps-stage{padding:10px 12px}#main .apps-arrow{align-self:center;color:var(--muted);font-size:18px}@media (max-width:640px){#main .apps-stages{grid-template-columns:1fr}#main .apps-arrow{display:none}}</style>'
+      + problem + env + packages + history;
+  }
+
+  // ---------- API tab (1.6.0, B-8601 to B-8603) ----------
+  const KIND_TONE = { 'entity.created': 'ok', 'entity.deleted': 'danger', 'field.removed': 'warn', 'form.deleted': 'warn' };
+  const SOURCE_TONE = { 'schema-api': 'accent', package: 'outline' };
+  function renderApi(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.schemaKey !== key && st.schemaBusy !== key) {
+      st.schemaBusy = key;
+      Promise.all([App.get(A(app.id) + '/schema'), App.get(A(app.id) + '/schema/versions?limit=50')])
+        .then(([schema, versions]) => { st.schema = schema; st.schemaVersions = versions.versions; st.schemaKey = key; st.schemaError = null; })
+        .catch((err) => { st.schemaError = err; st.schemaKey = key; })
+        .finally(() => { st.schemaBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.schemaKey !== key) return UI.notice('Loading the schema…', 'info');
+    if (st.schemaError) return UI.problem('The schema could not be loaded', detailOf(st.schemaError), traceOf(st.schemaError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-schemareload' }) + '</div>';
+    const sc = st.schema;
+    const base = A(app.name);
+    const first = app.entities[0] || null;
+    const firstIndexed = first ? fieldsOf(first).find((f) => f.indexed || f.unique) : null;
+    const curl = 'curl -H "Authorization: Bearer exai_k1_…" \\\n  "' + location.origin + base + '/' + (first ? first.name : 'entity') + '?where=' + (firstIndexed ? firstIndexed.name : 'field') + ':eq:value&sort=updatedAt:desc&limit=50&include=related"';
+    const endpoints = UI.panel('Entity API', UI.notice('Every entity of the app is a REST resource under <span class="mono">' + esc(base) + '/&lt;entity&gt;</span>: list with <span class="mono">filter</span> (JSON), <span class="mono">where=field:op:value</span>, <span class="mono">sort</span>, <span class="mono">limit</span>, <span class="mono">offset</span> or <span class="mono">cursor</span>, <span class="mono">q</span> and <span class="mono">include=related</span>; read, create, update (with <span class="mono">version</span>), transition and delete. The caller\'s policies, masks, labels and workspaces apply as on this screen. A key may be limited to this app or one entity (Settings, API keys).', 'info')
+      + UI.table(['Method', 'Path', 'Needs', 'What it does'], app.entities.flatMap((e) => [
+        [UI.pill('GET', 'outline'), '<span class="mono">' + esc(base + '/' + e.name) + '</span>', '<span class="mono">records:read</span>', 'A page of ' + esc(e.title || e.name) + ' records: total, nextCursor, records'],
+        [UI.pill('POST', 'accent'), '<span class="mono">' + esc(base + '/' + e.name) + '</span>', '<span class="mono">records:write</span>', 'Create one: {values, label?}'],
+        [UI.pill('GET', 'outline'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:read</span>', 'One record; related records with include=related'],
+        [UI.pill('PATCH', 'accent'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:write</span>', 'Update: {values, version?}; 409 on a stale version'],
+        [UI.pill('DELETE', 'danger'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:write</span>', 'Delete; 204']
+      ].concat(smOf(e) ? [[UI.pill('POST', 'accent'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}/transition') + '</span>', '<span class="mono">records:write</span>', 'Move to a state: {to, version?, note?}; ' + esc(smOf(e).states.map((x) => x.name).join(', '))]] : [])), { clickable: false, minWidth: '720px', cls: 'bare', emptyTitle: 'No entities yet', emptyText: 'Design an entity first; each one becomes a resource.' })
+      + (first ? '<div class="eyebrow" style="margin-top:10px">Try it</div>' + UI.code(curl, 'sh') : ''));
+    const docs = UI.panel('OpenAPI and client', UI.kv([
+      ['Schema version', '<b>' + esc(String(sc.version)) + '</b>' + (sc.changedAt ? ' <span class="muted">changed ' + esc(when(sc.changedAt)) + '</span>' : ' <span class="muted">no change recorded yet</span>')],
+      ['Hash', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sc.hash) + '</span> <span class="muted">(the ETag of the document and the client)</span>'],
+      ['OpenAPI 3.1', '<a href="' + esc(base + '/openapi.json') + '" class="mono" download="' + esc(app.name) + '-openapi.json">' + esc(base + '/openapi.json') + '</a> <span class="muted">typed from the entity definitions, current on every read</span>'],
+      ['Client', '<a href="' + esc(base + '/client.ts') + '" class="mono" download="' + esc(app.name) + '-client.ts">' + esc(base + '/client.ts') + '</a> <span class="muted">or</span> <a href="' + esc(base + '/client.js') + '" class="mono" download="' + esc(app.name) + '-client.js">' + esc(base + '/client.js') + '</a> <span class="muted">createClient({baseUrl, token}).' + esc(first ? first.name : 'entity') + '.list() / get / create / update / delete / transition</span>']
+    ], 1) + '<div class="hstack gap6 wrap" style="margin-top:8px">' + UI.btn('Download openapi.json', { size: 'sm', icon: 'download', attrs: 'data-dl="' + esc(base + '/openapi.json') + '" data-dlname="' + esc(app.name) + '-openapi.json"' }) + UI.btn('Download client.ts', { size: 'sm', icon: 'download', attrs: 'data-dl="' + esc(base + '/client.ts') + '" data-dlname="' + esc(app.name) + '-client.ts"' }) + (App.canOpen('settings') ? UI.btn('Make a key for this app', { size: 'sm', kind: 'ghost', icon: 'key', attrs: 'data-appkey' }) : '') + '</div>');
+    const versions = UI.panel('Schema versions', UI.notice('Every design change, whichever route made it (this screen, the schema API, a package import), is one version with a hash of the whole design afterwards; each is audited app.schema.versioned.', 'info')
+      + UI.table(['Version', 'Change', 'Target', 'What changed', 'Source', 'By', 'When'], (st.schemaVersions || []).map((v) => [ '<b>' + esc(String(v.version)) + '</b>', UI.pill(v.kind, KIND_TONE[v.kind] || 'info'), '<span class="mono">' + esc(v.target) + '</span>', esc(v.summary), UI.pill(v.source, SOURCE_TONE[v.source] || ''), esc(who(v.createdBy)), esc(when(v.createdAt)) ]), { clickable: false, minWidth: '900px', emptyTitle: 'No versions yet', emptyText: 'The first entity records version 1.' })
+      + '<div class="eyebrow" style="margin-top:10px">Schema API</div><div class="muted" style="font-size:12px">' + UI.pill('apps:design', 'outline') + ' <span class="mono">GET ' + esc(base) + '/schema</span>, <span class="mono">PUT …/schema/entities/{entity}</span>, <span class="mono">POST …/schema/entities/{entity}/fields</span>, <span class="mono">PATCH|DELETE …/fields/{field}</span>, <span class="mono">PUT …/entities/{entity}/states</span>, <span class="mono">PUT|DELETE …/schema/forms/{form}</span>, <span class="mono">GET …/schema/versions</span>.</div>');
+    ctx.on('click', '[data-schemareload]', () => { st.schemaKey = st.schemaBusy = null; st.schemaError = null; ctx.rerender(); });
+    ctx.on('click', '[data-dl]', async (e, t) => {
+      try {
+        const res = await fetch(t.dataset.dl, { credentials: 'same-origin', headers: { accept: 'application/json, text/plain, application/typescript' } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = t.dataset.dlname; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+        ctx.toast(esc(t.dataset.dlname) + ' downloaded (schema version ' + esc(String(sc.version)) + ').', 'ok');
+      } catch (err) { App.fail(err, 'Could not download'); }
+    });
+    ctx.on('click', '[data-appkey]', () => ctx.navigate('settings', { section: 'keys', app: app.name }));
+    return endpoints + docs + versions;
+  }
+
+  // ---------- Embed tab (1.6.0, B-8701, B-8702) ----------
+  const ALGS = ['ES256', 'RS256', 'EdDSA', 'HS256', 'x5c'];
+  const algText = (a) => (a === 'x5c' ? 'tenant CA certificate' : a === 'HS256' ? 'HS256 shared secret' : a + ' public key');
+  const HOST_RE = /^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i;
+  function renderEmbed(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.embedKey !== key && st.embedBusy !== key) {
+      st.embedBusy = key;
+      App.get(A(app.id) + '/embed')
+        .then((d) => { st.embed = d; st.embedKey = key; st.embedError = null; })
+        .catch((err) => { st.embedError = err; st.embedKey = key; })
+        .finally(() => { st.embedBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.embedKey !== key) return UI.notice('Loading the embed settings…', 'info');
+    if (st.embedError) return UI.problem('The embed settings could not be loaded', detailOf(st.embedError), traceOf(st.embedError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-emreload' }) + '</div>';
+    const em = st.embed;
+    const reloadEmbed = () => { st.embedKey = st.embedBusy = null; ctx.rerender(); };
+    const secret = st.embedSecret && st.embedSecret.app === key ? UI.notice('<b>Secret for key ' + esc(st.embedSecret.kid) + '. Copy it now; it is shown once.</b><div class="mono apps-token" style="margin-top:4px">' + esc(st.embedSecret.secret) + '</div><div class="muted" style="font-size:12px;margin-top:4px">The host site signs HS256 tokens with it (base64url, 32 bytes). It is sealed with the tenant key here and never shown again; make a new key to rotate it.</div>', 'warn', UI.btn('Copy', { size: 'sm', attrs: 'data-emsecretcopy' }) + UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-emsecretdone' })) : '';
+    const problem = st.embedProblem ? UI.problem(st.embedProblem.title, st.embedProblem.text, st.embedProblem.trace) : '';
+    const settings = UI.panel('Embed settings', '<div class="formgrid">'
+      + UI.field('Allowed host sites', UI.textarea(em.allowedHosts.join('\n'), { rows: 2, attrs: 'data-emhosts aria-label="Allowed host sites" spellcheck="false"' }), 'One origin a line (https://host[:port]); they become the frame-ancestors of every embed page of this app.')
+      + UI.field('Public pages', UI.toggle(em.publicEnabled ? 'on' : 'off', em.publicEnabled, 'data-empublic aria-label="Public pages"'), 'Public forms of this app can be published as embed pages.')
+      + UI.field('Signed embeds', UI.toggle(em.signedEnabled ? 'on' : 'off', em.signedEnabled, 'data-emsigned aria-label="Signed embeds"'), 'The host site signs a short token per visitor with a key below.')
+      + UI.field('Claim that names the person', '<div class="hstack gap6">' + UI.input(em.claimName, { attrs: 'data-emclaim aria-label="Claim name" maxlength="60"' }) + UI.select([{ value: 'username', label: 'is the username' }, { value: 'email', label: 'is the email' }, { value: 'id', label: 'is the user id' }], em.claimMatch, 'data-emmatch aria-label="Claim match"') + '</div>', 'An existing, active user of this tenant; the session acts as them.')
+      + UI.field('Longest session', UI.select([{ value: '300', label: '5 minutes' }, { value: '900', label: '15 minutes' }, { value: '3600', label: '1 hour' }, { value: '86400', label: '1 day' }], String(em.maxTtlSeconds), 'data-emttl aria-label="Longest session"'), 'The shorter of this, the token\'s exp and APP_EMBED_MAX_TTL_SECONDS.')
+      + UI.field('Writes', UI.toggle(em.write ? 'allowed' : 'read-only', em.write, 'data-emwrite aria-label="Writes"'), 'Embedded sessions hold records:read, and records:write only when allowed.')
+      + UI.field('Entities reached', UI.input(em.entities ? em.entities.join(', ') : '', { placeholder: 'every entity', attrs: 'data-ementities aria-label="Entities reached"' }), 'Names, comma-separated; empty for every entity of the app.')
+      + '</div>' + UI.kv([['Audience the token must name', '<span class="mono">' + esc(em.audience) + '</span>'], ['Signed embed page', '<span class="mono" style="overflow-wrap:anywhere">' + esc(em.signedUrl) + '#token=&lt;jwt&gt;</span> <span class="muted">(the token travels in the fragment, never a query string)</span>'], ['frame-ancestors', '<span class="mono">' + esc(em.frameAncestors) + '</span>']], 1)
+      + '<div class="hstack gap6" style="margin-top:8px">' + UI.btn('Save settings', { kind: 'primary', size: 'sm', attrs: 'data-emsave' }) + '<span class="muted" style="font-size:12px">Audited app.embed.updated.</span></div>');
+    const keys = UI.panel('Signing keys', UI.table(['kid', 'Kind', 'State', 'By', 'Made', { label: '', right: true }], em.keys.map((k) => ({ cells: ['<span class="mono">' + esc(k.kid) + '</span>', esc(algText(k.alg)), k.state === 'active' ? UI.pill('active', 'ok') : UI.pill('revoked ' + when(k.revokedAt), 'danger'), esc(who(k.createdBy)), esc(when(k.createdAt)), '<span class="hstack" style="justify-content:flex-end">' + (k.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-emrevoke="' + esc(k.id) + '" aria-label="Revoke key ' + esc(k.kid) + '"' }) : '') + '</span>'], attrs: 'data-emkey="' + esc(k.id) + '"' })), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No keys', emptyText: 'Register the public key the host site signs with, a shared secret, or the tenant CA.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('Add key', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-emaddkey' }) + '<span class="muted" style="font-size:12px">Revoking a key ends every session it made.</span></div>');
+    const publicForms = (app.forms || []).filter((f) => f.public && !em.pages.some((p) => p.formId === f.id));
+    const pages = UI.panel('Public embed pages', UI.notice('A public form (one with a public link) is published as an embed page under a random id; the page opens and submits the form by that id, so the form\'s link token never reaches the host site. Submissions follow the public path: per-address and per-form limits, the user-input guardrail, held values queued for review.', 'info')
+      + UI.table(['Form', 'Entity', 'Embed page', 'By', 'Made', { label: '', right: true }], em.pages.map((p) => ({ cells: ['<b>' + esc(p.formTitle) + '</b> <span class="mono muted">' + esc(p.form) + '</span>' + (p.public ? '' : ' ' + UI.pill('form no longer public', 'warn')), '<span class="mono">' + esc(p.entity) + '</span>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(p.url) + '</span>', esc(who(p.createdBy)), esc(when(p.createdAt)), '<span class="hstack gap4" style="justify-content:flex-end">' + UI.btn('Snippet', { size: 'xs', kind: 'ghost', attrs: 'data-emsnippet="' + esc(p.id) + '"' }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-emrmpage="' + esc(p.id) + '"' }) + '</span>'], attrs: 'data-empage="' + esc(p.id) + '"' })), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No embed pages', emptyText: (app.forms || []).some((f) => f.public) ? 'Publish one of the public forms as an embed page.' : 'No form of this app has a public link yet; publish one on the Forms tab first.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('Publish a form', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-emaddpage', disabled: !publicForms.length || !em.publicEnabled }) + (!em.publicEnabled ? '<span class="muted" style="font-size:12px">Turn public pages on and save first.</span>' : '') + '</div>');
+    const sessions = UI.panel('Embedded sessions', UI.table(['Person', 'Host (iss)', 'Opened', 'Expires', 'State'], em.sessions.map((x) => [esc(x.username || x.user), '<span class="mono">' + esc(x.host || '') + '</span>', esc(when(x.createdAt)), esc(when(x.expiresAt)), x.revokedAt ? UI.pill('revoked', 'danger') : x.expiresAt < Date.now() ? UI.pill('expired', '') : UI.pill('active', 'ok')]), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No sessions', emptyText: 'Sessions opened by host tokens appear here with the issuer that made them.' })
+      + '<div class="hstack gap6">' + UI.btn('End every session', { size: 'sm', kind: 'danger', attrs: 'data-emendall', disabled: !em.sessions.some((x) => !x.revokedAt && x.expiresAt > Date.now()) }) + '<span class="muted" style="font-size:12px">Sessions are apart from console sessions: no cookie, a bearer of their own, the app only.</span></div>');
+    const fail = (err, title) => { st.embedProblem = { title, text: detailOf(err), trace: traceOf(err) }; App.closeOverlay(); ctx.rerender(); };
+    ctx.on('click', '[data-emreload]', () => { st.embedError = null; reloadEmbed(); });
+    ctx.on('click', '[data-emsecretdone]', () => { st.embedSecret = null; ctx.rerender(); });
+    ctx.on('click', '[data-emsecretcopy]', () => { const v = st.embedSecret && st.embedSecret.secret; if (!v) return; (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject(new Error('no clipboard'))).then(() => ctx.toast('Secret copied.'), () => ctx.toast('Select the secret and copy it.', 'warn')); });
+    ctx.on('click', '[data-emsave]', async () => {
+      const root = ctx.root || document;
+      const hosts = (root.querySelector('[data-emhosts]').value || '').split(/\n/).map((h) => h.trim()).filter(Boolean);
+      const bad = hosts.find((h) => !HOST_RE.test(h));
+      if (bad) { ctx.toast('An allowed host is an origin: https://host[:port], not ' + esc(bad) + '.', 'danger'); return; }
+      const ents = root.querySelector('[data-ementities]').value.split(',').map((x) => x.trim()).filter(Boolean);
+      const body = { allowedHosts: hosts, publicEnabled: root.querySelector('[data-empublic]').classList.contains('on'), signedEnabled: root.querySelector('[data-emsigned]').classList.contains('on'), claimName: root.querySelector('[data-emclaim]').value.trim() || 'sub', claimMatch: root.querySelector('[data-emmatch]').value, maxTtlSeconds: Number(root.querySelector('[data-emttl]').value), write: root.querySelector('[data-emwrite]').classList.contains('on'), entities: ents.length ? ents : null };
+      try { await App.put(A(app.id) + '/embed', body); st.embedProblem = null; reloadEmbed(); ctx.toast('Embed settings saved. Audited app.embed.updated.', 'ok'); } catch (err) { fail(err, 'Settings not saved'); }
+    });
+    ctx.on('click', '[data-emaddkey]', () => modal(ctx, { title: 'Add a signing key', body: '<div class="formgrid">' + UI.field('kid', UI.input('', { placeholder: 'portal-2027', attrs: 'data-kid aria-label="kid" maxlength="100"' }), 'The token\'s header names it.') + UI.field('Kind', UI.select(ALGS.map((a) => ({ value: a, label: algText(a) })), 'ES256', 'data-alg aria-label="Kind"')) + '</div>' + UI.field('Public key (PEM)', UI.textarea('', { rows: 4, placeholder: '-----BEGIN PUBLIC KEY-----', attrs: 'data-pem aria-label="Public key" spellcheck="false"' }), 'For ES256 (P-256), RS256 (2048 bits or more) and EdDSA. An HS256 secret is generated and shown once; a tenant CA key needs nothing: the token carries the certificate the CA issued (x5c).'),
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Add key', { kind: 'primary', attrs: 'data-go' }),
+      onMount(m) { m.querySelector('[data-go]').addEventListener('click', async () => { const kid = m.querySelector('[data-kid]').value.trim(); const alg = m.querySelector('[data-alg]').value; const pem = m.querySelector('[data-pem]').value.trim(); if (!kid) { ctx.toast('A key needs a kid.', 'warn'); return; } if (['ES256', 'RS256', 'EdDSA'].includes(alg) && !pem) { ctx.toast('A ' + alg + ' key needs the public key (PEM).', 'warn'); return; } const body = { kid, alg }; if (pem && alg !== 'HS256' && alg !== 'x5c') body.publicKey = pem; try { const out = await App.post(A(app.id) + '/embed/keys', body); if (out.secret) st.embedSecret = { app: key, kid, secret: out.secret }; st.embedProblem = null; App.closeOverlay(); reloadEmbed(); ctx.toast('Key ' + esc(kid) + ' added. Audited app.embed.key.created.', 'ok'); } catch (err) { fail(err, 'Key not added'); } }); } }));
+    ctx.on('click', '[data-emrevoke]', async (e, t) => { const k = em.keys.find((x) => x.id === t.dataset.emrevoke); if (!k) return; const ok = await ctx.confirm({ title: 'Revoke key ' + k.kid + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">Tokens signed with it are refused from now on, and every session it opened ends at once.</p>', ok: 'Revoke' }); if (!ok) return; try { await App.del(A(app.id) + '/embed/keys/' + enc(k.id)); reloadEmbed(); ctx.toast('Key ' + esc(k.kid) + ' revoked; its sessions ended. Audited app.embed.key.revoked.', 'warn'); } catch (err) { App.fail(err, 'Could not revoke the key'); } });
+    ctx.on('click', '[data-emaddpage]', () => modal(ctx, { title: 'Publish a form as an embed page', body: UI.field('Public form', UI.select(publicForms.map((f) => ({ value: f.name, label: (f.title || f.name) + ' (' + f.name + ')' })), publicForms[0] ? publicForms[0].name : '', 'data-form aria-label="Public form"'), 'Only forms with a public link.') + UI.notice('The page is served at /embed/&lt;id&gt; with frame-ancestors set to the allowed host sites.', 'info'), actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Publish', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', async () => { const form = m.querySelector('[data-form]').value; try { const out = await App.post(A(app.id) + '/embed/pages', { form }); st.embedProblem = null; App.closeOverlay(); reloadEmbed(); ctx.toast('Embed page for ' + esc(form) + ' published at ' + esc(out.url) + '. Audited app.embed.page.created.', 'ok', 6000); } catch (err) { fail(err, 'Page not published'); } }); } }));
+    ctx.on('click', '[data-emsnippet]', (e, t) => { const p = em.pages.find((x) => x.id === t.dataset.emsnippet); if (!p) return; modal(ctx, { title: 'Embed ' + esc(p.formTitle), body: UI.code('<iframe src="' + p.url + '" title="' + p.formTitle + '" width="100%" height="640" style="border:0"></iframe>', 'html') + UI.notice('Works on ' + esc(em.allowedHosts.join(', ') || 'no site yet: add the host sites first') + '. The browser refuses the frame elsewhere.', 'info'), actions: UI.btn('Close', { attrs: 'data-close' }) }); });
+    ctx.on('click', '[data-emrmpage]', async (e, t) => { const p = em.pages.find((x) => x.id === t.dataset.emrmpage); if (!p) return; const ok = await ctx.confirm({ title: 'Remove the embed page for ' + p.formTitle + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">Sites framing it get a 404 from now on. The form and its public link stay.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del(A(app.id) + '/embed/pages/' + enc(p.id)); reloadEmbed(); ctx.toast('Embed page removed. Audited app.embed.page.removed.', 'warn'); } catch (err) { App.fail(err, 'Could not remove the page'); } });
+    ctx.on('click', '[data-emendall]', async () => { const ok = await ctx.confirm({ title: 'End every embedded session?', tone: 'danger', body: '<p class="fg2" style="margin:0">Pages framed on the host sites get 401 on their next call and ask the host for a new token.</p>', ok: 'End sessions' }); if (!ok) return; try { const out = await App.post(A(app.id) + '/embed/sessions/revoke', {}); reloadEmbed(); ctx.toast(out.revoked + ' session' + (out.revoked === 1 ? '' : 's') + ' ended. Audited app.embed.sessions.revoked.', 'warn'); } catch (err) { App.fail(err, 'Could not end the sessions'); } });
+    return secret + problem + settings + keys + pages + sessions;
+  }
+
   function renderTriggers(ctx, app) {
     const st = ctx.state;
     const triggers = app.triggers || [];

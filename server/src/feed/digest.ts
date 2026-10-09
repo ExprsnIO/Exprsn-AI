@@ -263,7 +263,8 @@ export class FeedDigests {
     const maxLabel = t.digestMaxLabel ?? cfg.FEED_DIGEST_MAX_LABEL;
     const top = t.digestTop ?? cfg.FEED_DIGEST_TOP;
     const labels = LABELS.filter((l) => labelRank(l) <= labelRank(maxLabel));
-    const candidates = ((await this.db('feed_posts').where({ tenant_id: tenantId, workspace_id: w.id, state: 'published' }).whereNull('group_id').whereNotNull('body').whereIn('label', labels).andWhere('published_at', '>=', weekStart).andWhere('published_at', '<', weekEnd).orderBy('published_at', 'desc').limit(2000)) as Record<string, unknown>[]).map(postFrom);
+    // 1.6.0 (B-4901): an unlisted post is never in a digest.
+    const candidates = ((await this.db('feed_posts').where({ tenant_id: tenantId, workspace_id: w.id, state: 'published' }).whereNot('visibility', 'unlisted').whereNull('group_id').whereNotNull('body').whereIn('label', labels).andWhere('published_at', '>=', weekStart).andWhere('published_at', '<', weekEnd).orderBy('published_at', 'desc').limit(2000)) as Record<string, unknown>[]).map(postFrom);
     const ids = candidates.map((x) => x.id);
     const count = async (table: string, col: string, extra: Record<string, unknown> = {}) => {
       const m = new Map<string, number>();

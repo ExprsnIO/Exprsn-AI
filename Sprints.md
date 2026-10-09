@@ -47,10 +47,10 @@ from prototype data to live only when every control on it is backed by the serve
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge (1.6.0) | Groups and events, Storage, Apps, Vault, Knowledge, Classifiers | **Done** |
 | 36b | Model thinking templates; the tool-calling evaluation sends a system prompt (1.6.0; B-11707, pulled forward from 1.7.0 on 2026-10-08) | Models, Profiles | Next |
-| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, User stores, Settings, MCP servers | Next |
-| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Training, Usage and audit, Settings, Registry, Apps, Chat | Planned |
-| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Apps, Settings | Planned |
-| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, User stores, Settings, MCP servers | **Done** (B-7202 partial) |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Training, Usage and audit, Settings, Registry, Apps, Chat | **Done** |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Apps, Settings | **Done** |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | Next |
 | 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Planned |
 | 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, custom roles, group moderation, event extras, linked conversations (1.7.0) | Vault, Settings, Groups and events | Planned |
 | 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Jobs and queues, Plugins and events, AT-Protocol, Messages and feed | Planned |
@@ -66,8 +66,8 @@ Images, Files, Apps, Groups and events, Messages and feed, Models, Profiles, Poo
 Flags, Classifiers, Moderation, Channels, Connections, Training, Tenants, Roles and access, User stores, Identity,
 Certificates, Vault, Plugins and events, AT-Protocol, Zones, Usage and audit and Platform), plus Sign in, Settings
 (with app passwords for DAV clients and the public profile and status), the Person page (a profile, opened from
-people's names) and the signed-out Shared page for anonymous links; fifty-five database migrations (`001_core` to
-`036c_dav_files`); 985 unit and API tests across 86 files, 1 skipped (against a fake Ollama, a fake MCP server, fake
+people's names) and the signed-out Shared page for anonymous links; seventy-two database migrations (`001_core` to
+`041d_entity_api_embeds`); 1170 unit and API tests across 126 files, 1 skipped (against a fake Ollama, a fake MCP server, fake
 script, media, image and training workers, a fake ACME directory, a fake upstream identity provider, a fake OpenBao, a
 fake OTLP collector, Kubernetes API, SNTP server and Redis, a fake S3 bucket and web site, fake mail, HIBP range,
 webhook, Stripe, DNS, Harbor, Verdaccio and devpi endpoints, recorded DAV client exchanges and the AT-Protocol interop
@@ -78,7 +78,7 @@ chart with an optional signer sidecar, supply-chain CI, Prometheus rules and Gra
 and a platform load test. The version is `1.5.0`: Sprints 29 to 34 delivered the [1.5.0 backlog](Backlog-1.5.0.md)
 (Sprint 33 moved to 1.7.0), after Sprints 24 to 28 delivered the server-only [1.4.0 backlog](Backlog-1.4.0.md),
 Sprints 20 to 23 the [1.3.0 backlog](Backlog-1.3.0.md), Sprints 16 to 19 the [1.2.0 backlog](Backlog-1.2.0.md) and
-Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprint 35 is done and Sprints 36 to 39 are planned in the
+Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 35 to 39 are done and released as 1.6.0 from the
 [1.6.0 backlog](Backlog-1.6.0.md): the platform administration screens, model servers beyond Ollama, groups depth,
 tenant templates, blob deduplication, vault extras and image classification (groomed 2026-10-05 with
 `design/grooming/groom.mjs`; capability tokens, B-5001, were dropped on 2026-10-07), an HTTP tool kind, and the
@@ -1168,6 +1168,28 @@ Delivered on `sprint-29`:
 B-3301 to B-3305 (`031_access`) and B-3601 were done on `sprint-29a` and `sprint-29b`; the live screens B-3402 to
 B-3404, B-3407, B-3408 and B-3413 were built in Sprint 30. Sprints 30 to 34 are summarised in
 [Backlog-1.5.0.md](Backlog-1.5.0.md) (Progress) and below.
+
+## Release 1.6.0
+
+The workspace, the server and the chart are versioned `1.6.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
+the backlog in [Backlog-1.6.0.md](Backlog-1.6.0.md). Sprints 35 to 39 added model servers beyond Ollama (`kind: openai`
+instances, Apple's on-device model among them) and the five platform administration screens; groups depth and
+categories, blob deduplication, held form values, vault access anomalies and image classification in Knowledge; the
+HTTP tool kind, prompt-injection defence with its CI corpus, SCIM 2.0 provisioning, the MCP server with MCP
+authorization and per-user OAuth, vault sharing, MongoDB leases, quote posts and per-post visibility; the AI system
+inventory with its register export, usage and cost analytics with chargebacks, `gen_ai` span attributes, JSONL audit
+exports with chain proofs and per-tenant SIEM destinations, red-team suites with a publish gate, agent identities,
+agent handoffs, row and field policies with masking and an explain view, DLP detectors with hold and redact rules,
+legal holds and a compliance export API; and C2PA content credentials on generated images, versioned chat artifacts,
+app packages with environments, promotion, deployment history, rollback and git export, data model drafts from a
+description, AI field fills and regeneration, outside PostgreSQL and MySQL tables as app entities, a REST and schema
+API per app with a generated OpenAPI document and client, and public and signed app embeds. B-5001 (capability
+tokens) was dropped on 2026-10-07; B-7202 (SCIM against the Entra ID and Okta validators) stays partial with a local
+conformance suite. Migrations `037_model_servers` to `041d_entity_api_embeds`. The suite at release: 1170 passed and 1
+skipped across 126 files; the PostgreSQL integration suite (52 files) and the prototype smoke (51 screens) locally;
+the full Playwright console suite run locally at the release, 168 passed, 0 failed, after fixes to the
+sweep list, the harness driver, an Analytics reload race and the draft dialog's accessibility pass (B-5101). The known gaps of each sprint are in [docs/security.md](docs/security.md). Tagging `v1.6.0` and
+publishing the image and chart remain with the maintainers.
 
 ## Release 1.5.0
 

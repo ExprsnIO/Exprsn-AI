@@ -18,10 +18,14 @@ import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
+import { analyticsAdminRoutes } from '../routes/admin/analytics.js';
+import { inventoryAdminRoutes } from '../routes/admin/inventory.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
 import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
+import { redTeamRoutes } from '../routes/admin/redteam.js';
+import { agentIdentityRoutes } from '../routes/admin/agent-identities.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
 import { chainRoutes } from '../routes/chains.js';
@@ -40,6 +44,8 @@ import { operationsAdminRoutes } from '../routes/admin/operations.js';
 import { platformSettingsRoutes } from '../routes/admin/platform-settings.js';
 import { storageAdminRoutes } from '../routes/admin/storage.js';
 import { federationAdminRoutes } from '../routes/admin/federation.js';
+import { mcpServerPublicRoutes } from '../routes/mcp-server-public.js';
+import { mcpAccessRoutes } from '../routes/mcp-access.js';
 import { federationPublicRoutes } from '../routes/federation-public.js';
 import { integrationPublicRoutes } from '../routes/integrations-public.js';
 import { trainerWorkerRoutes } from '../routes/trainer-worker.js';
@@ -49,6 +55,7 @@ import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import { vaultRoutes } from '../routes/vault.js';
+import { complianceRoutes } from '../routes/compliance.js';
 import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
@@ -69,6 +76,7 @@ import { messagingRoutes } from '../routes/messaging.js';
 import { feedRoutes } from '../routes/feed.js';
 import type { Services } from '../services.js';
 import { Limiter } from '../platform/ratelimit.js';
+import { scimAdminRoutes, scimPublicRoutes } from '../routes/scim.js';
 import { publicSharingRoutes } from '../routes/sharing-public.js';
 import { mediaHostGuard, mediaOriginRoutes } from '../media/origin.js';
 import { sendBytes } from '../routes/media.js';
@@ -79,6 +87,8 @@ import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { appRoutes } from '../routes/apps.js';
 import { publicAppRoutes } from '../routes/apps-public.js';
+import { appEntityApiRoutes } from '../routes/apps-entity-api.js';
+import { appEmbedPublicRoutes } from '../routes/apps-embed-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
@@ -167,6 +177,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(mediaOriginRoutes(s, sendBytes));
   // OIDC, SAML and device-flow protocol endpoints: public paths with their own parsing and checks.
   app.use(federationPublicRoutes(s));
+  // 1.6.0, Sprint 37b (B-7101, B-7102): each workspace's MCP server and its protected resource metadata.
+  app.use(mcpServerPublicRoutes(s));
   // ACME http-01: the internal CA fetches the key authorization for orders in flight (public, text/plain).
   app.use(acmeChallengeRoutes(s));
   // Sprint 19: published webhook signing keys and the Stripe webhook (public; signatures are the authentication).
@@ -191,6 +203,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use(davRoutes(s));
   // Sprint 13: the OpenAI-compatible API. Bearer credentials only, OpenAI-shaped errors, its own JSON limit.
   app.use('/v1', openAiRoutes(s));
+  // 1.6.0, Sprint 37c (B-7201): SCIM 2.0 at /scim/v2. SCIM tokens only, SCIM-shaped errors, its own rate limit.
+  app.use(scimPublicRoutes(s));
 
   // API: JSON only, small bodies, authenticated per request, CSRF-checked for cookie sessions.
   const api = express.Router();
@@ -222,15 +236,22 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   // 1.5.0, Sprint 30 (B-3101): app passwords for DAV clients.
   api.use('/me', appPasswordRoutes(s));
   api.use('/admin', identityAdminRoutes(s));
+  api.use('/admin', scimAdminRoutes(s)); // 1.6.0, Sprint 37c (B-7201): SCIM tokens and status
   api.use('/admin', userAdminRoutes(s));
   api.use('/admin', auditAdminRoutes(s));
   api.use('/admin', tenantAdminRoutes(s));
   api.use('/admin', usageAdminRoutes(s));
+  api.use('/admin', analyticsAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7401, B-7402)
+  api.use('/admin', inventoryAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7301, B-7302)
   api.use('/admin', gatewayAdminRoutes(s));
   api.use(chatRoutes(s));
   api.use(guardrailRoutes(s));
   api.use('/admin', registryAdminRoutes(s));
+  // 1.6.0 Sprint 38b: red-team suites (B-7001) and agent identities (B-7701).
+  api.use('/admin', redTeamRoutes(s));
+  api.use('/admin', agentIdentityRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
+  api.use(mcpAccessRoutes(s)); // 1.6.0, Sprint 37b (B-7101 to B-7103): MCP server admin, held calls, client OAuth
   api.use(agentRoutes(s));
   api.use(chainRoutes(s));
   api.use(scriptRoutes(s));
@@ -257,6 +278,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', zoneClusterRoutes(s));
   // Sprint 24 (B-1701 to B-1703): the secrets vault.
   api.use(vaultRoutes(s));
+  api.use(complianceRoutes(s)); // 1.6.0, Sprint 38c (B-7601 to B-7603): DLP, legal holds, compliance exports
   // Sprint 24 (B-1601 to B-1603): the certificate authority.
   api.use(pkiRoutes(s));
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
@@ -276,6 +298,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(moderationRoutes(s));
   // 1.4.0, Sprint 27: low-code apps (B-2201 to B-2208)
   api.use(appRoutes(s));
+  api.use(appEntityApiRoutes(s)); // 1.6.0, Sprint 39d (B-8601 to B-8603, B-8701, B-8702): after the app's own routes
   // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
   api.use(identityPolicyRoutes(s));
   // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
@@ -309,6 +332,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use('/api/public', publicChannelRoutes(s));
   app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicAppRoutes(s));
+  // 1.6.0, Sprint 39d (B-8701, B-8702): embed pages and their public endpoints (/embed/..., /api/public/embeds/...).
+  app.use(appEmbedPublicRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 

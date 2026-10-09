@@ -520,7 +520,8 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   /** Starts a run of the published version, or a dry run of the draft (mocked models and calls, no side effects). */
-  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string; chain?: RunChain }) {
+  /** 1.6.0 (B-8202): `caller` names what awaits the run (an app deployment); `onCallerDone` hears of its end. */
+  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string; chain?: RunChain; caller?: { kind: string; id: string; node: string } }) {
     const w = await this.workflow(p, id);
     let graph: WfGraph;
     if (input.dry) {
@@ -538,7 +539,7 @@ export class WorkflowService implements WorkflowToolRunner {
       const err = checkValue(input.input, trigger.output);
       if (err) throw new HttpProblem(400, 'Invalid request', `The run input does not match the trigger: ${err}.`);
     }
-    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label, ...(input.chain ? { chain: input.chain } : {}) });
+    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label, ...(input.chain ? { chain: input.chain } : {}), ...(input.caller ? { caller: input.caller } : {}) });
   }
 
   /**
@@ -1368,7 +1369,7 @@ export class WorkflowService implements WorkflowToolRunner {
     let extra: Record<string, unknown> = {};
     if (cfg.skills?.length) {
       // B-3902, B-4103: the skills' closure, its instructions and tools, through the dispatcher (steps/skills.ts).
-      const out = await modelWithSkills({ run, p, n, step, scope: c.scope, merged: c.merged ?? {}, input: c.input ?? null, label: c.label, signal: c.signal }, this.host, { skills: cfg.skills, messages, toolsCapable: r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld, chat: chatOnce, approverRole: cfg.approverRole ?? 'workflow-admin', approvalTimeoutMs: cfg.approvalTimeoutMs ?? 24 * 3_600_000 });
+      const out = await modelWithSkills({ run, p, n, step, scope: c.scope, merged: c.merged ?? {}, input: c.input ?? null, label: c.label, signal: c.signal }, this.host, { skills: cfg.skills, messages, toolsCapable: r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld, trustMarking: r.profile.trust_marking !== false, chat: chatOnce, approverRole: cfg.approverRole ?? 'workflow-admin', approvalTimeoutMs: cfg.approvalTimeoutMs ?? 24 * 3_600_000 });
       // B-4106: a held call pauses the step.
       if (out === WAIT) return WAIT;
       text = out.text;

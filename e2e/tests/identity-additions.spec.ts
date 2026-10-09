@@ -2,6 +2,8 @@ import { request as pwRequest, type Page } from '@playwright/test';
 import { test, expect, open, expectLive, confirmDialog, toast, ready, signedIn, settle } from './support/fixtures';
 import { authFile, serverState, type User } from './support/state';
 import { freshStep, totp } from './support/totp';
+import { expectAccessible } from './support/a11y';
+import { expectAxeClean } from './support/axe';
 
 // B-3413: the 1.4.0 identity additions on the live screens. Identity: the tenant's sign-up and MFA policy, sign-ups
 // waiting for approval, invitations, CSV imports, DID bindings, GitHub and AT-Protocol user stores. Settings: the
@@ -369,5 +371,51 @@ test.describe('Settings: trusted devices and the AT-Protocol account', () => {
     await confirmDialog(page, 'Forget all');
     await toast(page, '1 trusted device forgotten.');
     await expect(main).toContainText('No trusted devices');
+  });
+});
+
+test.describe('Identity: SCIM provisioning', () => {
+  // 1.6.0 (B-7201, B-7202): a SCIM store under Identity, its token shown once, a user provisioned with it, then revoked.
+  test('adds a SCIM store, makes a token shown once, provisions a user with it and revokes it', async ({ page, watch }) => {
+    const name = `SCIM ${uniq()}`;
+    await open(page, 'identity?tab=upstream');
+    await expectLive(page);
+    await page.locator('#main [data-scimstore]').first().click();
+    const modal = page.locator('#overlay .modal');
+    await modal.locator('[data-scimsname]').fill(name);
+    await modal.locator('[data-scimsave]').click();
+    await toast(page, `${name} added. Make a SCIM token next.`);
+    const section = page.locator('#main section.panel', { hasText: `SCIM provisioning: ${name}` });
+    await expect(section).toContainText('0 active of 0');
+    await section.locator('[data-scimtokennew]').click();
+    await page.locator('#overlay [data-scimname]').fill('e2e connector');
+    await page.locator('#overlay [data-scimmake]').click();
+    await toast(page, 'SCIM token made.');
+    const token = (await section.locator('[data-scimtoken]').innerText()).trim();
+    expect(token).toMatch(/^exai_scim1_[0-9a-f]{12}_/);
+
+    // The provider's side: create a user over SCIM 2.0 with the token.
+    const scim = await pwRequest.newContext({ baseURL: serverState().url });
+    const userName = `scim.${uniq()}@example.test`;
+    const created = await scim.post('/scim/v2/Users', { headers: { authorization: `Bearer ${token}`, 'content-type': 'application/scim+json' }, data: JSON.stringify({ schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'], userName, active: true, name: { givenName: 'Scim', familyName: 'User' } }) });
+    expect(created.status()).toBe(201);
+
+    await section.locator('[data-scimdone]').click();
+    await expect(section.locator('[data-scimtoken]')).toHaveCount(0);
+    await page.reload();
+    await ready(page, 'identity');
+    const again = page.locator('#main section.panel', { hasText: `SCIM provisioning: ${name}` });
+    await expect(again).toContainText('1 active of 1');
+    await expect(again).toContainText('scim.user.created');
+    await expect(page.locator('#toasts .toast')).toHaveCount(0, { timeout: 15_000 }); // measured once the toast has gone
+    await expectAccessible(page, 'identity, SCIM provisioning');
+    await expectAxeClean(page, 'aa', 'identity, SCIM provisioning');
+    await again.locator('[data-scimrevoke]').first().click();
+    await confirmDialog(page, 'Revoke');
+    await toast(page, 'e2e connector revoked.');
+    const refused = await scim.get('/scim/v2/Users', { headers: { authorization: `Bearer ${token}` } });
+    expect(refused.status()).toBe(401);
+    await scim.dispose();
+    void watch;
   });
 });

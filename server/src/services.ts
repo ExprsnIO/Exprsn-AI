@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import type { Logger } from 'pino';
 import { FILE_VARS, SERVER_ENV_NAMES, type Config } from './config/index.js';
 import type { Db } from './db/knex.js';
@@ -5,6 +6,9 @@ import { AuditLog } from './audit/chain.js';
 import { AuditCheckpoints } from './audit/checkpoints.js';
 import { ExportService } from './audit/exports.js';
 import { SiemForwarder } from './audit/siem.js';
+import { SiemDestinations } from './audit/siem-destinations.js';
+import { InventoryService } from './governance/inventory.js';
+import { AnalyticsService } from './tenancy/analytics.js';
 import { DenialAudit } from './audit/denials.js';
 import { IdentityChain } from './identity/chain.js';
 import { configureSecretPolicy, secretPolicy } from './identity/secrets.js';
@@ -41,12 +45,15 @@ import type { Guardrails } from './guardrails/types.js';
 import { createGuardrails, type GuardrailModule } from './guardrails/index.js';
 import { RegistryService } from './registry/service.js';
 import { ToolDispatcher } from './registry/dispatch.js';
+import { McpServerService } from './mcp/server/service.js';
 import { McpService } from './mcp/service.js';
 import { ScriptService } from './scripts/service.js';
 import { createScriptRunner } from './scripts/runner.js';
 import { AgentService } from './agents/service.js';
 import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
+import { RedTeamService } from './redteam/service.js';
+import { AgentIdentityService } from './agents/identity.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
 import { ChainRefs } from './chain/refs.js';
@@ -57,6 +64,7 @@ import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
+import { ContentCredentials } from './images/content-credentials.js';
 import { createBackends, type ImageBackend } from './images/backends.js';
 import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
@@ -78,6 +86,7 @@ import { TenantIntegrations } from './integrations/hosts.js';
 import { WebhookService } from './webhooks/service.js';
 import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
+import { ChatArtifacts } from './chat/artifacts.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -104,6 +113,11 @@ import { DatabaseLeases } from './vault/leases.js';
 import { createDbAdmins, type DbAdminFactory } from './vault/db-engines.js';
 import { RotationNotices } from './vault/rotation.js';
 import { RevealWatch } from './vault/anomalies.js';
+import { VaultShares } from './vault/shares.js';
+import { ScimService } from './identity/scim/service.js';
+import { DlpService } from './compliance/dlp.js';
+import { LegalHolds } from './compliance/holds.js';
+import { ComplianceExports } from './compliance/exports.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
@@ -135,6 +149,8 @@ import { CustomRoleService } from './authz/custom-roles.js';
 import { AccessService } from './authz/access.js';
 import { AccessReviewService } from './authz/reviews.js';
 import { ImportService } from './imports/service.js';
+import { InjectionDefence } from './guardrails/injection.js';
+import { HttpToolRunner } from './registry/http-tool.js';
 
 export interface Services {
   cfg: Config;
@@ -154,6 +170,12 @@ export interface Services {
   checkpoints: AuditCheckpoints;
   exports: ExportService;
   siem: SiemForwarder;
+  /** 1.6.0, Sprint 38a (B-7501): per-tenant audit streaming under dual control. */
+  siemDestinations: SiemDestinations;
+  /** 1.6.0, Sprint 38a (B-7301, B-7302): the AI system inventory. */
+  inventory: InventoryService;
+  /** 1.6.0, Sprint 38a (B-7401, B-7402): usage and cost analytics. */
+  analytics: AnalyticsService;
   tenants: TenantRepo;
   users: UserRepo;
   providers: ProviderRepo;
@@ -178,6 +200,10 @@ export interface Services {
   mcp: McpService;
   scripts: ScriptService;
   tools: ToolDispatcher;
+  /** 1.6.0 (B-8901): `impl: http` registry tools through the outbound address guard. */
+  httpTools: HttpToolRunner;
+  /** 1.6.0 (B-6902): the untrusted-content checkpoint, its counts per source and audit. */
+  injection: InjectionDefence;
   agents: AgentService;
   /** Workflow graphs, versions and durable runs (Sprint 8). */
   workflows: WorkflowService;
@@ -189,6 +215,10 @@ export interface Services {
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
   images: ImageService;
+  /** 1.6.0 (B-7901): C2PA content credentials for generated images. */
+  contentCredentials: ContentCredentials;
+  /** 1.6.0 (B-8001): versioned artifacts of chat answers. */
+  chatArtifacts: ChatArtifacts;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -224,6 +254,10 @@ export interface Services {
   agentSchedules: AgentSchedules;
   /** Sprint 21: eval sets, runs and the publish gate for profiles (B-1303). */
   evals: EvalService;
+  /** 1.6.0 Sprint 38b: red-team suites (B-7001, B-7002). */
+  redteam: RedTeamService;
+  /** 1.6.0 Sprint 38b: agent identities (B-7701). */
+  agentIdentities: AgentIdentityService;
   /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
   counters: CounterStore;
   /** Sprint 22 (B-1401): spans exported over OTLP/HTTP; a no-op without OTEL_EXPORTER_OTLP_ENDPOINT. */
@@ -258,6 +292,16 @@ export interface Services {
   rotation: RotationNotices;
   /** 1.6.0, Sprint 36b (B-4803): reveal history and anomaly flags for secret owners. */
   revealWatch: RevealWatch;
+  /** 1.6.0, Sprint 37c (B-4801): KV secrets shared with a principal, as policy grants. */
+  vaultShares: VaultShares;
+  /** 1.6.0, Sprint 37c (B-7201, B-7202): SCIM 2.0 users and groups pushed to a tenant's SCIM store. */
+  scim: ScimService;
+  /** 1.6.0, Sprint 38c (B-7601): DLP rules and patterns; answers, outputs and uploads classified and acted on. */
+  dlp: DlpService;
+  /** 1.6.0, Sprint 38c (B-7602): legal holds on users and workspaces, under dual control, suspending purges. */
+  legalHolds: LegalHolds;
+  /** 1.6.0, Sprint 38c (B-7603): compliance exports for eDiscovery, as sealed JSON Lines. */
+  complianceExports: ComplianceExports;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
@@ -300,6 +344,8 @@ export interface Services {
   feed: FeedService;
   /** 1.6.0 (B-4206): the Social and messaging screen: workspace policies, digest settings, legal-hold exports, realtime counts. */
   socialAdmin: SocialAdmin;
+  /** 1.6.0, Sprint 37b (B-7101): each workspace's MCP server: publications, the tool catalogue, calls and held calls. */
+  mcpServer: McpServerService;
   /** 1.5.0, Sprint 29 (B-3302): tenant-defined roles, versioned, under dual control when they hold admin permissions. */
   customRoles: CustomRoleService;
   /** 1.5.0, Sprint 29 (B-3303): the effective-access matrix, `explain` per cell, and "who can". */
@@ -336,6 +382,8 @@ export interface ServiceOverrides {
   /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
   dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
+  /** 1.6.0 (B-8204): git options for app packages (tests allow file:// repositories). */
+  appGit?: { allowFile: boolean; timeoutMs: number };
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
@@ -399,10 +447,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
+  // 1.6.0, Sprint 38c: DLP and legal holds read their collaborators lazily; chat, uploads, memory and files take them now.
+  const dlp = new DlpService(() => s);
+  const legalHolds = new LegalHolds(() => s);
+  attachments.dlp = dlp;
   const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine, {
     store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
     flags: guard.flags,
     notifications,
+    dlp,
+    legalHolds,
     leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000,
     // Sprint 16: a prompt a reviewer approved is answered for its owner; the guard model screens streamed answers.
     principalFor: async (tenantId, userId, workspaceId) => {
@@ -417,10 +471,15 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const registry = new RegistryService(db);
   const chainRefs = new ChainRefs(db, registry);
   registry.useRefs(chainRefs);
-  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS });
+  const mcp = new McpService(db, keys, registry, audit, notifications, log, { allowedHosts: cfg.MCP_ALLOWED_HOSTS, timeoutMs: cfg.MCP_TIMEOUT_MS, secret: cfg.SESSION_SECRET, callbackUrl: `${cfg.PUBLIC_URL.replace(/\/+$/, '')}/api/mcp-oauth/callback` });
   const scripts = new ScriptService(db, keys, jobs, bus, registry, () => s.guardrails, createScriptRunner(cfg), log);
   const tools = new ToolDispatcher(registry, mcp, scripts, calc, () => s.guardrails);
   chat.useTools(tools);
+  // 1.6.0 (B-6902, B-8901): tool results pass the untrusted-content checkpoint; HTTP tools go through the address guard.
+  const injection = new InjectionDefence(db, () => s.guardrails, audit);
+  tools.useInjection(injection);
+  const httpTools = new HttpToolRunner({ db, audit, log, policy: servicePolicy(cfg), tenantHosts: (t) => s.integrations.allowList(t), vault: (t, owner, ref, via) => s.vault.resolveFor(t, owner, ref, { via }), maxTimeoutMs: cfg.HTTP_TOOL_TIMEOUT_MS, maxResponseBytes: cfg.HTTP_TOOL_MAX_RESPONSE_BYTES });
+  tools.useHttp(httpTools);
   const chains = new ChainService(db, {
     maxDepth: cfg.CHAIN_MAX_DEPTH,
     kindCaps: { 'workflow-run': cfg.WORKFLOW_MAX_DEPTH, 'agent-run': cfg.AGENT_MAX_DEPTH },
@@ -433,13 +492,15 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : kind === 'app-deployment' ? await s.apps.pipelines.approvalDone(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
   tools.useWorkflows(workflows);
   // Sprint 34 (B-4102): agents delegate to agents through the dispatcher.
   tools.useAgents(agents);
   // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
   agents.chains = chains;
-  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : kind === 'redteam-run' ? await s.redteam.childDone(t, id) : undefined);
+  // 1.6.0 Sprint 38b (B-7701): a run of an agent with an identity acts within the identity's roles and ceiling.
+  agents.identity = (p, agentName) => s.agentIdentities.narrow(p, agentName);
   tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
@@ -453,13 +514,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
-  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  const images = new ImageService({ get c2pa() { return s.contentCredentials; }, db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
   const connections = new ConnectionService(db, keys, audit, checkpoint, { ...createDrivers(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), ...overrides.drivers }, overrides.dynamicCredentials !== undefined ? overrides.dynamicCredentials : createDynamicCredentials(cfg));
   const knowledge = new KnowledgeService(
-    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers },
+    { db, keys, blobs, jobs, gateway, vectors, audit, quotas, guard: checkpoint, connections, log, workspaces: async (p) => (effectivePermissions(p).has('tenant:manage') ? await tenants.workspaces(p.tenantId) : await tenants.workspacesForUser(p.tenantId, p.userId)).map((w) => w.id), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, classifiers: guard.classifiers, injection: () => s.injection },
     {
       maxBytes: cfg.ATTACHMENT_MAX_BYTES,
       ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}),
@@ -474,13 +535,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 36c (B-8802, B-8805): image cases of classifier datasets, and new vision classifier versions re-label images.
   guard.classifiers.blobs = blobs;
   guard.classifiers.onVersion.push(async (c) => void (await knowledge.classifierVersioned(c)));
-  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
+  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u), holds: legalHolds });
+  agents.dlp = dlp; // 1.6.0, Sprint 38c (B-7601): run outputs classified
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
   agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
   agents.memoryExtract = (e) => memory.onRun(e);
   memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
+  // 1.6.0 (B-8001): fenced blocks in a finished answer become artifacts (or versions of them).
+  chat.answerListeners.push((e) => void s.chatArtifacts.onAnswer(e).catch((err: Error) => log.warn({ err: err.message, message: e.messageId }, 'artifact extraction failed')));
   const s: Services = {
     cfg,
     db,
@@ -498,6 +562,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     checkpoints: new AuditCheckpoints(db, audit, kms, blobs, `${cfg.OPENBAO_KEY_PREFIX}audit-checkpoints`),
     exports: new ExportService(db, audit, blobs, keys, jobs),
     siem,
+    siemDestinations: new SiemDestinations(db, audit, keys, log, { policy: servicePolicy(cfg), hostname: hostname(), maxPerTenant: cfg.SIEM_TENANT_MAX_DESTINATIONS }),
+    inventory: new InventoryService(db, audit),
+    analytics: new AnalyticsService(db),
     tenants,
     users,
     providers,
@@ -516,6 +583,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     guardrails: guard.engine,
     guard,
     registry,
+    injection,
+    httpTools,
     mcp,
     scripts,
     tools,
@@ -545,6 +614,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS, endpointConcurrency: Math.max(1, Math.floor(cfg.JOB_CONCURRENCY / 2)) }),
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
+    chatArtifacts: new ChatArtifacts(() => s),
+    contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
@@ -552,6 +623,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
     agentSchedules: new AgentSchedules(() => s),
     evals: new EvalService(() => s),
+    redteam: new RedTeamService(() => s),
+    agentIdentities: new AgentIdentityService(() => s),
     counters,
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
@@ -571,6 +644,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     dbLeases: new DatabaseLeases(() => s, { admins: overrides.dbAdmins ?? createDbAdmins(parseAllowList(cfg.CONNECTIONS_ALLOWED_HOSTS)), defaultTtlS: cfg.VAULT_LEASE_DEFAULT_TTL_SECONDS, maxTtlS: cfg.VAULT_LEASE_MAX_TTL_SECONDS, sweepSeconds: cfg.VAULT_LEASE_SWEEP_SECONDS }),
     rotation: new RotationNotices(() => s, { checkMinutes: cfg.VAULT_ROTATION_CHECK_MINUTES, noticeDays: cfg.VAULT_ROTATION_NOTICE_DAYS }),
     revealWatch: new RevealWatch(() => s),
+    vaultShares: new VaultShares(() => s),
+    scim: new ScimService(() => s),
+    dlp,
+    legalHolds,
+    complianceExports: new ComplianceExports(() => s),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
     // 1.4.0, Sprint 26d: the file store.
@@ -592,7 +670,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     feedGenerators: new FeedGenerators(() => s, { maxPerTenant: cfg.FEEDS_MAX_PER_TENANT, itemsMax: cfg.FEED_ITEMS_MAX }),
     // 1.5.0, Sprint 31: the PDS.
     pds: new PdsService(() => s),
-    apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH }),
+    apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH, git: overrides.appGit ?? { allowFile: cfg.APPS_GIT_ALLOW_FILE, timeoutMs: cfg.APPS_GIT_TIMEOUT_MS } }),
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
@@ -611,6 +689,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     // 1.4.0, Sprint 28c: the workspace feed.
     feed: new FeedService(() => s),
     socialAdmin: new SocialAdmin(() => s),
+    mcpServer: new McpServerService(() => s),
     // 1.5.0, Sprint 29: custom roles, effective access and access reviews.
     customRoles: new CustomRoleService(() => s),
     access: new AccessService(() => s),
@@ -641,6 +720,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await gateway.stop();
       await calc.close();
       siem.close();
+      await s.siemDestinations.close(); // 1.6.0, Sprint 38a (B-7501)
       await s.instances.stop();
       await jobs.stop();
       await chain.close();
@@ -688,6 +768,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
+  s.redteam.registerJobs(); // 1.6.0 Sprint 38b (B-7001)
   s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
   s.pluginRuntime.registerJobs(); // Sprint 25 (B-2003, B-2004): plugin invocations
   s.pluginRuntime.listen();
@@ -695,6 +776,12 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.dbLeases.registerJobs();
   s.rotation.registerJobs();
   s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.registerJobs(); // 1.6.0, Sprint 37c (B-4801): expired shares removed
+  s.exports.checkpoints = s.checkpoints; // 1.6.0, Sprint 38a (B-7501): JSONL exports sign their window's end
+  s.registry.publishGate = (t, kind, id) => s.inventory.assertPublishable(t, kind, id); // 1.6.0, Sprint 38a (B-7301)
+  void s.siemDestinations.start().catch((err) => log.warn({ err: (err as Error).message }, 'SIEM destinations did not start')); // 1.6.0, Sprint 38a (B-7501)
+  s.scim.registerJobs(); // 1.6.0, Sprint 37c (B-7202): group mappings re-applied to a SCIM store
+  s.complianceExports.registerJobs(); // 1.6.0, Sprint 38c (B-7603): compliance exports written
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));
@@ -825,6 +912,7 @@ export function startSchedules(s: Services): void {
   s.dbLeases.schedule(s.scheduler); // Sprint 25 (B-1704): the lease expiry sweeper
   s.rotation.schedule(s.scheduler); // Sprint 25 (B-1706): rotation notices
   s.revealWatch.schedule(s.scheduler); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
+  s.vaultShares.schedule(s.scheduler); // 1.6.0, Sprint 37c (B-4801)
   s.atproto.schedule(s.scheduler); // Sprint 25 (B-1611): labels from trusted external labelers
   s.feedGenerators.schedule(s.scheduler); // Sprint 31 (B-3003): feed indexes pruned to their retention
   s.files.schedule(s.cfg.FILES_PURGE_MINUTES, activeTenants); // Sprint 26d (B-2401): the trash purge
@@ -832,6 +920,7 @@ export function startSchedules(s: Services): void {
   s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.apps.sources.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // 1.6.0, Sprint 39c (B-8501): pulls from outside tables
   s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests

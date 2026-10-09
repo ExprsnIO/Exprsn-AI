@@ -49,6 +49,12 @@ export const ALLOWED_ATTRIBUTES: ReadonlySet<string> = new Set([
   'exprsn.label',
   'gen_ai.operation.name',
   'gen_ai.request.model',
+  // 1.6.0, Sprint 38a (B-7403): the GenAI semantic conventions' usage and response attributes on model spans, so
+  // token counts travel with the trace to Grafana and other backends. Never the prompt or the answer.
+  'gen_ai.provider.name',
+  'gen_ai.response.model',
+  'gen_ai.usage.input_tokens',
+  'gen_ai.usage.output_tokens',
   'error.type'
 ]);
 

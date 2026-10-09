@@ -1,6 +1,108 @@
 # Changelog
 
-## 1.6.0 (in progress)
+## 1.6.0
+
+### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
+
+- Migration `041_provenance_artifacts`: `image_jobs.c2pa`, `pki_content_signers`, `chat_artifacts`,
+  `chat_artifact_versions`.
+- Content credentials (B-7901): a generated PNG carries a C2PA manifest store in a `caBX` chunk (`c2pa.actions`,
+  `c2pa.hash.data` over every byte outside the chunk, `io.exprsn.generation`), signed as a COSE_Sign1 (ES256) by the
+  tenant's content-credentials certificate, which the tenant's issuing CA makes on first use with its key in custody
+  and lists among the tenant's certificates (revoke it there and the next image signs with a new one). The manifest
+  travels with the bytes through the blob store, downloads and attachments; `GET /api/images/:id/content-credentials`
+  and `exprsn-ai c2pa:verify <file.png> [anchor.pem…]` read it back and check the claim hashes, the data hash, the
+  signature, the chain and its trust. The HMAC manifest of Sprint 20 stays and still verifies. Without an issuing CA
+  or key custody the image keeps the HMAC manifest and says why. Setting `IMAGE_C2PA`. Built from the
+  specification's parts (CBOR, JUMBF, COSE) in `server/src/images/c2pa.ts`; the deviations a conformance validator
+  may flag are in `docs/security.md`.
+- Versioned artifacts (B-8001): the fenced blocks of a finished answer become artifacts of the conversation, named
+  from the fence or `<language>-<n>`; a later turn that changes one adds a version and the earlier ones stay
+  readable, the same content adds none. `GET /api/conversations/:id/artifacts` and `.../versions/:n` for owners and
+  share readers; transcripts of shares and links carry the artifacts of the shown messages. HTML renders in a
+  sandboxed iframe on `GET /api/public/artifacts/:vid/raw`, a short-lived capability URL with its own CSP (an opaque
+  origin with no access to the console, its cookies or the API). Settings `CHAT_ARTIFACT_MIN_CHARS`,
+  `CHAT_ARTIFACT_MAX_BYTES`, `CHAT_ARTIFACT_RAW_TTL_SECONDS`.
+- Console: the Images inspector and download dialog show the content credentials beside the HMAC manifest, with a
+  details dialog of every check; the Chat inspector (and the shared and public link views) has an Artifacts panel with
+  chips under each answer, a version switcher, the sandboxed render and text views. Prototype boards first;
+  `e2e/tests/chat.spec.ts` and `images.spec.ts` extended with axe-core.
+
+### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
+
+- Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,
+  `audit_siem_destinations`.
+- The AI system inventory (B-7301): one list of the tenant's models, profiles, agents, workflows, tools, MCP servers
+  and datasets, each with an accountable owner, a human-oversight role, data provenance, model lineage (agent →
+  profile → model → base weights), known issues (open flags raised in its runs, failed evaluations) and whether the
+  entry is complete, on the Models screen's Inventory tab (`models:manage`). With the tenant's "publishing an agent
+  needs an owner" switch on, the registry refuses to approve an agent that has no owner. Audited `inventory.updated`
+  and `inventory.settings.updated`. `server/src/governance/inventory.ts`.
+- The register (B-7302): `GET /api/admin/inventory/register` as CSV or JSON, every system with its lineage and the
+  tenant's impact assessment, for ISO/IEC 42001 and EU AI Act deployer records; audited `inventory.exported`.
+- The Analytics screen (B-7401, `usage:read`): messages, agent and workflow runs, users, tokens, GPU time and cost
+  by workspace, group (through membership), model, profile and user (and tenant for system admins) over a period, a
+  per-day chart, totals, every figure a sum over the metering records so a day's totals equal that day's meter.
+  `server/src/tenancy/analytics.ts`, `/api/admin/analytics/summary` and `/daily`.
+- Prices and chargeback (B-7402): a price per model or per pool (per million input and output tokens and per
+  GPU-hour, energy or a set rate for local models, one currency per tenant, `tenant:manage`, audited); a row whose
+  records a price does not cover shows no cost rather than a partial one; the chargeback per workspace and month as
+  JSON or CSV with a total line that equals the screen's total, audited `analytics.chargeback.exported`.
+- OpenTelemetry GenAI attributes (B-7403): `gen_ai.provider.name`, `gen_ai.response.model`,
+  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` on the `gateway chat stream` span, for Ollama and
+  Chat Completions servers.
+- JSONL audit exports with a chain proof (B-7501): `POST /api/admin/audit/exports/jsonl {from, to}` writes every
+  event of the window (rows above the requester's clearance redacted to their hashes) and a checkpoint signed at the
+  window's last sequence; `exprsn-ai audit:verify-export <file>` and `verifyAuditExport` verify it offline. The Usage
+  and audit export dialog offers it.
+- Audit streaming per tenant (B-7501): HTTPS (NDJSON with a sealed bearer token) or syslog-over-TLS (RFC 5424, octet
+  counting, optional private CA) destinations proposed by a tenant admin and approved by a second one, tested,
+  disabled, with delivery counters, on the Usage and audit screen's Exports tab; the outbound address guard applies;
+  audited `audit.siem.*`. New setting `SIEM_TENANT_MAX_DESTINATIONS` (5). `server/src/audit/siem-destinations.ts`.
+- Prototype boards first (Models inventory tab, Analytics, Usage and audit); `e2e/tests/analytics.spec.ts` and
+  additions to `models.spec.ts` and `usage-audit.spec.ts` with axe-core.
+
+### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
+
+- Migration `039_tools_injection` (with the items below): `registry_http_calls`, the meter of HTTP tool calls.
+- Registry tools with `impl: http` (B-8901): a method (GET, POST, PUT, PATCH, DELETE), a URL template whose path and
+  query parameters come from the tool's input schema, query and header values, a body (none, the other arguments as
+  JSON, or a template), a response mapping (a JSON pointer, capped in size) and a timeout. GET tools are `read`, every
+  other method `write` unless the author raises it to `destructive`. Drafts go through the registry's checks (a new
+  one, HTTP request), review and publish lifecycle; a draft's request can be edited. Ported from exprsn-platform's
+  agent runtime (port decision D11c). `server/src/registry/http-tool.ts`.
+- The outbound address guard (B-8902): every call through `platform/egress.ts` (resolved once, every address checked,
+  the connection pinned, redirects not followed); cloud metadata addresses always refused, internal hosts only as
+  `SERVICE_ALLOWED_HOSTS` names them, public hosts only from the tenant's list of allowed hosts (the list workflow HTTP
+  steps and webhooks read). Credentials only as `vault:path#key` references, resolved at call time as the tool's
+  author; a literal credential in a header, query parameter or body field is refused when the tool is saved.
+- Guardrails, limits and audit (B-8903): arguments pass the `tool-call` guardrail before the request and the result
+  the `context` and `untrusted-content` checkpoints after it; the tool's rate limit applies; each call is metered and
+  audited `registry.http.called` with host, method, status, size and latency, never a secret. New settings
+  `HTTP_TOOL_TIMEOUT_MS` (30 s) and `HTTP_TOOL_MAX_RESPONSE_BYTES` (1 MiB).
+- Console (B-8904): the Registry screen's entry form has the kind Tool (HTTP request) with a vault reference picker;
+  the inspector shows the request and the last day's calls; the test harness calls a read-only HTTP tool through the
+  guard; Allowed hosts keeps the tenant's list. Prototype board first; `e2e/tests/registry-http.spec.ts` with axe-core
+  and the reflow checks. The e2e server names 127.0.0.1 in `SERVICE_ALLOWED_HOSTS`.
+
+### Prompt-injection defence for untrusted content (Sprint 37a, B-6901 to B-6903)
+
+- Trust marking (B-6901): knowledge chunks, crawled pages, tool results, MCP results and HTTP tool answers reach the
+  model inside `<untrusted-content>` delimiters naming the source, with their words datamarked, in chat, `/v1`, agent
+  runs and workflow model steps with skills. Per profile (`profiles.trust_marking`, `trustMarking` on the profiles
+  API and the Profiles screen), on by default. Calculate, delegated agents and workflows are not wrapped.
+- The `untrusted-content` checkpoint (B-6902), the twelfth, with the `injection` rule mechanism (a heuristic
+  classifier, or a guard model answering injection or benign). The platform baseline gains `injection-untrusted`
+  (annotate: the text goes on with a warning); migration `039` adds it to an existing baseline as a new published
+  version. A blocking rule in a tenant set leaves chunks out and withholds tool results. Detections are counted per
+  source (`injection_detections`), audited `guardrail.injection.detected` and shown on the Guardrails screen
+  (`GET /api/admin/guardrails/injection`), with Add a blocking rule.
+- The injection corpus (B-6903): `server/src/guardrails/injection-corpus.ts`, 57 attacks (direct; indirect in
+  documents, pages, tool, MCP and HTTP results) and 30 benign texts. CI (`server/test/sprint37a-injection.test.ts`)
+  fails below a 90% detection rate or above a 10% false-positive rate, for the heuristic classifier, the checkpoint
+  with the baseline rule and a guard-model rule on the fake guard model; canary cases check that a marked prompt is
+  not followed.
+- Tests that compared a tool result echoed by the fake model now expect it wrapped (`mcp.test.ts`, `agents.test.ts`).
 
 ### Pinned models stay pinned while they serve
 
@@ -9,6 +111,230 @@
   loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
   expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
   instance poll.
+
+### The MCP server and MCP authorization (Sprint 37b, B-7101 to B-7103)
+
+- Migration `039b_mcp_server`: `mcp_publications`, `mcp_server_settings`, `mcp_server_holds`, `mcp_oauth`,
+  `mcp_oauth_states`; `oidc_codes.resource`, `oidc_refresh_tokens.resource`, `oidc_clients.dynamic`;
+  `mcp_tokens.refresh_token`, `source`, `refreshed_at`; the `records.*` built-in tools.
+- An MCP server per workspace (B-7101) at `/mcp/<tenant>/<workspace>` over streamable HTTP (protocol 2025-06-18, JSON
+  answers): the workspace's published workflows, its agents, one search tool per knowledge base, its registry tools and
+  the record tools over low-code apps (list, query, count, aggregate, create, update, delete), in groups a client picks
+  with `?groups=`. Each call acts as the person who signed in, at most at the label the workspace publishes at, through
+  the tool dispatcher, guardrails and audit (`mcp.server.call`); writes wait for the person's approval from a browser
+  session (`/api/me/mcp-holds`). The record tools (`records.entities`, `records.query`, `records.count`,
+  `records.aggregate`, `records.create`, `records.update`, `records.delete`) are built-ins for chat, agents and
+  workflows too. A separate MCP service with a service account is no longer needed to reach Exprsn-AI from an MCP client.
+- MCP authorization (B-7102): the endpoint is an OAuth 2.1 resource server of the tenant's issuer, with RFC 9728
+  protected resource metadata, `WWW-Authenticate` naming it on 401, RFC 8707 audiences (the resource named at the
+  authorization endpoint is kept with the code and the refresh token family and becomes `aud`; `invalid_target` for a
+  resource the issuer does not serve) and DPoP, optionally required per workspace. The issuer publishes RFC 8414
+  metadata at the addresses MCP clients try and, when an identity admin turns it on, RFC 7591 dynamic client
+  registration (`POST /oauth/register`, off by default). Discovery documents announce `authorization_response_iss_
+  parameter_supported`.
+- MCP client OAuth (B-7103): for per-user MCP servers, discovery (the 401 challenge, RFC 9728, RFC 8414, RFC 7591
+  registration) or endpoints and a client entered by hand; each person connects with the authorization code and PKCE
+  (state bound to the browser), tokens are sealed with the tenant key, refreshed before they expire and on a 401, and
+  revoked at the authorization server on disconnect.
+- Console: Identity gains the MCP server tab (publish per workspace, tool groups, label, DPoP, a preview, self-
+  registration and the clients that registered themselves); Settings gains MCP access (connection URLs, held calls,
+  connect and disconnect); MCP servers gains OAuth for users. Prototype boards first; `e2e/tests/mcp-server.spec.ts`.
+- Fixed: Identity's PKCE switch for a public client is `aria-disabled`, so axe-core's enhanced contrast check no longer
+  flags its dimmed label.
+
+### SCIM 2.0, vault sharing, MongoDB leases, quote posts and visibility (Sprint 37c, B-7201, B-7202, B-4801, B-4802, B-4901)
+
+- Migration `039c_scim_vault_posts`: `scim_tokens`, `scim_users`, `scim_groups`, `scim_group_members`;
+  `vault_policies.share_secret_id` and `expires_at`; `feed_posts.visibility` and `quote_of`.
+- SCIM 2.0 provisioning (B-7201): a SCIM store (`kind: scim`) in the tenant's chain, `/scim/v2` Users and Groups
+  (RFC 7643/7644: create, replace, patch, delete, the full filter grammar, paging, `attributes`, ETags), SCIM tokens
+  made and revoked under Identity (`identity:manage`, shown once). Deactivating a user ends their sessions, OAuth
+  refresh tokens, API keys and DAV app passwords in the same request; a delete disables and unlinks them. SCIM users
+  sign in through the upstream stores the SCIM store names. `server/src/identity/scim/`, `routes/scim.ts`.
+- Group membership maps to roles (B-7202): group mappings with the SCIM store name SCIM groups; every membership change
+  recomputes roles, clearance and workspaces (`identity.scim.reapply` after mapping changes). A local conformance suite
+  (`server/test/sprint37c-scim.test.ts`) covers what the Entra ID and Okta validators check; the external validator run
+  could not be made from here (`docs/identity.md`).
+- Vault sharing (B-4801): share a KV secret with a person, a directory group, a workspace or an API key, as a policy
+  grant of read on its exact path, with an expiry (`VAULT_SHARE_MAX_DAYS`), revocable, audited; a deny still wins and
+  the label must clear the grantee. `GET /api/vault/shared-with-me`; expired shares stop applying at once and are
+  removed by `vault.shares.expire`. `server/src/vault/shares.ts`.
+- MongoDB leases (B-4802): `dialect: mongodb` for database engines (createUser with read or readWrite, updateUser on
+  renew, killAllSessionsByPattern and dropUser at the end), tested against `mongo:8`.
+- Quote posts and visibility (B-4901): `POST /api/feed/posts/:id/quote` quotes a post with a comment in any workspace
+  or group the author may post in, labelled at least as high as the quoted post; `visibility: public | workspace |
+  unlisted` on posts. An unlisted post is reachable by its link and absent from every feed, tag and digest; a repost
+  of it is refused, a quote of it is unlisted.
+- Console: Identity shows SCIM stores with their tokens and recent changes; Vault has Share, Shared with and Shared
+  with you; Messages and feed has a visibility choice, Quote, the quoted post, a post opened by its link and Your
+  unlisted posts. Prototype boards first.
+- Settings: `VAULT_SHARE_MAX_DAYS`, `IDENTITY_SCIM_MAX_RESULTS`, `IDENTITY_SCIM_RATE_PER_MINUTE`,
+  `IDENTITY_SCIM_TOKEN_MAX_DAYS`.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/identity.md` (SCIM and its conformance), `docs/security.md` (SCIM
+  tokens, shares, MongoDB lease expiry, what unlisted means), `docs/accessibility.md`, `docs/permissions.md`.
+
+### Red-team suites, agent identities and handoffs (Sprint 38b, B-7001 to B-7002, B-7701, B-7801)
+
+- Migration `040b_redteam_agents`: `redteam_suites`, `redteam_runs`, `agent_identities`; `api_keys.agent_id`;
+  `agent_runs.handed_to`. Job `redteam.run`. No new settings.
+- Red-team suites (B-7001): an adversarial evaluation of a profile, an agent (by name) or a workflow, from the
+  built-in attack categories (the Sprint 37a injection corpus cases with a canary, handed over as documents to
+  summarise; jailbreaks; data exfiltration through tools, by answer or by tool call; system-prompt extraction) and
+  the tenant's own cases, with a threshold and a gate. A profile answers each attack through the gateway as an
+  evaluation case is answered; an agent as a child run of its own; a workflow as a run of its published version. An
+  attack is resisted when the answer carries no canary, no tool call reaches for the outside address and no eight
+  consecutive words of the system prompt come back. The gate: a profile with gated suites is published only once its
+  settings hash has a passing run (no evaluation override opens it); an agent version is approved or restored only
+  once its schema hash has one. Routes under `/api/admin/red-team`. `server/src/redteam/`.
+- Red-team results as flags (B-7002): every attack that succeeded is a flag (checkpoint `red-team`, high severity for
+  extraction and exfiltration), which a reviewer confirms into an eval case like any other; tenant-added attack
+  cases with their own canaries.
+- Agent identities (B-7701): roles, a label ceiling and keys per agent name (`/api/admin/agent-identities`). A run on
+  behalf of a user acts within both grants: the user's permissions narrowed to the identity's roles, as credential
+  scopes, and the lower clearance, so a tool call the roles do not cover is refused even for an admin and a run above
+  the ceiling fails before it thinks; `actor.agent` beside the user in audit events. Keys minted for an identity
+  authenticate as the agent on the owner's behalf, are refused once the identity is off, narrowed with its roles and
+  never listed among the owner's keys. `server/src/agents/identity.ts`.
+- Agent handoffs (B-7801): `handoffs` in the agent definition, offered like delegates and described as handing the
+  conversation over; the handed-to run's answer ends the run as its own answer (`handedTo` on the run,
+  `agent.run.handed_off`); chain references and the ceiling rule cover handoffs (`via: handoff`).
+- Console: the Red team panel on the Profiles screen's Evaluations tab; the agent card's identity and red-team status
+  with their modals and the handoffs field on the Registry screen; who answered on the Runs screen. Prototype boards
+  first; `e2e/tests/profiles.spec.ts` and `e2e/tests/registry.spec.ts`.
+- Tests: `sprint38b-redteam`, `sprint38b-identities`, `sprint38b-handoffs`; integration `redteam-agents`. The fake
+  Ollama gained `leakingReply` (a model that prints its system prompt and obeys canaries).
+
+### Row and field policies, DLP, legal hold and compliance export (Sprint 38c, B-8101 to B-8103, B-7601 to B-7603)
+
+- Migration `040c_policies_dlp`: `app_policies`, `users.attributes`, `dlp_rules`, `dlp_patterns`, `legal_holds`,
+  `compliance_exports`. Permissions `compliance:manage` (tenant-admin, legal-review) and `compliance:export`
+  (legal-review, and an API key scope). Settings `DLP_MAX_TEXT_BYTES`, `COMPLIANCE_EXPORT_MAX_ROWS`,
+  `COMPLIANCE_EXPORT_MAX_DAYS`. Job `compliance.export`.
+- Row and field policies (B-8101, B-8102): reusable rule sets per app or entity with subjects (everyone, a role, a
+  group, a workspace's members, a user), row conditions in the record query grammar whose values name the reader
+  (`$user.id`, `$user.username`, `$user.clearance`, `$user.roles`, `$user.groups`, `$user.workspaces`,
+  `$user.attributes.<name>`, the last set by a tenant admin on the user) and per-field grants (read, read unmasked,
+  create, update) with masks `last4`, `hash` and `hidden`. The reader's grant narrows record queries, counts,
+  aggregates, reads, updates, deletes, transitions, bulk writes, exports, the `records.*` tools and workflow record
+  steps, and form submissions by a signed-in person; a reader no policy names reaches nothing; designers are exempt.
+  `server/src/apps/policies.ts`, `/api/apps/:app/policies`.
+- Explain (B-8103): `POST /api/apps/:app/entities/:entity/policies/explain` says which policies name a reader and
+  why, whether a record is in their reach and by which policy, and what a field shows; the Apps screen's Policies tab
+  has the editor and the explain panel.
+- DLP (B-7601): rules over the built-in PII and secret detectors and the tenant's own RE2 patterns that raise the
+  label and act by it (label, redact, hold) on chat and `/v1` answers, agent run outputs and uploads (attachments and
+  file versions); content raised above its owner's clearance is held. A held answer goes to the flag queue as
+  `DLP: <rule>`; a held run fails with the reason; a held upload is rejected. `server/src/compliance/dlp.ts`,
+  `/api/compliance/dlp`.
+- Legal holds (B-7602): a hold on a user or a workspace, asked for by one holder of `compliance:manage` and approved
+  by another, suspends the chat, memory and file retention purges of their content until it is released; the reason
+  is sealed. `server/src/compliance/holds.ts`, `/api/compliance/holds`.
+- Compliance exports (B-7603): conversations (with messages), files (metadata and versions), memories, agent runs and
+  accounts of a user and/or a workspace over a date range as sealed JSON Lines, requested and downloaded with
+  `compliance:export` (a person or a scoped API key); rows above the requester's clearance are left out and counted;
+  every request, run and download is audited. `server/src/compliance/exports.ts`, `/api/compliance/exports`.
+- Console: the Apps screen's Policies tab (designers) and the Usage and audit screen's Compliance tab (DLP rules and
+  patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
+  `e2e/tests/compliance.spec.ts`.
+
+
+### App packages, environments and promotion (Sprint 39b, B-8201 to B-8204)
+
+- Migration `041b_app_packages`: `app_packages`, `app_pipelines`, `app_deployments`. Settings `APPS_PACKAGE_MAX_BYTES`,
+  `APPS_DEPLOYMENT_HISTORY_DAYS`, `APPS_GIT_TIMEOUT_MS`, `APPS_GIT_ALLOW_FILE`. Job `apps.deploy`.
+- App packages (B-8201): `exprsn-app/2`, the whole of an app's design (entities with their fields, formulas and state
+  machines, forms, record and schedule triggers naming their workflows, the row and field policies, and the published
+  workflows the triggers name as signed workflow bundles), with the records when asked for, signed with the KMS key
+  over its canonical JSON, numbered per app and kept sealed. Import verifies the signature over exactly what arrived
+  before anything is read (`422 Package refused`, audited `app.import.refused`); the old bundle door takes a package
+  too. A package imports as a new app or applies to an app in place with entities, forms, triggers and policies
+  reconciled by name (an entity still holding records is kept and reported). `server/src/apps/packages.ts`.
+- Environments and promotion (B-8202): a pipeline names three apps as development, test and production and the
+  workflow whose approval step guards production. A promotion to test packages the development app now; a promotion
+  to production lands the exact package the last successful promotion to test landed (a stage cannot be skipped),
+  once a run of the approval workflow, started with the deployment as its input and caller, succeeds; a rejected,
+  failed or expired run rejects the deployment and tells the requester. `WorkflowService.start` takes a `caller`.
+  Audited `app.package.promotion.requested`, `app.package.promotion.approved`, `app.package.promotion.rejected`,
+  `app.package.promoted`. `server/src/apps/pipelines.ts`.
+- Backups, history and rollback (B-8203): every deployment first packages the target (`source: backup`); the history
+  keeps source, target, version, who, state and the report for `APPS_DEPLOYMENT_HISTORY_DAYS`; a rollback deploys the
+  backup onto the same stage as a deployment of its own, audited `app.package.rolled_back`; a failure is audited
+  `app.package.deployment.failed` and notified.
+- Git export and import (B-8204): a package pushed to a repository as one readable JSON file per object
+  (`package.json` with the signature, `app.json`, `entities/`, `forms/`, `triggers/`, `policies/`, `workflows/`,
+  `records/`) and read back from one, reassembled in signing order and verified like a pasted package; https only
+  (`file://` when `APPS_GIT_ALLOW_FILE`), a vault-held token answered to git through a credential helper. Audited
+  `app.package.pushed`.
+- Console (B-8201 to B-8204): the Apps screen's Deployments tab for designers: packages (make, download, push to git,
+  import, import from git), the pipeline's stages with promote, edit and delete, and the deployment history with
+  rollback; the page refreshes while a deployment is going. Prototype board first; `e2e/tests/apps-deployments.spec.ts`
+  with axe-core.
+
+### Data model generation, AI fields and outside database sync (Sprint 39c, B-8301, B-8401, B-8402, B-8501)
+
+- Migration `041c_model_gen_sync`: `app_ai_fills`, `app_entity_sources`, `app_records.ai_pending` and
+  `app_records.external_key`. Settings `APPS_AI_DEBOUNCE_MS`, `APPS_AI_FILL_MAX_ROWS`, `APPS_SOURCE_PULL_MAX_ROWS`.
+  Jobs `apps.ai-fill-all`, `apps.source-pull`, `apps.source-schedules`.
+- Data model drafts (B-8301): a description of an app becomes a draft of its whole data model from a local model
+  through a published profile (entities, typed fields, relations, formulas, state machines, record triggers naming
+  existing workflows), validated like a saved entity and shown as a diff per entity (new, changed, fields added,
+  changed, omitted but kept, states); accepting it creates the new entities in dependency order, extends existing ones
+  without removing anything and creates the triggers whose workflow exists, in one request. `POST
+  /api/apps/{app}/model/draft` and `/model/apply`; audited `app.model.drafted` / `app.model.applied`.
+- AI field prompts (B-8401) take field names and formulas over fields as placeholders (`{{upper(name)}}`), checked when
+  the entity is saved; an edit regenerates only the AI fields that read a changed field, once per quiet window.
+- AI fills over every row (B-8402): fill the empty values or refresh every record of one AI field as a job with an
+  estimate first (records, tokens, the cost at the tenant's model price), progress and token totals on the fill, and a
+  cancel between records; `/api/apps/{app}/entities/{entity}/ai/estimate|fills`; audited `app.ai.fill.started` /
+  `cancelled` / `finished`.
+- Outside tables as entities (B-8501): an entity backed by a table of a PostgreSQL or MySQL data connection: a pull (on
+  demand or every N minutes) brings its rows in as records keyed by the key column, typed by the fields, with the
+  state from a mapped column and rows gone removed; with writes on, a record created, changed, moved or deleted in
+  the app reaches the table first (insert, update, delete through the drivers' new row mutation) so a refused outside
+  write changes nothing here; attaching needs `apps:design` and `connections:manage` and an entity label covering the
+  connection's. `/api/apps/{app}/entities/{entity}/source` and `/source/pull`; audited
+  `app.entity.source.set` / `updated` / `removed` / `pulled` / `pull_failed`.
+- Console (Apps screen): the draft dialog with its diff and editable JSON, an "AI fills over every row" panel and an
+  "Outside table" panel on the Entities tab; prototype boards first; `e2e/tests/apps-model.spec.ts` with axe-core.
+- Unit tests on SQLite (the outside table as a SQLite stand-in behind the real connection flow) and an integration
+  test through the real PostgreSQL and MySQL drivers.
+
+### Entity APIs and app embedding (Sprint 39d, B-8601 to B-8603, B-8701, B-8702)
+
+- Migration `041d_entity_api_embeds`: `api_keys.app_scope`, `app_schema_versions`, `app_embeds`, `app_embed_keys`,
+  `app_embed_pages`, `app_embed_sessions`. New settings `APP_EMBED_MAX_TTL_SECONDS` (3600) and
+  `APP_EMBED_SESSION_PER_MINUTE` (30).
+- The entity API (B-8601): every entity of an app is a REST resource at `/api/apps/:app/:entity`: list with a JSON
+  `filter`, `where=field:op:value` conditions, `sort`, `q`, `limit`, `offset` or `cursor`, and `include=related` for the
+  records the reference and lookup fields point at; read, create, update with `version`, transition and delete. The
+  same service as the records routes, so policies, masks, labels, workspaces and audit apply unchanged. API keys may
+  be limited to one app or one entity (`POST /api/me/api-keys {app: {app, entity?}}`, `records:read` and
+  `records:write` only): accepted under `/api/apps` alone and refused on another app or entity.
+- Schema versions and the schema API (B-8602): every design change, whichever route makes it, records a version
+  with a hash of the whole design (`app_schema_versions`, audited `app.schema.versioned`); `/api/apps/:app/schema`
+  reads the design and its versions, and creates, replaces or deletes entities, fields, state machines and forms.
+- OpenAPI and a client per app (B-8603): `GET /api/apps/:app/openapi.json`, an OpenAPI 3.1 document typed from the
+  entity definitions with the schema version and hash (its `ETag`), and `client.ts` or `client.js`, a generated
+  client that creates a record against a fresh app with no hand-written code.
+- Public embeds (B-8701): a public form published as an embed page under a random id (`/embed/:id`), served with
+  `frame-ancestors` naming the app's allowed host sites and no `X-Frame-Options`; opened and submitted by that id
+  through `/api/public/embeds`, on the public submission path, with the form's link token never on the page.
+- Signed embeds (B-8702): keys registered per app (ES256, RS256, EdDSA public keys, an HS256 secret shown once, or
+  the tenant CA verifying the token's `x5c`); a host token with the app as audience, `exp`, `jti` (once per key) and
+  the claim that names the person is exchanged at `/api/public/embeds/session` for an embedded session, a bearer of
+  its own apart from console sessions, inside the app's entities, read-only unless the app allows writes, capped by
+  the app's limit and the server's; revoking a key ends its sessions; every exchange is audited.
+- Console: the Apps screen's API tab (routes per entity, a curl, the schema version and hash, the downloads, the
+  versions table) and Embed tab (settings, keys, pages with their iframe snippet, sessions); the embed pages
+  (`web/js/embed.js`); Settings lets a key be limited to an app and an entity.
+- Prototype boards for the two tabs and the key option; `e2e/tests/apps-api.spec.ts` with axe-core on the tabs and
+  the embed page; unit tests `sprint39d-entity-api`, `sprint39d-schema-api` (the generated client runs against the
+  test server), `sprint39d-embeds` (every key kind, a tenant CA built in the test); an integration test for
+  PostgreSQL and MySQL.
+- Known gaps in `docs/security.md`: an entity named like one of the app's own route segments is reached only through
+  the records routes; a schema version holds the whole definition, not a diff, and nothing restores one; an
+  app-limited key is refused on `/v1` and the MCP server outright; the tenant CA path checks one intermediate and
+  no OCSP; the session's `host` is the token's `iss`; a reload of an embed page needs a new host token.
 
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 

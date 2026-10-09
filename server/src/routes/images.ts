@@ -81,6 +81,11 @@ export function imageRoutes(s: Services): Router {
     res.json(await im.verify(principalOf(req), String(req.params.id)));
   });
 
+  /** 1.6.0 (B-7901): the C2PA manifest read back from the stored bytes and checked against the tenant's CA. */
+  r.get('/images/:id/content-credentials', gen, async (req, res) => {
+    res.json(await im.verifyContentCredentials(principalOf(req), String(req.params.id)));
+  });
+
   /** Sends the image to chat as an attachment (it is scanned like any upload). */
   r.post('/images/:id/attach', gen, chatWrite, async (req, res) => {
     const p = principalOf(req);

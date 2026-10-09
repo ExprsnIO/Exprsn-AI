@@ -6,6 +6,7 @@ import { effectivePermissions } from '../../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { forbidden, HttpProblem, notFound } from '../../http/problem.js';
 import type { ExportRow } from '../../audit/exports.js';
+import { destinationView } from '../../audit/siem-destinations.js';
 import type { Services } from '../../services.js';
 
 /** Events above the reader's clearance keep their place in the chain but lose their content. */
@@ -82,6 +83,47 @@ export function auditAdminRoutes(s: Services): Router {
     res.json({ ...result, notified });
   });
 
+  // ---------- 1.6.0, Sprint 38a (B-7501): audit streaming per tenant, under dual control ----------
+
+  const manage = requirePermission(s, 'tenant:manage');
+
+  r.get('/audit/siem', async (req, res) => {
+    const p = principalOf(req);
+    const rows = await s.siemDestinations.list(p.tenantId);
+    const names = new Map((await s.db('users').whereIn('id', [...new Set(rows.flatMap((x) => [x.proposed_by, x.approved_by, x.decided_by].filter((v): v is string => !!v)))]).select('id', 'display_name')).map((u: { id: string; display_name: string }) => [u.id, u.display_name]));
+    res.json({ platform: s.siem.view(), max: s.cfg.SIEM_TENANT_MAX_DESTINATIONS, destinations: rows.map((d) => ({ ...destinationView(d, d.live), proposedByName: names.get(d.proposed_by) ?? null, approvedByName: d.approved_by ? (names.get(d.approved_by) ?? null) : null, decidedByName: d.decided_by ? (names.get(d.decided_by) ?? null) : null })) });
+  });
+
+  r.post('/audit/siem', manage, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ name: z.string().trim().min(1).max(100), kind: z.enum(['https', 'syslog']), url: z.string().trim().min(1).max(500), token: z.string().max(4000).nullable().optional(), caPem: z.string().max(20_000).nullable().optional(), note: z.string().max(300).nullable().optional() }).strict(), req.body);
+    const d = await s.siemDestinations.propose(p, body);
+    res.status(201).json(destinationView(d));
+  });
+
+  r.post('/audit/siem/:id/approve', manage, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ note: z.string().trim().max(300).nullable().optional() }), req.body);
+    res.json(destinationView(await s.siemDestinations.decide(p, String(req.params.id), 'approve', body.note ?? null)));
+  });
+
+  r.post('/audit/siem/:id/reject', manage, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ note: z.string().trim().max(300).nullable().optional() }), req.body);
+    res.json(destinationView(await s.siemDestinations.decide(p, String(req.params.id), 'reject', body.note ?? null)));
+  });
+
+  r.post('/audit/siem/:id/disable', manage, async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ note: z.string().trim().max(300).nullable().optional() }), req.body);
+    res.json(destinationView(await s.siemDestinations.disable(p, String(req.params.id), body.note ?? null)));
+  });
+
+  r.post('/audit/siem/:id/test', manage, async (req, res) => {
+    const p = principalOf(req);
+    res.json(await s.siemDestinations.test(p, String(req.params.id)));
+  });
+
   r.get('/audit/stream', (_req, res) => {
     res.json(s.siem.view());
   });
@@ -112,6 +154,19 @@ export function auditAdminRoutes(s: Services): Router {
 
   // ---------- exports ----------
 
+  /** B-7501: a time window of the chain as JSONL with its signed proof. Rows above the clearance are redacted to their hashes. */
+  r.post('/audit/exports/jsonl', async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ from: z.coerce.number().int().min(0).optional(), to: z.coerce.number().int().min(0).optional() }).strict(), req.body);
+    if (body.from != null && body.to != null && body.to < body.from) throw new HttpProblem(400, 'Bad request', 'The window ends before it starts.');
+    const q: AuditQuery = { ...(body.from != null ? { from: body.from } : {}), ...(body.to != null ? { to: body.to } : {}) };
+    const counts = await s.exports.auditAbove(p.tenantId, q, p.clearance);
+    const range = body.from != null || body.to != null ? `${body.from != null ? new Date(body.from).toISOString().slice(0, 10) : 'start'} to ${body.to != null ? new Date(body.to).toISOString().slice(0, 10) : 'now'}` : 'all time';
+    const x = await s.exports.request({ tenantId: p.tenantId, tenantSlug: p.tenantSlug, kind: 'audit-jsonl', params: { ...(body.from != null ? { from: body.from } : {}), ...(body.to != null ? { to: body.to } : {}) }, scope: `Audit JSONL with chain proof, ${range}${counts.above ? `, ${counts.above} above ${p.clearance} redacted` : ''}`, maxLabel: p.clearance, userId: p.userId });
+    await audit(req, 'audit.export.requested', 'admin', { export: x.id }, { ...counts, format: 'jsonl', from: body.from ?? null, to: body.to ?? null });
+    res.status(202).json({ ...exportView(x), total: counts.total, redacted: counts.above });
+  });
+
   r.post('/audit/exports', async (req, res) => {
     const p = principalOf(req);
     const body = parseBody(filters.extend({ filtered: z.boolean().default(false) }), req.body);
@@ -138,7 +193,7 @@ export function auditAdminRoutes(s: Services): Router {
   r.get('/exports', async (req, res) => {
     const perms = canSeeExports(req);
     const p = principalOf(req);
-    const rows = (await s.exports.list(p.tenantId)).filter((x) => (x.kind === 'audit' ? perms.has('audit:read') : perms.has('usage:read')));
+    const rows = (await s.exports.list(p.tenantId)).filter((x) => (x.kind === 'usage' ? perms.has('usage:read') : perms.has('audit:read')));
     const names = new Map((await s.db('users').whereIn('id', [...new Set(rows.map((x) => x.created_by))]).select('id', 'display_name')).map((u: { id: string; display_name: string }) => [u.id, u.display_name]));
     res.json(rows.map((x) => ({ ...exportView(x), createdByName: names.get(x.created_by) ?? null })));
   });
@@ -147,7 +202,7 @@ export function auditAdminRoutes(s: Services): Router {
     const perms = canSeeExports(req);
     const p = principalOf(req);
     const x = await s.exports.get(p.tenantId, String(req.params.id));
-    if (!x || !(x.kind === 'audit' ? perms.has('audit:read') : perms.has('usage:read'))) throw notFound('Export');
+    if (!x || !(x.kind === 'usage' ? perms.has('usage:read') : perms.has('audit:read'))) throw notFound('Export');
     if (!clears(p.clearance, x.max_label)) throw forbidden(`This export holds ${x.max_label} rows, above your clearance.`, { step: 'clearance' });
     if (x.state !== 'ready') throw new HttpProblem(409, 'Not ready', 'The export is still being prepared.');
     // Streamed part by part; the first part is read before the headers go out, so a missing file is still a 404.
@@ -160,7 +215,7 @@ export function auditAdminRoutes(s: Services): Router {
     }
     if (!x.blob_key) throw notFound('Export file');
     await audit(req, 'export.downloaded', 'admin', { export: x.id, file: x.file }, { rows: x.rows });
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Type', x.kind === 'audit-jsonl' ? 'application/x-ndjson; charset=utf-8' : 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${x.file}"`);
     if (!first.done) res.write(first.value);
     for await (const part of parts) if (!res.write(part)) await new Promise((r) => res.once('drain', r));

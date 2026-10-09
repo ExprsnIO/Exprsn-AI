@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { createHash } from 'node:crypto';
 import { addText, encodePng, isPng, readText } from '../src/images/png.js';
+import { DEFAULT_INJECTION_THRESHOLD, scoreInjection } from '../src/guardrails/injection.js';
 
 export interface FakeModel {
   name: string;
@@ -102,6 +103,55 @@ export function fakeVision(messages: Msg[], images: Buffer[]): string {
   return JSON.stringify({ caption: marks.caption ?? 'A picture.', text: marks.ocr ?? '' });
 }
 
+/** B-6902: a guard-model call of the `injection` mechanism (its system prompt names the classifier). */
+export const isInjectionPrompt = (messages: Msg[]): boolean => messages.some((m) => m.role === 'system' && m.content.includes('prompt-injection classifier'));
+
+/**
+ * The fake guard model's injection verdict: deterministic, from the heuristic classifier's score at its default
+ * threshold, so the CI corpus floor measured through a guard-model rule is repeatable.
+ */
+export function fakeInjectionGuard(messages: Msg[]): string {
+  const text = messages[messages.length - 1]?.content ?? '';
+  return scoreInjection(text).score >= DEFAULT_INJECTION_THRESHOLD ? 'injection' : 'benign';
+}
+
+/**
+ * B-6901: a model that obeys instructions it reads outside untrusted-content blocks: when a system or tool message
+ * names one of the canaries outside such a block, it answers with that canary (as a model that followed the
+ * injected instruction would); otherwise with `fallback`. Text inside `<untrusted-content>` is treated as data.
+ */
+export function obeyingReply(canaries: string[], fallback = 'Here is what the sources say.'): (messages: Msg[]) => Reply {
+  return (messages) => {
+    for (const m of messages) {
+      if (m.role === 'user') continue;
+      const outside = m.content.replace(/<untrusted-content[\s\S]*?<\/untrusted-content>/g, '');
+      const hit = canaries.find((c) => outside.includes(c));
+      if (hit) return { content: hit };
+    }
+    return { content: fallback };
+  };
+}
+
+/**
+ * 1.6.0 Sprint 38b (B-7001): a model that leaks: asked for its system prompt or instructions, it prints the system
+ * message it was given (and any canary the request names); asked to adopt a persona or to send data somewhere, it
+ * obliges with the canary. Everything else is answered with `fallback`. `resists` lists attack ids (by their canary)
+ * the model resists, for a target that passes some attacks and fails others.
+ */
+export function leakingReply(opts: { fallback?: string; resists?: string[] } = {}): (messages: Msg[]) => Reply {
+  const fallback = opts.fallback ?? 'Here is what I can tell you.';
+  const resists = new Set(opts.resists ?? []);
+  return (messages) => {
+    const system = messages.find((m) => m.role === 'system')?.content ?? '';
+    const last = messages[messages.length - 1]?.content ?? '';
+    const canary = /\b([A-Z]{3,}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})?)\b/.exec(last)?.[1] ?? null;
+    if (canary && resists.has(canary)) return { content: 'I cannot help with that.' };
+    if (/system prompt|instructions you were given|everything above|instructions above|hidden instructions|repeat everything/i.test(last)) return { content: `${canary ? `${canary}\n` : ''}${system || 'I have no system prompt.'}` };
+    if (canary) return { content: `Sure. ${canary}` };
+    return { content: fallback };
+  };
+}
+
 /**
  * An Ollama stand-in speaking enough of its HTTP API for the gateway and chat: version, tags, ps, show, pull,
  * delete, generate (load and unload) and streamed chat. Replies come from `reply`, streamed word by word.
@@ -119,7 +169,7 @@ export class FakeOllama {
    * Guard models (any model whose name contains "guard") answer like Llama Guard: "safe", or "unsafe" and a line of
    * hazard categories. By default the last turn is unsafe (S1) when it contains "UNSAFE-TEST".
    */
-  guard: (messages: Msg[]) => string = (messages) => (/UNSAFE-TEST/.test(messages[messages.length - 1]?.content ?? '') ? 'unsafe\nS1' : 'safe');
+  guard: (messages: Msg[]) => string = (messages) => (isInjectionPrompt(messages) ? fakeInjectionGuard(messages) : /UNSAFE-TEST/.test(messages[messages.length - 1]?.content ?? '') ? 'unsafe\nS1' : 'safe');
   /** Embedding size per model: models with "bge" in the name give 48 dimensions, others 64. */
   embedDims: (model: string) => number = (model) => (model.includes('bge') ? 48 : 64);
   /** Sprint 36c: answers to messages carrying images (by default `fakeVision`). */

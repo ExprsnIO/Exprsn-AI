@@ -523,7 +523,7 @@ table.dt .actions{white-space:nowrap}
       { id: 'training', label: 'Training', icon: 'training' }, { id: 'tenants', label: 'Tenants', icon: 'tenants' }, { id: 'roles', label: 'Roles and access', icon: 'roles' }, { id: 'identity', label: 'Identity', icon: 'identity' },
       // 1.5.0 (Sprint 29 boards): the trust screens
       { id: 'certificates', label: 'Certificates', icon: 'certificates' }, { id: 'vault', label: 'Vault', icon: 'vault' }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins' }, { id: 'atproto', label: 'AT-Protocol', icon: 'atproto' },
-      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
+      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'analytics', label: 'Analytics', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
     ] }
   ];
 
@@ -650,7 +650,7 @@ table.dt .actions{white-space:nowrap}
       const groups = [
         ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
         ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
-        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
+        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + ((s.states || []).length ? ' · ' + s.states.length + ' states' : '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
       App.modal({ cls: 'wide', title: 'Prototype map <span class="pill outline">' + Object.keys(screens).length + ' screens</span>', body: '<p class="fg2" style="margin:0">Every screen from the design boards, wired together. Each screen also carries the states its board listed; apply one from the command palette (Ctrl K) while on that screen. The console shows none of these controls.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
@@ -790,6 +790,9 @@ table.dt .actions{white-space:nowrap}
     return out;
   };
 
+  /** B-7901: what the inspector and the download dialog say about the C2PA manifest. */
+  const credentials = (st) => st.noCa ? '<span style="color:var(--warn-fg)">not signed: no issuing CA</span>' : st.badManifest ? '<span style="color:var(--danger-fg)">C2PA manifest present, data hash does not match</span>' : 'C2PA manifest signed by Northwind Issuing CA G2, verified';
+
   App.register({
     id: 'images', title: 'Images', summary: 'Prompt, provider, honest job progress, safety and provenance, quota',
     label: (st) => { const sel = ((st.cards || CARDS0).find((c) => c.id === st.sel) || CARDS0[0]); return sel.label; },
@@ -798,7 +801,9 @@ table.dt .actions{white-space:nowrap}
       { title: 'Prompt blocked', tone: 'danger', text: 'The prompt failed the safety rule before any GPU time was spent. Shows the rule and a report link.', apply(ctx) { ctx.state.blocked = true; ctx.state.quotaOut = false; ctx.state.prompt = 'Photo-real portrait of the Northwind CFO presenting the Q3 numbers'; ctx.rerender(); } },
       { title: 'Quota exhausted', tone: 'warn', text: 'Generate is disabled with the reset date and who can raise the limit.', apply(ctx) { ctx.state.quotaOut = true; ctx.state.blocked = false; ctx.rerender(); } },
       { title: 'Honest waiting', tone: 'neutral', text: 'Queue position and the real stage are shown. No indeterminate spinner and no invented percentage.', apply(ctx) { ctx.state.honest = true; ctx.state.sel = 'image.generate.91c2'; ctx.rerender(); } },
-      { title: 'Download', tone: 'neutral', text: 'Downloads carry the provenance manifest and show the label warning for confidential and above.', apply(ctx) { ctx.state.sel = 'image.generate.90aa'; ctx.state.openDownload = true; ctx.rerender(); } }
+      { title: 'Download', tone: 'neutral', text: 'Downloads carry the provenance manifest and show the label warning for confidential and above.', apply(ctx) { ctx.state.sel = 'image.generate.90aa'; ctx.state.openDownload = true; ctx.rerender(); } },
+      { title: 'No issuing CA', tone: 'warn', text: 'Without a tenant issuing CA (or key custody) an image keeps the HMAC manifest only. The panel says why and points at Certificates.', apply(ctx) { ctx.state.noCa = true; ctx.state.badManifest = false; ctx.rerender(); } },
+      { title: 'Content credentials do not verify', tone: 'danger', text: 'The stored bytes no longer match the manifest, or its signature or chain fails: the panel names the failing check.', apply(ctx) { ctx.state.badManifest = true; ctx.state.noCa = false; ctx.rerender(); } }
     ],
     render(root, ctx) {
       const st = ctx.state;
@@ -823,7 +828,8 @@ table.dt .actions{white-space:nowrap}
       const insp = (() => {
         const c = sel;
         const common = [['Label', UI.label(c.label, { sm: true })], ['Job', '<span class="mono">' + esc(c.id) + '</span>']];
-        if (c.kind === 'done') return UI.kv(common.concat([['GPU-seconds', String(c.gpu)], ['Seed', '<span class="mono">' + c.seed + '</span>'], ['Provenance', 'C2PA manifest, signed by Exprsn-AI'], ['Safety', 'passed, ' + c.safety.toFixed(2) + ' score']]), 1)
+        if (c.kind === 'done') return UI.kv(common.concat([['GPU-seconds', String(c.gpu)], ['Seed', '<span class="mono">' + c.seed + '</span>'], ['Provenance', 'HMAC manifest in the PNG, signed by the KMS'], ['Content credentials', credentials(st)], ['Safety', 'passed, ' + c.safety.toFixed(2) + ' score']]), 1)
+          + (st.noCa ? UI.notice('No C2PA manifest: this tenant has no active issuing CA. Create one under <a href="#" data-gocerts>Certificates</a> and new images will carry signed content credentials.', 'warn') : '') + (st.badManifest ? UI.notice('<b>Content credentials do not verify.</b> The data hash does not match the stored bytes. The HMAC manifest still verifies; the image was changed after signing.', 'danger') : '')
           + '<div class="hstack wrap gap6">' + UI.btn('Send to chat', { attrs: 'data-tochat' }) + UI.btn('Vary', { attrs: 'data-vary' }) + UI.btn('Download', { icon: 'download', attrs: 'data-download' }) + '</div>';
         if (c.kind === 'progress') return UI.kv(common.concat([['Stage', esc(c.stage) + ', step ' + c.step + ' of ' + c.steps], ['GPU', esc(c.node)], ['Seed', '<span class="mono">' + c.seed + '</span>'], ['Estimate', 'none beyond the step count; steps are reported by the worker']]), 1) + '<div class="hstack gap6">' + UI.btn('Cancel job', { kind: 'danger', attrs: 'data-cancel' }) + '</div>';
         if (c.kind === 'queued') return UI.kv(common.concat([['Queue', 'position ' + c.position + ' on the image pool'], ['Wait', esc(c.eta) + ', measured from recent jobs'], ['Seed', '<span class="mono">' + c.seed + '</span>'], ['Provider', esc((PROVIDERS.find((p) => p.value === st.provider) || PROVIDERS[0]).label)]]), 1) + '<div class="hstack gap6">' + UI.btn('Cancel job', { kind: 'danger', attrs: 'data-cancel' }) + '</div>';
@@ -877,9 +883,10 @@ table.dt .actions{white-space:nowrap}
       const openDownload = () => {
         const c = sel; if (c.kind !== 'done') return;
         const high = c.label === 'confidential' || c.label === 'restricted';
-        ctx.modal({ title: 'Download ' + UI.label(c.label, { sm: true }), body: (high ? UI.notice('<b>This image is ' + esc(c.label) + '.</b> Downloading copies it outside the console. The export is written to the audit log with your name and the trace ID.', 'warn') : '') + UI.kv([['File', '<span class="mono">' + esc(c.id.replace(/\./g, '-')) + '.png</span>'], ['Size', esc(c.size)], ['Provenance', 'C2PA manifest embedded, signed by Exprsn-AI'], ['Label', UI.label(c.label, { sm: true }) + ' <span class="muted">in the manifest and the sidecar</span>'], ['Safety', 'passed, ' + c.safety.toFixed(2)], ['Trace', '<span class="mono">7e2c19a4b0d84f3e</span>']], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(high ? 'Download and log' : 'Download', { kind: 'primary', icon: 'download', attrs: 'data-close data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => ctx.toast('Downloaded with the provenance manifest.' + (high ? ' Audit entry written.' : ''), 'ok')); } });
+        ctx.modal({ title: 'Download ' + UI.label(c.label, { sm: true }), body: (high ? UI.notice('<b>This image is ' + esc(c.label) + '.</b> Downloading copies it outside the console. The export is written to the audit log with your name and the trace ID.', 'warn') : '') + UI.kv([['File', '<span class="mono">' + esc(c.id.replace(/\./g, '-')) + '.png</span>'], ['Size', esc(c.size)], ['Provenance', 'HMAC manifest embedded, signed by the KMS'], ['Content credentials', credentials(st)], ['Label', UI.label(c.label, { sm: true }) + ' <span class="muted">in both manifests and the sidecar</span>'], ['Safety', 'passed, ' + c.safety.toFixed(2)], ['Trace', '<span class="mono">7e2c19a4b0d84f3e</span>']], 2), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(high ? 'Download and log' : 'Download', { kind: 'primary', icon: 'download', attrs: 'data-close data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => ctx.toast('Downloaded with the provenance manifest.' + (high ? ' Audit entry written.' : ''), 'ok')); } });
       };
       ctx.on('click', '[data-download]', openDownload);
+      ctx.on('click', '[data-gocerts]', (e) => { e.preventDefault(); ctx.navigate('certificates'); });
       if (st.openDownload) { st.openDownload = false; setTimeout(openDownload, 50); }
 
       // honest progress ticker: queued jobs move to denoising one per GPU, steps come from the worker
