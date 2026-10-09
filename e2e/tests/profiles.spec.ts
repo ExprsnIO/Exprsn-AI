@@ -1,4 +1,4 @@
-import { test, expect, open, expectLive, confirmDialog } from './support/fixtures';
+import { test, expect, open, expectLive, confirmDialog, toast } from './support/fixtures';
 
 test.describe('Profiles', () => {
   test('creates a draft profile on an approved model and publishes it', async ({ page }) => {
@@ -31,5 +31,43 @@ test.describe('Profiles', () => {
     await modal.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('#toasts .toast').filter({ hasText: 'saved as version' }).first()).toBeVisible();
     await expect(page.locator('.pf-yaml')).toContainText('trustMarking: off');
+  });
+
+  test('B-7001, B-7002: a red-team suite runs against the saved settings, gates publishing while it fails, and its successful attacks are flags', async ({ page }) => {
+    await open(page, 'profiles?profile=summariser-8b');
+    await expectLive(page);
+    await page.locator('[data-tab="evals"]').click();
+    const panel = page.locator('#main .panel', { hasText: 'Red team' }).first();
+    await expect(panel).toContainText('No red-team suites');
+
+    // A suite from the built-in categories plus one case of our own.
+    await panel.getByRole('button', { name: 'New suite' }).click();
+    const modal = page.locator('#overlay .modal');
+    await expect(modal).toContainText('Built-in attack categories');
+    await modal.locator('[data-rn]').fill('Baseline');
+    await modal.locator('[data-rc="injection"]').uncheck();
+    await modal.getByRole('button', { name: 'Create suite' }).click();
+    await toast(page, 'Red-team suite Baseline created');
+    await expect(page.locator('#main')).toContainText('Publishing these settings is refused until: Baseline, not red-teamed for these settings');
+    await expect(page.locator('#main')).toContainText('gates publishing');
+
+    // The run: the test model echoes every prompt, so every canary comes back and every attack succeeds.
+    await page.locator('[data-rtrun]').click();
+    await toast(page, 'Red-team run queued');
+    await expect(page.locator('#main')).toContainText(/resisted 0 of \d+ attacks/, { timeout: 60_000 });
+    await page.locator('[data-rtresults]').first().click();
+    const drawer = page.locator('#overlay .drawer');
+    await expect(drawer).toContainText('Red-team run, Baseline');
+    await expect(drawer).toContainText('Our own');
+    await expect(drawer.locator('.pill', { hasText: 'succeeded' }).first()).toBeVisible();
+    await expect(drawer.getByRole('link', { name: /^F-\d+$/ }).first()).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+
+    // The suite is deleted with its runs; the gate is open again.
+    await page.locator('[data-rtdel]').first().click();
+    await confirmDialog(page, 'Delete suite');
+    await toast(page, 'Red-team suite Baseline deleted');
+    await expect(panel).toContainText('No red-team suites');
   });
 });

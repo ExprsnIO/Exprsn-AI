@@ -252,7 +252,7 @@
     UI, DATA, NAV, screens, state, $, $$, on, esc, icon, ApiError,
     me: null, socket: null,
     api,
-    get: (url) => api('GET', url), post: (url, body) => api('POST', url, body === undefined ? {} : body), patch: (url, body) => api('PATCH', url, body), del: (url) => api('DELETE', url),
+    get: (url) => api('GET', url), post: (url, body) => api('POST', url, body === undefined ? {} : body), patch: (url, body) => api('PATCH', url, body), put: (url, body) => api('PUT', url, body), del: (url) => api('DELETE', url),
     can(perm) { if (Array.isArray(perm)) return perm.some((p) => App.can(p)); return !!(App.me && App.me.permissions.indexOf(perm) >= 0); },
     canOpen(route) { if (OPEN_ROUTES[route]) return true; const it = NAV_BY_ID[route]; return !it || App.can(it.perm); },
     isLive(route) { const it = NAV_BY_ID[route]; return OPEN_ROUTES[route] || !!(it && it.live) || !!(screens[route] && screens[route].live); },
