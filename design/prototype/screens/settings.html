@@ -508,7 +508,7 @@ table.dt .actions{white-space:nowrap}
   // ---------- Navigation model ----------
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
+      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'catalog', label: 'Catalogue', icon: 'grid' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge' }, { id: 'memory', label: 'Memory', icon: 'memory' }, { id: 'workflows', label: 'Workflows', icon: 'workflows' },
       { id: 'scripts', label: 'Scripts', icon: 'scripts' }, { id: 'media', label: 'Media', icon: 'media' }, { id: 'images', label: 'Images', icon: 'images' },
       // 1.5.0 (Sprint 29 boards): the workspace screens for the 1.4.0 domains
@@ -793,6 +793,11 @@ table.dt .actions{white-space:nowrap}
     { id: 'h1', tool: 'records_create', ws: 'Finance Ops', client: 'Claude', side: 'write', args: '{"app": "close", "entity": "task", "values": {"title": "Reconcile the card feed", "due": "2026-10-09"}}', asked: 'today 10:41', expires: '11:41', state: 'pending' },
     { id: 'h2', tool: 'records_delete', ws: 'Finance Ops', client: 'Claude', side: 'destructive', args: '{"app": "close", "entity": "task", "id": "01J8TASK0000000000000000QQ"}', asked: 'today 10:44', expires: '11:44', state: 'pending' }
   ];
+  // 1.7.0 (B-12201): standing approvals for an MCP client's write calls: no per-call hold while one covers the call.
+  const STANDING0 = [
+    { id: 's1', ws: 'Finance Ops', tool: 'records_create', client: 'Claude', side: 'write', label: 'internal', until: 'Oct 16, 10:30', uses: 14, state: 'active', reason: 'Closing tasks from my own notes' },
+    { id: 's2', ws: 'Finance Ops', tool: null, client: null, side: 'write', label: 'internal', until: 'Oct 9, 09:00', uses: 3, state: 'expired', reason: null }
+  ];
   const NOTIFS = [['jobs', 'Finished jobs and workflow runs', true], ['approvals', 'Approvals waiting for me', true], ['flags', 'New flags in my queues', true], ['quota', 'Quota warnings', false]];
 
   const applyContrast = (mode) => {
@@ -805,10 +810,14 @@ table.dt .actions{white-space:nowrap}
     id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls), connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
+      { title: 'Weekly digest of new things', tone: 'neutral', text: 'Notices about newly published workflows, agents, tools and skills come once a week as one digest, linking to the catalogue.', apply(ctx) { ctx.state.catalogNotices = 'digest'; ctx.rerender(); } },
       { title: 'Key limited to one entity', tone: 'info', text: 'A key made for one app and one entity holds records:read (and records:write when picked) and nothing else: accepted under /api/apps only, refused with 403 step scope on another entity, another app or the rest of the API. The list shows the app and entity beside its scopes.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.keyNote = 'app'; ctx.rerender(); } },
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7103): MCP access.
       { title: 'MCP call held for approval', tone: 'warn', text: 'An MCP client asked to create a record in Finance Ops. Nothing runs until you approve here; the client then calls again with the same arguments within 15 minutes, once.', apply(ctx) { ctx.state.holds = HOLDS0.map((h) => Object.assign({}, h)); ctx.state.holdNote = true; ctx.rerender(); } },
+      // 1.7.0 (B-12201): standing approvals.
+      { title: 'Standing approval granted', tone: 'info', text: 'A standing approval covers the write calls of one tool (or every write tool of the server) from one client (or any), for up to 30 days, at your clearance in that workspace. Covered calls run at once, audited with the approval that covered them; a call the tool-call guardrail holds still waits for a reviewer. Audited mcp.server.standing.granted.', apply(ctx) { const st = ctx.state; st.standing = STANDING0.map((h) => Object.assign({}, h)); st.standingNote = 'granted'; ctx.rerender(); } },
+      { title: 'Standing approval revoked', tone: 'neutral', text: 'Revoking makes the next covered call wait for a per-call approval again. Revoked and expired approvals stay listed for 30 days with how many calls they covered. An identity admin can revoke anyone\'s under Identity, MCP server. Audited mcp.server.standing.revoked.', apply(ctx) { const st = ctx.state; st.standing = STANDING0.map((h) => Object.assign({}, h)); st.standing[0].state = 'revoked'; st.standingNote = 'revoked'; ctx.rerender(); } },
       { title: 'Connected through OAuth', tone: 'ok', text: 'Back from the MCP server\'s authorization server: the code was exchanged with the PKCE verifier and the tokens are sealed with the tenant key. Tools from that server now act as you.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); const a = st.accounts.find((x) => x.id === 'erp'); a.state = 'connected'; a.last = 'just now'; a.expires = 'refreshed when it expires'; st.oauthBack = 'ERP'; ctx.rerender(); } },
       { title: 'Re-consent needed', tone: 'warn', text: 'GitLab revoked the grant. The row shows reconnect and tools that depend on it are paused.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); st.accounts.find((a) => a.id === 'gitlab').state = 're-consent needed'; ctx.rerender(); } },
       { title: 'Key expired', tone: 'neutral', text: 'Expired keys stay listed for 30 days for audit, then disappear.', apply(ctx) { ctx.state.expiredNote = true; ctx.rerender(); } },
@@ -830,6 +839,7 @@ table.dt .actions{white-space:nowrap}
       const st = ctx.state;
       st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a));
       st.holds = st.holds || HOLDS0.map((h) => Object.assign({}, h));
+      st.standing = st.standing || STANDING0.map((h) => Object.assign({}, h));
       if (ctx.params.result === 'connected') { st.oauthBack = 'the MCP server'; delete ctx.params.result; }
       st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k));
       st.sessions = st.sessions || SESSIONS0.map((s) => Object.assign({}, s));
@@ -870,7 +880,11 @@ table.dt .actions{white-space:nowrap}
         + (st.contrast === 'AAA' ? UI.notice('<b>AAA contrast is on.</b> Muted text, borders and shadows now use the stronger tokens. Saved to your profile and applied on every device you sign in from.', 'info') : ''));
 
       const notifs = UI.panel('Notifications', '<div class="vstack gap6">' + NOTIFS.map((n) => UI.check(n[1], st.notifs[n[0]], 'data-notif="' + n[0] + '"')).join('') + '</div>'
-        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>');
+        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>'
+        // 1.7.0 (B-12302): notices when a workflow, agent, tool or skill is published to your workspace, once each.
+        + '<div class="eyebrow">New things you can use</div>'
+        + UI.seg([{ id: 'each', label: 'As they happen' }, { id: 'digest', label: 'Weekly digest' }, { id: 'off', label: 'Off' }], st.catalogNotices || 'each', 'data-catnotices aria-label="Notices about new things you can use"')
+        + '<span class="muted" style="font-size:12px">' + ((st.catalogNotices || 'each') === 'digest' ? 'One notice a week lists what was published to your workspaces within your clearance; 2 entries wait for the next one.' : (st.catalogNotices || 'each') === 'off' ? 'No notices. The catalogue still lists everything you can use.' : 'One notice per new workflow, agent, tool or skill published to your workspaces within your clearance, linking to it in the catalogue.') + '</span>');
 
       const acctRows = st.accounts.map((a) => {
         const connected = a.state === 'connected';
@@ -892,7 +906,13 @@ table.dt .actions{white-space:nowrap}
         + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Calls waiting for your approval</div>' + (pendingHolds.length ? UI.pill(pendingHolds.length + ' waiting', 'warn') : '') + '</div>'
         + (st.holdNote ? UI.notice('<b>Claude asked to change data in Finance Ops.</b> Nothing ran. Approve only calls you asked for: an approval covers one call with exactly these arguments, for 15 minutes.', 'warn') : '')
         + UI.table(['Tool', 'Client', 'Arguments', 'Asked', { label: '', right: true }], st.holds.map((h) => ({ cells: ['<span class="mono">' + esc(h.tool) + '</span> ' + UI.pill(h.side, h.side === 'write' ? 'warn' : 'danger') + '<div class="muted" style="font-size:11px">' + esc(h.ws) + '</div>', esc(h.client), '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(h.args) + '</span>', esc(h.asked) + '<div class="muted" style="font-size:11px">expires ' + esc(h.expires) + '</div>', '<span class="hstack gap6" style="justify-content:flex-end">' + (h.state === 'pending' ? UI.btn('Reject', { size: 'sm', kind: 'ghost', attrs: 'data-holdreject="' + h.id + '" aria-label="Reject ' + esc(h.tool) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-holdapprove="' + h.id + '" aria-label="Approve ' + esc(h.tool) + '"' }) : UI.pill(h.state, h.state === 'approved' ? 'ok' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'Nothing waiting', emptyText: 'Write and destructive calls from MCP clients wait here for you.' })
-        + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls. Audited mcp.server.hold.approved and rejected.</span>');
+        + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls. Audited mcp.server.hold.approved and rejected.</span>'
+        // B-12201: standing approvals.
+        + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Standing approvals</div>' + UI.btn('Grant a standing approval', { size: 'sm', kind: 'primary', icon: 'plus', attrs: 'data-standgrant' }) + '</div>'
+        + '<div class="fg2" style="font-size:12px">A standing approval lets a client run write calls as you without a per-call approval: one tool or every write tool of a server, one client or any, for up to 30 days, at your clearance in that workspace. A call the tool-call guardrail holds still waits for a reviewer.</div>'
+        + (st.standingNote === 'granted' ? UI.notice('<b>Claude may create records in Finance Ops for 7 days.</b> Each call is still audited (mcp.server.call with the approval that covered it) and metered; revoke it here at any time.', 'info') : st.standingNote === 'revoked' ? UI.notice('<b>Revoked.</b> The next records_create call from Claude waits for your approval again.', 'neutral') : '')
+        + UI.table(['Covers', 'Client', 'Up to', 'Until', 'Covered calls', { label: '', right: true }], st.standing.map((a) => ({ cells: [(a.tool ? '<span class="mono">' + esc(a.tool) + '</span>' : '<b>Every write tool</b>') + '<div class="muted" style="font-size:11px">' + esc(a.ws) + (a.reason ? ' · ' + esc(a.reason) : '') + '</div>', a.client ? esc(a.client) : '<span class="muted">any client</span>', UI.pill(a.side, a.side === 'write' ? 'warn' : 'danger') + ' ' + UI.label(a.label, { sm: true }), esc(a.until), String(a.uses), '<span class="hstack" style="justify-content:flex-end">' + (a.state === 'active' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-standrevoke="' + a.id + '" aria-label="Revoke the standing approval for ' + esc(a.tool || 'every write tool') + '"' }) : UI.pill(a.state, a.state === 'revoked' ? 'danger' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No standing approvals', emptyText: 'Every write call from an MCP client waits for your approval.' })
+        + '<span class="muted" style="font-size:12px">Granted and revoked here, from this browser only. Expired and revoked approvals stay listed for 30 days. Audited mcp.server.standing.granted, revoked and expired.</span>');
 
       const keyRows = st.keys.map((k) => {
         const expired = k.state === 'expired'; const revoked = k.state === 'revoked';
@@ -955,6 +975,7 @@ table.dt .actions{white-space:nowrap}
       ctx.on('change', '[data-theme]', (e, t) => { ctx.app.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '. Saved to your profile.'); });
       ctx.on('change', '[data-contrast]', (e, t) => { st.contrast = t.value === 'AAA' ? 'AAA' : 'AA'; applyContrast(st.contrast); ctx.rerender(); ctx.toast(st.contrast === 'AAA' ? 'AAA contrast on. Saved to your profile.' : 'Back to AA contrast.', 'ok'); });
       ctx.on('change', '[data-language]', (e, t) => { st.language = t.value; ctx.toast('Language set to ' + esc(t.value) + '. Model answers follow the prompt language, not this setting.'); });
+      ctx.on('click', '[data-catnotices] [data-seg]', (e, t) => { st.catalogNotices = t.dataset.seg; ctx.rerender(); ctx.toast(t.dataset.seg === 'digest' ? 'Weekly digest on. What is published waits for the next one.' : t.dataset.seg === 'off' ? 'Notices about new things you can use are off.' : 'Notices as they happen.', 'ok'); });
       ctx.on('change', '[data-notif]', (e, t) => { st.notifs[t.dataset.notif] = t.checked; ctx.toast('Notification preference saved.'); ctx.rerender(); });
       ctx.on('click', '[data-disconnect]', async (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.disconnect);
@@ -971,6 +992,28 @@ table.dt .actions{white-space:nowrap}
         const h = st.holds.find((x) => x.id === t.dataset.holdreject);
         const ok = await ctx.confirm({ title: 'Reject ' + h.tool + '?', tone: 'danger', body: '<div class="fg2">The call never runs; the client gets the same answer if it asks again.</div>', ok: 'Reject' });
         if (!ok) return; h.state = 'rejected'; st.holdNote = false; ctx.rerender(); ctx.toast(esc(h.tool) + ' rejected.', 'ok');
+      });
+      // B-12201: standing approvals.
+      ctx.on('click', '[data-standgrant]', () => {
+        ctx.modal({ title: 'Grant a standing approval', body: '<div class="fg2" style="margin-bottom:8px">The client runs the covered write calls as you, without a per-call approval, until the period ends or you revoke it. Guardrail holds still wait for a reviewer.</div><div class="formgrid">'
+          + UI.field('Workspace', UI.select(MCPSRV.map((m) => ({ value: m.ws, label: m.ws + ' (' + m.label + ')' })), 'Finance Ops', 'data-stws aria-label="Workspace"'))
+          + UI.field('Tool', UI.select([{ value: '', label: 'Every write tool of the server' }, { value: 'records_create', label: 'records_create (write)' }, { value: 'records_update', label: 'records_update (write)' }, { value: 'records_delete', label: 'records_delete (destructive)' }], 'records_create', 'data-sttool aria-label="Tool"'), 'The tools the server publishes to you that change data.')
+          + UI.field('Client', UI.input('', { placeholder: 'any client', attrs: 'data-stclient maxlength="100"' }), 'The OAuth client ID the client signed in with; blank covers any client acting as you.')
+          + UI.field('Up to', UI.select([{ value: 'write', label: 'Write calls' }, { value: 'destructive', label: 'Write and destructive calls' }], 'write', 'data-stside aria-label="Up to"'))
+          + UI.field('Period', UI.select([{ value: '1', label: '1 day' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days (the longest)' }], '7', 'data-stdays aria-label="Period"'))
+          + UI.field('Reason', UI.input('', { placeholder: 'optional, kept with the audit event', attrs: 'data-streason maxlength="300"' }))
+          + '</div>', actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Grant', { kind: 'primary', attrs: 'data-go' }),
+          onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => {
+            const tool = m.querySelector('[data-sttool]').value || null; const side = m.querySelector('[data-stside]').value; const days = +m.querySelector('[data-stdays]').value;
+            if (tool === 'records_delete' && side !== 'destructive') { ctx.toast('records_delete is a destructive tool; the approval must cover destructive calls.', 'danger'); return; }
+            st.standing.unshift({ id: 's' + Date.now(), ws: m.querySelector('[data-stws]').value, tool, client: m.querySelector('[data-stclient]').value.trim() || null, side, label: 'internal', until: days === 1 ? 'tomorrow' : 'in ' + days + ' days', uses: 0, state: 'active', reason: m.querySelector('[data-streason]').value.trim() || null });
+            App.closeOverlay(); st.standingNote = 'granted'; ctx.rerender(); ctx.toast('Standing approval granted. Audited mcp.server.standing.granted.', 'ok');
+          }); } });
+      });
+      ctx.on('click', '[data-standrevoke]', async (e, t) => {
+        const a = st.standing.find((x) => x.id === t.dataset.standrevoke);
+        const ok = await ctx.confirm({ title: 'Revoke this standing approval?', tone: 'danger', body: '<div class="fg2">The next ' + esc(a.tool || 'write') + ' call from ' + esc(a.client || 'any client') + ' waits for your approval again. The approval stays listed for 30 days with the ' + a.uses + ' calls it covered.</div>', ok: 'Revoke' });
+        if (!ok) return; a.state = 'revoked'; st.standingNote = 'revoked'; ctx.rerender(); ctx.toast('Standing approval revoked.', 'ok');
       });
       ctx.on('click', '[data-connect]', (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.connect);

@@ -11,7 +11,7 @@ export interface QuotaLimits {
 export interface QuotaView extends QuotaLimits {
   scope: 'tenant' | 'workspace';
   workspaceId: string | null;
-  used: { tokensToday: number; gpuSecondsMonth: number; trainingGpuHoursMonth: number };
+  used: { tokensToday: number; gpuSecondsMonth: number; trainingGpuHoursMonth: number; thinkingTokensToday: number; thinkingDropsToday: number };
   resets: { daily: number; monthly: number };
   updatedAt: number | null;
 }
@@ -30,6 +30,8 @@ export interface UsageInput {
   promptTokens?: number;
   outputTokens?: number;
   thinkingTokens?: number;
+  /** 1.7.0 (B-11702): the thinking level was dropped by a thinking budget on this request. */
+  thinkingDropped?: boolean;
   calcCalls?: number;
   gpuMs?: number;
   ts?: number;
@@ -79,11 +81,14 @@ export class QuotaService {
   async used(tenantId: string, workspaceId: string | null, ts = Date.now()): Promise<QuotaView['used']> {
     const base = () => this.db('usage_records').where(workspaceId ? { tenant_id: tenantId, workspace_id: workspaceId } : { tenant_id: tenantId });
     type Sums = Record<string, unknown> | undefined;
-    const day = ((await base().andWhere({ day: dayOf(ts) }).sum({ p: 'prompt_tokens', o: 'output_tokens' })) as Record<string, unknown>[])[0] as Sums;
+    const day = ((await base().andWhere({ day: dayOf(ts) }).sum({ p: 'prompt_tokens', o: 'output_tokens', t: 'thinking_tokens' })) as Record<string, unknown>[])[0] as Sums;
+    const drops = ((await base().andWhere({ day: dayOf(ts), thinking_dropped: true }).count({ n: '*' })) as Record<string, unknown>[])[0] as Sums;
     const month = ((await base().andWhere({ month: monthOf(ts) }).whereNot({ kind: 'training' }).sum({ g: 'gpu_ms' })) as Record<string, unknown>[])[0] as Sums;
     const train = ((await base().andWhere({ month: monthOf(ts), kind: 'training' }).sum({ g: 'gpu_ms' })) as Record<string, unknown>[])[0] as Sums;
     return {
       tokensToday: Number(day?.p ?? 0) + Number(day?.o ?? 0),
+      thinkingTokensToday: Number(day?.t ?? 0),
+      thinkingDropsToday: Number(drops?.n ?? 0),
       gpuSecondsMonth: Math.round(Number(month?.g ?? 0) / 1000),
       trainingGpuHoursMonth: Math.round((Number(train?.g ?? 0) / 3_600_000) * 10) / 10
     };
@@ -135,6 +140,7 @@ export class QuotaService {
       prompt_tokens: Math.max(0, Math.round(u.promptTokens ?? 0)),
       output_tokens: Math.max(0, Math.round(u.outputTokens ?? 0)),
       thinking_tokens: Math.max(0, Math.round(u.thinkingTokens ?? 0)),
+      thinking_dropped: !!u.thinkingDropped,
       calc_calls: u.calcCalls ?? 0,
       gpu_ms: Math.max(0, Math.round(u.gpuMs ?? 0)),
       day: dayOf(ts),

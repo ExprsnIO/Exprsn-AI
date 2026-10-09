@@ -59,6 +59,109 @@
   axe-core. Prototype boards: three more Import states, the dataset source on Knowledge, the imported engine on
   Classifiers, an imported version on Training.
 
+### Standing approvals for MCP write calls (Sprint 41a, B-12201)
+
+- Migration `043_mcp_standing_approvals`: `mcp_standing_approvals`. Setting `MCP_STANDING_APPROVAL_MAX_DAYS` (30).
+- A standing approval (B-12201): a person grants, from a browser session under Settings, MCP access, that an MCP client
+  may run write calls as them in one workspace's MCP server without a per-call approval: one published write tool or
+  every one, one client (its OAuth client id) or any, up to write or destructive calls, for 1 to the tenant's longest
+  period of days, at their clearance in that workspace. A covered call runs at once and is audited `mcp.server.call`
+  with the approval that covered it and metered as before; the approval counts the calls it covered. A call the
+  tool-call guardrail holds still waits for a reviewer in the Flags queue (the hold's message now names the
+  guardrail). The approval expires on its own (the chat sweep, audited `mcp.server.standing.expired`) and is revoked
+  by its owner, or by an identity admin for any of the tenant's under Identity, MCP server (`mcp.server.standing.revoked`
+  with `by`); the next covered call then waits again. Routes `GET|POST /api/me/mcp-approvals`,
+  `GET /api/me/mcp-approvals/tools`, `DELETE /api/me/mcp-approvals/:id`, `DELETE /api/admin/mcp-server/approvals/:id`.
+- Console: the Settings screen's MCP access panel lists the approvals with Revoke and grants one from a dialog that
+  offers the server's write tools; the Identity screen's MCP server tab lists the tenant's with Revoke. Prototype boards
+  first; `e2e/tests/mcp-server.spec.ts` covers the grant, a covered call, the admin's view, the revoke and the hold that
+  follows, with axe-core and the reflow checks.
+
+### The guardrail rule builder (Sprint 41b, B-9601, B-9602)
+
+- A rule drafted from a description (B-9601): `POST /api/admin/guardrails/sets/:id/describe` (`guardrails:manage`,
+  and `inference:invoke` because the draft is a model call made as the admin). The description passes the
+  `user-input` checkpoint; a published profile's model answers one rule through the same path as the low-code drafts
+  (decision D11b); the answer is normalised (a free id, the mechanism's kind as its type, "hold" and "mask" wordings as
+  actions), validated with the GuardrailRule schema and the RE2 compiler, and returned with a diff against the set's
+  working rules. A draft is always in shadow; with `save` a valid draft joins the set's open draft in shadow, so it
+  records findings and changes nothing until it is promoted (the false-positive limit) and published under the set's
+  dual control. Audit `guardrails.rule.drafted`, and `guardrails.rule.added` with `source: description` on save.
+- The Guardrails screen's "Describe a rule" (B-9602): the description, the profile and the checkpoint; the draft as
+  YAML with its diff, or the problems and what the model answered; "Save in shadow"; then the existing shadow replay,
+  promotion and review flow on the saved rule. Prototype board first; `e2e/tests/guardrails.spec.ts` drafts "hold
+  answers that quote a card number", replays, promotes and approves as a second admin, with axe-core.
+
+### Thinking: policy, budgets, plans and reflection (Sprint 41c, B-11701 to B-11706, B-11708)
+
+- Migration `043c_thinking`: `thinking_policies`; `profiles.thinking_budget`, `plan_first`, `reflect`,
+  `reflect_profile`; `messages.plan`, `checked`, `thinking_purge_at`; `agent_runs.plan`, `plan_state`;
+  `chain_nodes.plan`, `think`, `thinking_tokens`; `usage_records.thinking_dropped`. Settings
+  `THINKING_BUDGET_NOTICE_PERCENT` (80), `THINKING_PLAN_MAX_STEPS` (12), `THINKING_REFLECTION_MAX_CHARS` (12000).
+- Thinking policy (B-11701): per tenant and per workspace (the workspace's wins), who sees thinking (the author,
+  reviewers, nobody), how long it is kept apart from the answer (the chat sweep drops it, the token count stays,
+  audited `thinking.purged`), whether conversation exports carry it. With "nobody" the author's stream carries no
+  thinking and the stored message holds only its token count; a run's steps follow the same rule.
+  `GET|PUT /api/admin/thinking/policy` (`profiles:manage`), audited `thinking.policy.updated`.
+- Budgets (B-11702): thinking tokens per UTC day per profile (`thinkingBudget`) and per workspace (the policy); a
+  notice near the limit (`THINKING_BUDGET_NOTICE_PERCENT`) and a drop to `low` at it rather than a refusal, in chat,
+  `/v1` (`reasoning_effort` capped the same way) and agent runs; the usage record says it was dropped and the quota
+  view counts the drops. `/v1` and agent steps now meter their thinking tokens.
+- Plan first (B-11703): a profile (`planFirst`) or an agent (`definition.planFirst`) drafts a plan (steps, tools, data)
+  before any tool runs. In chat it is a card (`chat_invocations` kind `plan`) approved as drafted or edited, or
+  declined; approved, the answer runs under it with only the tools it names offered (write tools keep their cards);
+  declined or expired, nothing runs. In a run it is the first step; `POST /api/runs/:id/plan` approves (the plan
+  becomes the step list and a call outside it pauses for a new approval) or declines (the run ends). The approved plan
+  is on the message, the run and the chain node. Audited `chat.plan.*` and `agent.plan.*`.
+- Reflection (B-11704): `reflect` (and `reflectProfile`) gives every finished answer a second pass against its question,
+  citations and tool results; findings or a revised answer (screened at `model-output`) become the "checked" badge,
+  metered to the conversation, audited `chat.reflection.checked`, live on `chat.checked`.
+- Thinking on steps (B-11705): an agent's `definition.think` within its profile's ceiling (a registry check names the
+  ceiling); a workflow model step above it is refused at publish; the steps and the chain node carry the level and
+  the thinking tokens.
+- Evaluations (B-11706): `thinking-rubric`, `plan-tools` (`must`, `mustNot`) and `reflection` (`maxFindings`) checks,
+  sealed with the outputs and counted by the gate.
+- Console (B-11708): Profiles gets the Thinking policy panel and the budget, plan first and reflection fields; Chat the
+  plan card (approve, edit, decline), the "checked" badge with its findings or revised answer, the budget notice and
+  the token-only thinking line; Runs the plan step with its decisions, the level per step, and in the chain view each
+  node's level, thinking tokens and plan. Prototype boards first; `e2e/tests/profiles.spec.ts`, `chat.spec.ts` (a plan
+  approved as edited, a reflection finding on the badge, a plan declined) and `runs.spec.ts` (a plan-first run
+  approved, the level per step and per chain node) with axe-core, and the accessibility and reflow sweeps.
+
+### Finding what you can use (Sprint 41d, B-12301 to B-12304)
+
+- Migration `043d_discovery`: `registry_entries` and `workflows` gain `purpose`, `examples`, `category`;
+  `profiles.suggestions`; `catalog_notices`, `catalog_preferences`, `catalog_vectors`, `catalog_dismissals`. Settings
+  `DISCOVERY_EMBED_PROFILE` (`embed`), `DISCOVERY_SUGGEST_MIN_SCORE` (0.3), `REGISTRY_DISCOVERY_REQUIRED` (true).
+- The catalogue (B-12301): `GET /api/catalog` lists the workflows, agents, tools and skills the caller may use in the
+  current workspace through a profile, grouped by category, each with its description, purpose, example prompts and
+  how to call it (`/`, `@`, `+`). It is the workspace form of a conversation's capabilities
+  (`ChatInvocations.workspaceCapabilities`), not a second authority path; what a profile's allow-list hides is listed
+  as "not on this profile" with the profiles that offer it, and nothing above the caller's clearance is listed. A new
+  Catalogue screen (`#/catalog`) and a "What you can do" panel on Chat's empty state open the composer with the entry
+  filled in; Enter then starts the agent, adds the skill, or opens the workflow's or tool's form with the text in it.
+  Embedding-only profiles are no longer offered as chat profiles.
+- Publish notices (B-12302): an entry approved or offered to more workspaces, and a workflow published, notify the
+  members it reaches whose clearance reaches its label, once per person and entry, in-app with the entry's label and a
+  link to it in the catalogue; tools once a profile lists them. Each person chooses notices as they happen, a weekly
+  digest (`catalog.digest`) or none in Settings (`GET|PUT /api/me/catalog-notices`). Audited
+  `catalog.notices.sent`, `catalog.digest.sent`, `catalog.preferences.updated`.
+- Composer suggestions (B-12303): `POST /api/catalog/suggestions` ranks the entries a conversation may call by the
+  embedding profile's similarity to the draft (no chat-model call), up to three above the minimum score, entry vectors
+  cached per version; the console asks after a pause in typing and shows them as chips; a dismissed one stays away for
+  the conversation (`POST /api/conversations/:id/suggestions/dismiss`, audited `chat.suggestion.dismissed`); off per
+  profile (`suggestions`).
+- Entry quality (B-12304): the registry's submit refuses an entry offered in chat without a purpose, an example prompt
+  and a category (422 naming the missing field, audited `registry.submit.refused`); the reviewer sees the catalogue
+  card (`catalogCard`); `PUT /api/admin/registry/:id/discovery` and `PUT /api/workflows/:id/discovery` fill the fields
+  in any state, so published entries keep working without them and gain them without a new version.
+- Console: the Catalogue screen; Chat's "What you can do" panel, filled-in calls and suggestion chips; the Registry's
+  catalogue card with Edit and the fields on the entry form; Settings' notice choice; Profiles' composer suggestions
+  checkbox. Prototype boards first; `e2e/tests/catalog.spec.ts` (a member notified once, the new workflow with its call,
+  Chat filled in, nothing above the clearance, the digest choice), `chat.spec.ts` (the panel, a suggestion, a dismissal)
+  and `registry.spec.ts` (a submit refused naming the example prompt, the reviewer's card) with axe-core, and the
+  accessibility and reflow sweeps.
+
 ## 1.6.0
 
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)

@@ -48,6 +48,11 @@ export interface ToolCallContext {
   /** The call was approved (agent runs) or confirmed; write and destructive calls need this. */
   approved?: boolean;
   /**
+   * 1.7.0 (B-12201): a standing approval covers the call's side effect (and a `confirm: always` tool) but not a hold the
+   * tool-call guardrail asks for: that still waits for a reviewer.
+   */
+  standing?: boolean;
+  /**
    * B-4101: the chain node the call is made from (an agent run's, a workflow run's). The call becomes its child; a
    * call with none joins the node active in process (`chainScope`), else starts a chain at `chainRoot` (a chat turn)
    * or as a root of its own.
@@ -328,8 +333,9 @@ export class ToolDispatcher {
         return out({ decision: d.action, denied: true, error: 'The tool-call guardrail redacted the arguments beyond use.' });
       }
     }
-    if (!ctx.approved && (d.action === 'require-approval' || tool.sideEffect !== 'read' || tool.confirm === 'always')) {
-      return out({ decision: d.action, needsApproval: true, error: `${tool.entry.name} is ${tool.sideEffect === 'read' ? 'held by the tool-call guardrail' : `a ${tool.sideEffect} tool`} and needs approval before it runs.` });
+    const covered = ctx.approved || (ctx.standing && d.action !== 'require-approval');
+    if (!covered && (d.action === 'require-approval' || tool.sideEffect !== 'read' || tool.confirm === 'always')) {
+      return out({ decision: d.action, needsApproval: true, error: `${tool.entry.name} is ${d.action === 'require-approval' ? 'held by the tool-call guardrail' : `a ${tool.sideEffect} tool`} and needs approval before it runs.` });
     }
     if (await this.limited(tool.entry, p.userId)) return out({ decision: d.action, denied: true, error: `Rate limit: ${tool.entry.name} allows ${tool.entry.rate_per_hour} calls per user per hour.` });
 

@@ -111,6 +111,8 @@
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'settings') ctx.rerender(); });
       }
+      // 1.7.0 (B-12302): how notices about newly published workflows, agents, tools and skills reach the person.
+      if (st.catNotices === undefined) { st.catNotices = null; App.get('/api/me/catalog-notices').then((r) => { st.catNotices = r; }).catch((err) => { st.catNotices = { error: err }; }).finally(() => { if (App.state.route === 'settings') ctx.rerender(); }); }
       const theme = App.state.theme === 'dark' ? 'Dark' : App.state.theme === 'light' ? 'Light' : 'Follow system';
       const perms = me.permissions;
 
@@ -166,6 +168,12 @@
         + UI.field('Accessibility', UI.select(A11Y, a11y, 'data-a11y-mode'), a11y === 'system' ? 'In use: ' + (eff === 'aaa' ? 'Enhanced, because your system asks for more contrast.' : 'Standard.') : '') + '</div>'
         + UI.toggle('Single-key shortcuts (? opens the screen map)', App.state.singleKeys, 'data-singlekeys data-manual="1"')
         + '<span class="muted" style="font-size:12px">The accessibility mode is saved with your account and follows you to other browsers; the theme and shortcuts are saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
+
+      const cn = st.catNotices;
+      const noticesPanel = UI.panel('New things you can use', !cn ? UI.notice('Loading…', 'info') : cn.error ? UI.notice('Your notice choice could not be loaded: ' + esc(cn.error.message), 'danger')
+        : '<div class="fg2" style="font-size:13px">When a workflow, agent, tool or skill is published to one of your workspaces within your clearance, you hear about it once, with a link to it in the catalogue.</div>'
+          + UI.seg([{ id: 'each', label: 'As they happen' }, { id: 'digest', label: 'Weekly digest' }, { id: 'off', label: 'Off' }], cn.notices, 'data-catnotices role="group" aria-label="Notices about new things you can use"')
+          + '<span class="muted" style="font-size:12px">' + (cn.notices === 'digest' ? 'One notice a week lists what was published' + (cn.pending ? '; ' + cn.pending + ' wait' + (cn.pending === 1 ? 's' : '') + ' for the next one' : '') + '.' : cn.notices === 'off' ? 'No notices. The catalogue still lists everything you can use.' : 'One notice per new entry, in the console.') + '</span>');
 
       const factors = st.mfa ? st.mfa.factors : [];
       const hasEmailFactor = factors.some((f) => f.kind === 'email');
@@ -254,6 +262,12 @@
           + (st.mcpNote === 'held' ? UI.notice('<b>When an MCP client asks to change data,</b> nothing runs until you approve the call here. Approve only calls you asked for: an approval covers one call with exactly those arguments, for 15 minutes.', 'warn') : '')
           + UI.table(['Tool', 'Client', 'Arguments', 'Asked', { label: '', right: true }], holds.map((h) => ({ cells: ['<span class="mono">' + esc(h.tool) + '</span> ' + UI.pill(h.sideEffect, h.sideEffect === 'write' ? 'warn' : h.sideEffect === 'destructive' ? 'danger' : 'outline') + '<div class="muted" style="font-size:11px">' + esc(h.workspace || '') + '</div>', '<span class="mono" style="font-size:12px">' + esc(h.client || 'unknown') + '</span>', h.arguments ? '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(JSON.stringify(h.arguments)) + '</span>' : '<span class="muted">above your clearance</span>', esc(when(h.createdAt)) + '<div class="muted" style="font-size:11px">' + (h.state === 'approved' ? 'usable until ' : 'expires ') + esc(when(h.expiresAt)) + '</div>', '<span class="hstack gap6" style="justify-content:flex-end">' + (h.state === 'pending' ? UI.btn('Reject', { size: 'sm', kind: 'ghost', attrs: 'data-holdreject="' + esc(h.id) + '" aria-label="Reject ' + esc(h.tool) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-holdapprove="' + esc(h.id) + '" aria-label="Approve ' + esc(h.tool) + '"' }) : UI.pill(h.state, h.state === 'approved' ? 'ok' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'Nothing waiting', emptyText: 'Write and destructive calls from MCP clients wait here for you.' })
           + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls.</span>'
+          // 1.7.0 (B-12201): standing approvals.
+          + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Standing approvals</div>' + (mcp.access.servers.length ? UI.btn('Grant a standing approval', { size: 'sm', kind: 'primary', icon: 'plus', attrs: 'data-standgrant' }) : '') + '</div>'
+          + '<div class="fg2" style="font-size:12px">A standing approval lets a client run write calls as you without a per-call approval: one tool or every write tool of a server, one client or any, for up to ' + esc(String(mcp.access.standingMaxDays || 30)) + ' days, at your clearance in that workspace. A call the tool-call guardrail holds still waits for a reviewer.</div>'
+          + (st.standingNote === 'granted' ? UI.notice('<b>Granted.</b> Covered calls run at once; each is audited with the approval that covered it and metered as usual. Revoke it here at any time.', 'info') : st.standingNote === 'revoked' ? UI.notice('<b>Revoked.</b> The next covered call waits for your approval again.', 'neutral') : '')
+          + UI.table(['Covers', 'Client', 'Up to', 'Until', 'Covered calls', { label: '', right: true }], (mcp.access.approvals || []).map((a) => ({ cells: [(a.tool ? '<span class="mono">' + esc(a.tool) + '</span>' : '<b>Every write tool</b>') + '<div class="muted" style="font-size:11px">' + esc(a.workspace || '') + (a.reason ? ' · ' + esc(a.reason) : '') + '</div>', a.client ? '<span class="mono" style="font-size:12px">' + esc(a.client) + '</span>' : '<span class="muted">any client</span>', UI.pill(a.sideEffect, a.sideEffect === 'write' ? 'warn' : 'danger') + ' ' + UI.label(a.label, { sm: true }), esc(when(a.expiresAt)), String(a.uses), '<span class="hstack" style="justify-content:flex-end">' + (a.state === 'active' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-standrevoke="' + esc(a.id) + '" aria-label="Revoke the standing approval for ' + esc(a.tool || 'every write tool') + '"' }) : UI.pill(a.state, a.state === 'revoked' ? 'danger' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No standing approvals', emptyText: 'Every write call from an MCP client waits for your approval.' })
+          + '<span class="muted" style="font-size:12px">Granted and revoked here, from this browser only. Expired and revoked approvals stay listed for 30 days.</span>'
           + (App.can('tools:invoke') ? '<div class="divider"></div><div class="eyebrow">MCP servers that act as you</div>'
             + UI.table(['Server', 'Connection', 'Expires', { label: '', right: true }], servers.map((x) => [esc(x.name) + (x.description ? '<div class="muted" style="font-size:11px">' + esc(x.description) + '</div>' : ''), x.connected ? UI.pill(x.expired ? 'expired' : 'connected', x.expired ? 'danger' : 'ok') + ' ' + UI.pill(x.source === 'oauth' ? 'OAuth' : 'token', 'outline') : UI.pill('not connected', 'outline'), x.connected ? esc(x.expiresAt ? (x.refreshable ? 'refreshed after ' : '') + when(x.expiresAt) : 'no expiry') : '', '<span class="hstack gap6" style="justify-content:flex-end">' + (x.connected ? UI.btn('Disconnect', { size: 'sm', kind: 'ghost', attrs: 'data-mcpdisconnect="' + esc(x.id) + '" aria-label="Disconnect ' + esc(x.name) + '"' }) : x.oauth ? UI.btn('Connect', { size: 'sm', kind: 'primary', attrs: 'data-mcpconnect="' + esc(x.id) + '" aria-label="Connect ' + esc(x.name) + '"' }) : '<span class="muted" style="font-size:12px">a tool admin sets up OAuth first</span>') + '</span>']), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No servers with per-user tokens', emptyText: 'MCP servers that act with each person\'s own token are listed here.' })
             + '<span class="muted" style="font-size:12px">Connecting uses the authorization code with PKCE at the server\'s own authorization server, for that server only. Disconnecting revokes the tokens there and forgets them here.</span>' : ''));
@@ -263,7 +277,7 @@
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
         + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0;object-fit:cover}</style>'
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + mcpPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + noticesPanel + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + mcpPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
@@ -311,6 +325,9 @@
         if (!socialW) { ctx.toast('Changing your status needs social:write.', 'warn'); return; }
         const v = t.dataset.seg; if (st.person && st.person.presence && st.person.presence.status === v) return;
         App.api('PUT', '/api/presence/me', { status: v }).then((r) => { if (st.person) st.person.presence = r; ctx.toast('Status: ' + esc(t.textContent) + '. Others see ' + esc(r.effective) + '.', 'ok'); ctx.rerender(); }).catch((err) => App.fail(err, 'Status not changed'));
+      });
+      ctx.on('click', '[data-catnotices] [data-seg]', async (e, t) => {
+        try { st.catNotices = await App.put('/api/me/catalog-notices', { notices: t.dataset.seg }); ctx.rerender(); App.toast(t.dataset.seg === 'digest' ? 'Weekly digest on. What is published waits for the next one.' : t.dataset.seg === 'off' ? 'Notices about new things you can use are off.' : 'Notices as they happen.', 'ok'); } catch (err) { App.fail(err, 'Could not save your notice choice'); }
       });
       ctx.on('change', '[data-theme]', (e, t) => { App.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '.'); });
       ctx.on('change', '[data-a11y-mode]', (e, t) => {
@@ -392,6 +409,40 @@
         const ok = await ctx.confirm({ title: 'Reject ' + h.tool + '?', tone: 'danger', body: '<div class="fg2">The call never runs.</div>', ok: 'Reject' });
         if (!ok) return;
         try { await App.post('/api/me/mcp-holds/' + h.id + '/decide', { decision: 'reject' }); ctx.toast(esc(h.tool) + ' rejected.', 'ok'); st.mcpNote = null; mcpReload(); } catch (err) { App.fail(err); }
+      });
+      // 1.7.0 (B-12201): standing approvals.
+      ctx.on('click', '[data-standgrant]', () => {
+        const servers = st.mcp.access.servers; const maxDays = st.mcp.access.standingMaxDays || 30;
+        const periods = [1, 7, 30, 90].filter((d) => d <= maxDays).map((d) => ({ value: String(d), label: d === 1 ? '1 day' : d + ' days' + (d === maxDays ? ' (the longest)' : '') }));
+        if (!periods.some((x) => +x.value === maxDays)) periods.push({ value: String(maxDays), label: maxDays + ' days (the longest)' });
+        ctx.modal({ title: 'Grant a standing approval', body: '<div class="fg2" style="margin-bottom:8px">The client runs the covered write calls as you, without a per-call approval, until the period ends or you revoke it. Guardrail holds still wait for a reviewer.</div><div class="formgrid">'
+          + UI.field('Workspace', UI.select(servers.map((m) => ({ value: m.workspaceId, label: m.workspace + ' (' + m.label + ')' })), servers[0].workspaceId, 'data-stws aria-label="Workspace"'))
+          + UI.field('Tool', UI.select([{ value: '', label: 'Every write tool of the server' }], '', 'data-sttool aria-label="Tool"'), 'The tools the server publishes to you that change data.')
+          + UI.field('Client', UI.input('', { placeholder: 'any client', attrs: 'data-stclient maxlength="100"' }), 'The OAuth client ID the client signed in with (shown on held calls); blank covers any client acting as you.')
+          + UI.field('Up to', UI.select([{ value: 'write', label: 'Write calls' }, { value: 'destructive', label: 'Write and destructive calls' }], 'write', 'data-stside aria-label="Up to"'))
+          + UI.field('Period', UI.select(periods, periods.some((x) => x.value === '7') ? '7' : periods[0].value, 'data-stdays aria-label="Period"'))
+          + UI.field('Reason', UI.input('', { placeholder: 'optional, kept with the audit event', attrs: 'data-streason maxlength="300"' }))
+          + '</div><div data-sterr role="alert"></div>', actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Grant', { kind: 'primary', attrs: 'data-go' }),
+          onMount(m) {
+            const toolSel = m.querySelector('[data-sttool]'); const wsSel = m.querySelector('[data-stws]'); const err = m.querySelector('[data-sterr]'); let tools = [];
+            const loadTools = () => App.get('/api/me/mcp-approvals/tools?workspaceId=' + encodeURIComponent(wsSel.value)).then((r) => { tools = r.tools || []; toolSel.innerHTML = '<option value="">Every write tool of the server</option>' + tools.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + esc(t.sideEffect) + ')</option>').join(''); }).catch((e) => { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); });
+            loadTools(); wsSel.addEventListener('change', loadTools);
+            m.querySelector('[data-go]').addEventListener('click', async () => {
+              const tool = toolSel.value || null; const side = m.querySelector('[data-stside]').value; const days = +m.querySelector('[data-stdays]').value;
+              const picked = tools.find((t) => t.name === tool);
+              if (picked && picked.sideEffect === 'destructive' && side !== 'destructive') { err.innerHTML = UI.notice(esc(tool) + ' is a destructive tool; the approval must cover destructive calls.', 'danger'); return; }
+              const body = { workspaceId: wsSel.value, tool, clientId: m.querySelector('[data-stclient]').value.trim() || null, sideEffect: side, days, reason: m.querySelector('[data-streason]').value.trim() || null };
+              try { await App.post('/api/me/mcp-approvals', body); App.closeOverlay(); st.standingNote = 'granted'; ctx.toast('Standing approval granted.', 'ok'); mcpReload(); }
+              catch (e) { err.innerHTML = UI.notice(esc((e.problem && e.problem.detail) || e.message), 'danger'); }
+            });
+          } });
+      });
+      ctx.on('click', '[data-standrevoke]', async (e, t) => {
+        const a = (st.mcp.access.approvals || []).find((x) => x.id === t.dataset.standrevoke);
+        if (!a) return;
+        const ok = await ctx.confirm({ title: 'Revoke this standing approval?', tone: 'danger', body: '<div class="fg2">The next ' + esc(a.tool || 'write') + ' call from ' + esc(a.client || 'any client') + ' in ' + esc(a.workspace || 'the workspace') + ' waits for your approval again. The approval stays listed for 30 days with the ' + a.uses + ' calls it covered.</div>', ok: 'Revoke' });
+        if (!ok) return;
+        try { await App.del('/api/me/mcp-approvals/' + a.id); st.standingNote = 'revoked'; ctx.toast('Standing approval revoked.', 'ok'); mcpReload(); } catch (err) { App.fail(err); }
       });
       ctx.on('click', '[data-mcpconnect]', (e, t) => {
         const x = st.mcp.servers.find((y) => y.id === t.dataset.mcpconnect);

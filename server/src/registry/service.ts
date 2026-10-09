@@ -41,6 +41,10 @@ export interface AgentDefinition {
   workflows?: string[];
   /** 1.6.0 (B-7801): specialist agents this agent may hand the conversation to; the handed-to run's answer is the run's answer. */
   handoffs?: string[];
+  /** 1.7.0 (B-11703): the model drafts a plan before any tool runs; the run waits for the person to approve it. */
+  planFirst?: boolean;
+  /** 1.7.0 (B-11705): the thinking level of the run's model steps, within the profile's ceiling (unset: the profile's default). */
+  think?: 'off' | 'low' | 'medium' | 'high';
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;
@@ -82,6 +86,10 @@ export interface EntryRow {
   publish_scope: 'tenant' | 'workspace' | 'platform' | null;
   publish_workspaces: string[];
   replacement: string | null;
+  /** 1.7.0 (B-12304): what the catalogue card shows; not part of the schema hash. Older entries have none. */
+  purpose?: string | null;
+  examples?: string[];
+  category?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -103,6 +111,9 @@ const fromRow = (r: Record<string, unknown>): EntryRow => ({
   definition: jsonCol<Record<string, unknown>>(r.definition, {}),
   checks: jsonCol<CheckResult[]>(r.checks, []),
   publish_workspaces: jsonCol<string[]>(r.publish_workspaces, []),
+  purpose: (r.purpose as string | null | undefined) ?? null,
+  examples: jsonCol<string[] | null>(r.examples, null) ?? [],
+  category: (r.category as string | null | undefined) ?? null,
   checked_at: r.checked_at == null ? null : Number(r.checked_at),
   submitted_at: r.submitted_at == null ? null : Number(r.submitted_at),
   reviewed_at: r.reviewed_at == null ? null : Number(r.reviewed_at),
@@ -112,7 +123,7 @@ const fromRow = (r: Record<string, unknown>): EntryRow => ({
 
 const toRow = (e: Partial<EntryRow>): Record<string, unknown> => {
   const out: Record<string, unknown> = { ...e };
-  for (const k of ['input_schema', 'output_schema', 'definition', 'checks', 'publish_workspaces'] as const) if (k in e) out[k] = e[k] == null ? null : typeof e[k] === 'string' ? e[k] : JSON.stringify(e[k]); // already-encoded JSON is stored once
+  for (const k of ['input_schema', 'output_schema', 'definition', 'checks', 'publish_workspaces', 'examples'] as const) if (k in e) out[k] = e[k] == null ? null : typeof e[k] === 'string' ? e[k] : JSON.stringify(e[k]); // already-encoded JSON is stored once
   return out;
 };
 
@@ -146,6 +157,10 @@ export const entryView = (e: EntryRow, names: Map<string, string> = new Map()) =
   publishScope: e.publish_scope,
   publishWorkspaces: e.publish_workspaces,
   replacement: e.replacement,
+  // 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category
+  purpose: e.purpose ?? null,
+  examples: e.examples ?? [],
+  category: e.category ?? null,
   createdAt: e.created_at,
   updatedAt: e.updated_at
 });
@@ -163,6 +178,10 @@ export interface EntryInput {
   inputSchema: JsonSchema | null;
   outputSchema: JsonSchema | null;
   definition: Record<string, unknown>;
+  /** 1.7.0 (B-12304): the catalogue card. */
+  purpose?: string | null;
+  examples?: string[];
+  category?: string | null;
 }
 
 const hashOf = (e: Pick<EntryRow, 'name' | 'description' | 'input_schema' | 'output_schema' | 'side_effect' | 'definition'>) =>
@@ -266,6 +285,16 @@ export class RegistryService {
       ...(e.kind !== 'tool' ? { references: await this.referenceStatus(e.tenant_id ?? '', refs) } : {}),
       ...(e.kind === 'agent' ? { maxBudgets: MAX_BUDGETS } : {})
     });
+    // 1.7.0 (B-11705): an agent's thinking level stays within its profile's ceiling; the check names the ceiling.
+    if (e.kind === 'agent') {
+      const def = e.definition as { profile?: unknown; think?: unknown };
+      if (typeof def.think === 'string' && typeof def.profile === 'string') {
+        const prof = (await this.db('profiles').where({ tenant_id: e.tenant_id ?? '', name: def.profile }).first('think_ceiling')) as { think_ceiling: string } | undefined;
+        const levels = ['off', 'low', 'medium', 'high'];
+        const over = !!prof && levels.indexOf(def.think) > levels.indexOf(prof.think_ceiling);
+        out.push({ name: 'Thinking within the profile ceiling', ok: !over, detail: over ? `Thinking ${def.think} is above the ceiling of profile ${def.profile}, which is ${prof!.think_ceiling}.` : prof ? `Thinking ${def.think} is within profile ${def.profile}'s ceiling (${prof.think_ceiling}).` : `Profile ${def.profile} was not found; the ceiling is checked when it is.` });
+      }
+    }
     // B-8901: an HTTP tool's request: fixed host, placeholders from the schema, credentials only as vault references.
     if (e.impl === 'http') {
       const r = httpDefinitionSchema.safeParse(e.definition);
@@ -318,6 +347,9 @@ export class RegistryService {
       publish_scope: null,
       publish_workspaces: [],
       replacement: null,
+      purpose: input.purpose ?? null,
+      examples: input.examples ?? [],
+      category: input.category ?? null,
       created_at: t,
       updated_at: t
     };
@@ -343,6 +375,9 @@ export class RegistryService {
       ...(patch.inputSchema !== undefined ? { input_schema: patch.inputSchema } : {}),
       ...(patch.outputSchema !== undefined ? { output_schema: patch.outputSchema } : {}),
       ...(patch.definition !== undefined ? { definition: patch.definition } : {}),
+      ...(patch.purpose !== undefined ? { purpose: patch.purpose } : {}),
+      ...(patch.examples !== undefined ? { examples: patch.examples } : {}),
+      ...(patch.category !== undefined ? { category: patch.category } : {}),
       updated_at: Date.now()
     };
     next.schema_hash = hashOf(next);
@@ -452,7 +487,19 @@ export class RegistryService {
   /** A new draft version copied from an existing one. */
   async newVersion(p: Principal, e: EntryRow, version: string): Promise<EntryRow> {
     if (e.tenant_id === null) throw forbidden('Platform entries are read-only.', { step: 'tenant' });
-    return this.create(p, { kind: e.kind, name: e.name, version, description: e.description, impl: e.impl, sideEffect: e.side_effect, confirm: e.confirm, ratePerHour: e.rate_per_hour, label: e.label, inputSchema: e.input_schema, outputSchema: e.output_schema, definition: e.definition });
+    return this.create(p, { kind: e.kind, name: e.name, version, description: e.description, impl: e.impl, sideEffect: e.side_effect, confirm: e.confirm, ratePerHour: e.rate_per_hour, label: e.label, inputSchema: e.input_schema, outputSchema: e.output_schema, definition: e.definition, purpose: e.purpose ?? null, examples: e.examples ?? [], category: e.category ?? null });
+  }
+
+  /**
+   * 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category, in any state but retired: they are
+   * not part of the schema hash, so an entry published before they existed can gain them without a new version.
+   */
+  async setDiscovery(e: EntryRow, patch: { purpose?: string | null; examples?: string[]; category?: string | null }): Promise<EntryRow> {
+    if (e.tenant_id === null) throw forbidden('Platform entries are read-only.', { step: 'tenant' });
+    if (e.status === 'retired') throw conflict(`${e.name} ${e.version} is retired.`);
+    const next: EntryRow = { ...e, ...(patch.purpose !== undefined ? { purpose: patch.purpose } : {}), ...(patch.examples !== undefined ? { examples: patch.examples } : {}), ...(patch.category !== undefined ? { category: patch.category } : {}), updated_at: Date.now() };
+    await this.save(next);
+    return next;
   }
 
   /**

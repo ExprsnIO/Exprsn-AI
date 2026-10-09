@@ -1,4 +1,5 @@
 import { test, expect, open, expectLive, toast, confirmDialog, ready } from './support/fixtures';
+import { expectAxeClean } from './support/axe';
 
 test.describe('Registry', () => {
   test('an agent submitted by one admin is approved and published by another', async ({ page, as }) => {
@@ -16,6 +17,10 @@ test.describe('Registry', () => {
     await modal.locator('[data-label]').selectOption('internal');
     await modal.locator('[data-profile]').fill('general');
     await modal.locator('[data-tools]').fill('calculate');
+    // 1.7.0 (B-12304): an agent is offered in chat, so the catalogue card is asked for at submit.
+    await modal.locator('[data-purpose]').fill('Answers about expense claims and the travel policy.');
+    await modal.locator('[data-examples]').fill('Is this hotel bill within the policy?');
+    await modal.locator('[data-category]').fill('Finance');
     await modal.getByRole('button', { name: 'Save draft and run checks' }).click();
     await toast(page, 'Draft Expense checker 1.0.0 saved');
     await page.getByRole('button', { name: 'Submit for review' }).click();
@@ -84,5 +89,54 @@ test.describe('Registry', () => {
     await toast(page, 'Draft Expense triage 1.0.0 saved');
     await expect(page.locator('#main .inspector')).toContainText('Handoffs');
     await expect(page.locator('#main .inspector').getByRole('link', { name: 'agent:Expense checker' })).toBeVisible();
+  });
+
+  // 1.7.0, Sprint 41d (B-12304): an agent submitted without an example prompt is returned with the missing field
+  // named; its owner adds one on the catalogue card; the reviewer sees the card the catalogue will show.
+  test('B-12304: an agent without an example prompt is refused at submit, naming the field; the reviewer sees the catalogue card', async ({ page, as, watch }) => {
+    watch.allow.push(/POST \/api\/admin\/registry\/\w+\/submit -> 422/);
+    await open(page, 'registry?tab=agents');
+    await expectLive(page);
+    await page.getByRole('button', { name: 'Submit entry' }).click();
+    const modal = page.locator('#overlay .modal');
+    await modal.locator('[data-kind]').selectOption('agent');
+    await modal.locator('[data-name]').fill('Clause finder');
+    await modal.locator('[data-version]').fill('1.0.0');
+    await modal.locator('[data-desc]').fill('Finds the clauses in a contract that answer a question, with where they are.');
+    await modal.locator('[data-label]').selectOption('internal');
+    await modal.locator('[data-profile]').fill('general');
+    await modal.locator('[data-purpose]').fill('Find the clause that answers your question.');
+    await modal.locator('[data-category]').fill('Documents');
+    await modal.getByRole('button', { name: 'Save draft and run checks' }).click();
+    await toast(page, 'Draft Clause finder 1.0.0 saved');
+    const insp = page.locator('#main .inspector');
+    await expect(insp).toContainText('Asked for at submit, since it is offered in chat: example prompt');
+    await page.getByRole('button', { name: 'Submit for review' }).click();
+    await confirmDialog(page, 'Submit');
+    await expect(insp).toContainText('Missing for the catalogue');
+    await expect(insp).toContainText('Missing: example prompt.');
+    await expect(page.locator('#main tr', { hasText: 'Clause finder' })).toContainText('draft');
+
+    // The owner adds an example on the card; the submit goes through.
+    await insp.getByRole('button', { name: 'Edit the catalogue card' }).click();
+    await page.locator('#overlay .modal [data-cexamples]').fill('Where is the termination clause?');
+    await page.locator('#overlay .modal').getByRole('button', { name: 'Save' }).click();
+    await toast(page, 'Catalogue card for Clause finder saved');
+    await page.getByRole('button', { name: 'Submit for review' }).click();
+    await confirmDialog(page, 'Submit');
+    await toast(page, 'Clause finder is in the review queue');
+
+    // The reviewer's preview of the catalogue card.
+    const reviewer = await as('root2');
+    await reviewer.goto('/#/registry');
+    await ready(reviewer, 'registry');
+    await reviewer.locator('[data-tab="review"]').click();
+    await reviewer.locator('#main tr', { hasText: 'Clause finder' }).click();
+    const card = reviewer.locator('#main .inspector .reg-card');
+    await expect(card).toContainText('Find the clause that answers your question.');
+    await expect(card).toContainText('"Where is the termination clause?"');
+    await expect(card).toContainText('@Clause finder');
+    await expect(card).toContainText('Documents');
+    await expectAxeClean(reviewer, 'aa', 'registry review with the catalogue card');
   });
 });

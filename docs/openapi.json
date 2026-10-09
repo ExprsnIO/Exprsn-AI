@@ -14403,6 +14403,78 @@
         }
       }
     },
+    "/api/admin/guardrails/sets/{id}/describe": {
+      "post": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "admin/guardrails"
+        ],
+        "summary": "guardrails:manage and inference:invoke. B-9601: a rule drafted from a description by a published profile's model, validated against the GuardrailRule schema and returned with a diff against the set's working rules, always in shadow; with save, a valid draft joins the set's open draft in shadow.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt",
+                  "profile"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 4000
+                  },
+                  "profile": {
+                    "type": "string"
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "description": "the checkpoint the description is about; the model's choice otherwise"
+                  },
+                  "save": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "label": {
+                    "type": "string",
+                    "default": "internal"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{rule, raw, yaml, valid, problems, diff, checkpoint, saved: null | {version, status}}"
+          },
+          "403": {
+            "description": "the platform baseline for a tenant admin, or no inference:invoke"
+          },
+          "422": {
+            "description": "the description refused by the content rules, or (with save) a draft that does not validate"
+          },
+          "503": {
+            "description": "the profile's model unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/guardrails/sets/{id}/diff": {
       "get": {
         "tags": [
@@ -16012,6 +16084,30 @@
           "admin/mcp-server"
         ],
         "summary": "identity:manage. The MCP server page (B-7101, B-7102): issuer, scopes, groups, dynamicRegistration and registrationEndpoint, publications (every active workspace with workspaceId, workspace, ceiling, url, enabled, groups, label, requireDpop, updatedAt) and the clients that registered themselves",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/mcp-server/approvals/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "identity:manage, browser session: revokes any standing approval of the tenant. Audited mcp.server.standing.revoked, by: admin (B-12201)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -20208,7 +20304,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "Saves a new version",
+        "summary": "Saves a new version; 1.7.0 (B-11702 to B-11704): thinkingBudget, planFirst, reflect, reflectProfile; 1.7.0 (B-12303): suggestions",
         "parameters": [
           {
             "name": "id",
@@ -20817,7 +20913,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP ",
+        "summary": "A draft, checked at once. Tool: {kind: 'tool', impl?: script\\|http (1.6.0, B-8901: definition is the HTTP request; see docs/api.md, Sprint 37a), name, version, description, sideEffect: read\\|write\\|destructive, confirm?, ratePerHour?, label, inputSchema, outputSchema?, definition: {scriptId}} (script-backed; MCP tools come from the MCP 1.7.0 (B-12304): purpose, examples and category for the catalogue card.",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -20830,7 +20926,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "The entry with versions [{id, version, status, createdAt}], referencedBy (agents and skills using a tool), profiles (profiles listing it), workspaces (publish scope names)",
+        "summary": "The entry with versions [{id, version, status, createdAt}], referencedBy (agents and skills using a tool), profiles (profiles listing it), workspaces (publish scope names) 1.7.0 (B-12304): carries catalogCard (the reviewer's preview), offeredInChat and discoveryRequired.",
         "parameters": [
           {
             "name": "id",
@@ -20851,7 +20947,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Edits a draft (anything else takes a new version) and re-runs the checks",
+        "summary": "Edits a draft (anything else takes a new version) and re-runs the checks 1.7.0 (B-12304): purpose, examples and category for the catalogue card.",
         "parameters": [
           {
             "name": "id",
@@ -20892,6 +20988,30 @@
         }
       }
     },
+    "/api/admin/registry/{id}/discovery": {
+      "put": {
+        "tags": [
+          "admin/registry"
+        ],
+        "summary": "Sets a registry entry's purpose, example prompts and category for the catalogue card (B-12304)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/admin/registry/{id}/lifecycle": {
       "post": {
         "tags": [
@@ -20920,7 +21040,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Changes the scope of a published entry",
+        "summary": "Changes the scope of a published entry 1.7.0 (B-12302): members of newly added workspaces are notified once.",
         "parameters": [
           {
             "name": "id",
@@ -20943,7 +21063,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "reject, note?, scope: tenant\\|workspace, workspaces?} | By someone other than the author (403 step: dual-control), cleared for the label. Approval needs every check passing (409 naming the failing ones), records the schema hash and the publ",
+        "summary": "reject, note?, scope: tenant\\|workspace, workspaces?} | By someone other than the author (403 step: dual-control), cleared for the label. Approval needs every check passing (409 naming the failing ones), records the schema hash and the publ 1.7.0 (B-12302): approving notifies the members it reaches within its label, once each.",
         "parameters": [
           {
             "name": "id",
@@ -20966,7 +21086,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Draft → in review, with fresh checks",
+        "summary": "Draft → in review, with fresh checks 1.7.0 (B-12304): an entry offered in chat without a purpose, an example prompt and a category is refused 422 naming the missing field (missing, errors).",
         "parameters": [
           {
             "name": "id",
@@ -23756,6 +23876,43 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/admin/thinking/policy": {
+      "get": {
+        "tags": [
+          "admin/thinking"
+        ],
+        "summary": "profiles:manage. B-11701: the thinking policy in force (the tenant's, the workspace's own row when it has one, and the effective one).",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "a workspace id (default: the caller's current workspace)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-exprsn-since": "1.7.0"
+      },
+      "put": {
+        "tags": [
+          "admin/thinking"
+        ],
+        "summary": "profiles:manage. B-11701, B-11702: sets the tenant's policy (workspace null) or a workspace's: visibility (author, reviewers, nobody), retentionDays, exports, budgetTokensPerDay; reset: true removes a workspace's row so it inherits. Audited thinking.policy.updated.",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/admin/usage/daily": {
@@ -33109,13 +33266,41 @@
         }
       }
     },
+    "/api/catalog": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The catalogue of workflows, agents, tools and skills the caller may use in the current workspace through a profile (B-12301)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/catalog/suggestions": {
+      "post": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Up to three catalogue entries whose description and examples match a composer draft, ranked by the embedding profile (B-12303)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/chains/{id}": {
       "get": {
         "x-exprsn-since": "1.5.0",
         "tags": [
           "chains"
         ],
-        "summary": "agents:run, agents:manage, tools:manage or workflows:manage. B-4107: the chain as a tree of invocations with timing, usage, labels, typed errors, guardrail decisions, audit links, replay and held calls (its principal or an admin, within clearance)",
+        "summary": "agents:run, agents:manage, tools:manage or workflows:manage. B-4107: the chain as a tree of invocations with timing, usage, labels, typed errors, guardrail decisions, audit links, replay and held calls (its principal or an admin, within clearance) 1.7.0 (B-11703, B-11705): each node carries think, thinkingTokens and plan.",
         "parameters": [
           {
             "name": "id",
@@ -34856,7 +35041,7 @@
         "tags": [
           "chat"
         ],
-        "summary": "Profiles the caller may pick: {id, name, displayName, description, aliasOf, model, label, thinkDefault, thinkCeiling, tools, vision, residency: loaded\\|cold, deprecated}",
+        "summary": "Profiles the caller may pick: {id, name, displayName, description, aliasOf, model, label, thinkDefault, thinkCeiling, tools, vision, residency: loaded\\|cold, deprecated} 1.7.0: embedding-only profiles are not listed.",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -35579,7 +35764,7 @@
         "tags": [
           "chat"
         ],
-        "summary": "chat:write. B-4003: the owner (or a tool admin) approves or denies a card; an approved write tool runs, a destructive or always-confirm tool a rule flagged then waits for the reviewer too; denied and expired cards are recorded.",
+        "summary": "chat:write. B-4003: the owner (or a tool admin) approves or denies a card; an approved write tool runs, a destructive or always-confirm tool a rule flagged then waits for the reviewer too; denied and expired cards are recorded. 1.7.0 (B-11703): a plan card (kind plan) is approved as drafted or with edited steps ({decision, steps?: [{title, tools, data}]}, tools among the offered ones) and the answer runs under it, or denied and nothing runs.",
         "parameters": [
           {
             "name": "id",
@@ -35967,6 +36152,30 @@
           },
           {
             "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
+    "/api/conversations/{id}/suggestions/dismiss": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Dismisses a composer suggestion for the rest of the conversation (B-12303)",
+        "parameters": [
+          {
+            "name": "id",
             "in": "path",
             "required": true,
             "schema": {
@@ -44173,6 +44382,32 @@
         }
       }
     },
+    "/api/me/catalog-notices": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's choice for publish notices (each, weekly digest, off) and what the digest holds (B-12302)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      },
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "Sets the caller's choice for publish notices (B-12302)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/me/dav": {
       "get": {
         "x-exprsn-since": "1.5.0",
@@ -44475,6 +44710,118 @@
           "me"
         ],
         "summary": "Cancels one of them",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals": {
+      "get": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The caller's standing approvals for MCP write calls, newest first; revoked and expired ones stay 30 days. {approvals: [{id, workspaceId, workspace, client, tool, sideEffect, label, reason, state, uses, lastUsedAt, expiresAt, createdAt, revokedAt}], maxDays} (B-12201)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Browser session only: grants a standing approval for the caller's write calls in one workspace's MCP server (one tool or every one, one client or any, up to write or destructive, 1 to MCP_STANDING_APPROVAL_MAX_DAYS days, at the caller's clearance there). 404 unpublished server or unknown tool; 409 read tool, class too low, or days out of range. Audited mcp.server.standing.granted (B-12201)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "workspaceId",
+                  "days"
+                ],
+                "properties": {
+                  "workspaceId": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 140
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 100
+                  },
+                  "sideEffect": {
+                    "type": "string",
+                    "enum": [
+                      "write",
+                      "destructive"
+                    ],
+                    "default": "write"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365
+                  },
+                  "reason": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 300
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals/tools": {
+      "get": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "The write and destructive tools the caller may call in a workspace's published MCP server, for the grant form: ?workspaceId= -> {tools: [{name, title, group, sideEffect}]} (B-12201)",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.7.0",
+        "tags": [
+          "me"
+        ],
+        "summary": "Browser session only: revokes the caller's own standing approval; the next covered call waits for a per-call approval again. 404 another person's, 409 not active. Audited mcp.server.standing.revoked, by: owner (B-12201)",
         "parameters": [
           {
             "name": "id",
@@ -51679,6 +52026,30 @@
         }
       }
     },
+    "/api/runs/{id}/plan": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "agents:run or agents:manage. B-11703: the person's decision on a plan-first run's plan: {decision: approve | decline, steps?: [{title, tools, data}]}; approved (as drafted or edited) the plan becomes the run's step list, declined the run ends. Audited agent.plan.approved or agent.plan.declined.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/runs/{id}/replay": {
       "post": {
         "tags": [
@@ -56078,6 +56449,30 @@
         }
       }
     },
+    "/api/workflows/{id}/discovery": {
+      "put": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Sets a workflow's purpose, example prompts and category for the catalogue card (B-12301)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/workflows/{id}/draft": {
       "put": {
         "tags": [
@@ -56129,7 +56524,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "Publishes the draft as the next version; 422 with errors when it is invalid",
+        "summary": "Publishes the draft as the next version; 422 with errors when it is invalid 1.7.0 (B-12302): the workspace's members within the label are notified once.",
         "parameters": [
           {
             "name": "id",

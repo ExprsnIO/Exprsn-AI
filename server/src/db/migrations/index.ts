@@ -74,6 +74,9 @@ import * as m041d from './041d_entity_api_embeds.js';
 import * as m041e from './041e_thinking_templates.js';
 import * as m042 from './042_chat_invocation.js';
 import * as m042b from './042b_dataset_import.js';
+import * as m043 from './043_mcp_standing_approvals.js';
+import * as m043c from './043c_thinking.js';
+import * as m043d from './043d_discovery.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -156,7 +159,10 @@ const MIGRATIONS: Record<string, Migration> = {
   '041d_entity_api_embeds': m041d,
   '041e_thinking_templates': m041e,
   '042_chat_invocation': m042,
-  '042b_dataset_import': m042b
+  '042b_dataset_import': m042b,
+  '043_mcp_standing_approvals': m043,
+  '043c_thinking': m043c,
+  '043d_discovery': m043d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

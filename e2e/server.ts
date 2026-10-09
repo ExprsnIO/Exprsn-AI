@@ -30,7 +30,7 @@ import { InstanceRegistry } from '../server/src/ops/instances.js';
 import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
-import { FakeOllama, TEMPLATE_SYSTEM, templateModel } from '../server/test/fake-ollama.js';
+import { FakeOllama, TEMPLATE_SYSTEM, templateModel, fakeRuleDraft, isRuleDraftPrompt } from '../server/test/fake-ollama.js';
 import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
@@ -89,9 +89,24 @@ async function main() {
       const greeting = /goodbye/i.test(String(last?.content ?? '')) ? 'Goodbye' : 'Hello';
       return { content: `Here is the page.\n\n\`\`\`html index.html\n<!doctype html>\n<html><body><h1 data-greeting>${greeting} from the artifact</h1><script>document.body.dataset.ran = 'yes';</script></body></html>\n\`\`\`\n\nAnd the helper:\n\n\`\`\`js\nexport function greet(name) {\n  return 'Welcome, ' + name;\n}\nexport const helper = true;\n\`\`\`` };
     }
+    // 1.7.0 (B-9601): a guardrail rule drafted from a description on the Guardrails screen.
+    if (isRuleDraftPrompt(messages)) return { content: fakeRuleDraft(messages) };
+    // 1.7.0 (B-11703, B-11704): a plan-first profile's plan (the Chat and Runs specs approve it) and the reflection's
+    // verdict (the checked badge), both the JSON the thinking service parses.
+    if (system.includes('write a plan for the task below')) return { content: JSON.stringify({ steps: [{ title: 'Read the question and what it asks for', tools: [], data: ['the question'] }, { title: 'Work out the figure exactly', tools: ['calculate'], data: ['the numbers in the question'] }] }) };
+    // A question about "17 times 23" gets an unsupported-claim finding (the fake answer states no figure), so the Chat
+    // spec shows a finding on the badge; any other answer is checked clean.
+    if (system.startsWith('You are a reviewer checking an answer')) return { content: JSON.stringify(/17 times 23/.test(String(last?.content ?? '')) ? { status: 'findings', findings: [{ kind: 'unsupported', text: 'The answer gives no figure for 17 times 23, and no tool result supports one.' }] } : { status: 'ok', findings: [] }) };
     // 1.6.0 (B-8301): a data model draft for the Apps screen: a leave-request model with an approval state machine.
     if (/data model of a low-code app/.test(system)) return { content: JSON.stringify({ entities: [{ name: 'employee', title: 'Employee', definition: { fields: [{ name: 'name', type: 'string', required: true, indexed: true, maxLength: 200 }] } }, { name: 'request', title: 'Leave request', definition: { fields: [{ name: 'employee', type: 'reference', entity: 'employee', required: true }, { name: 'from_day', type: 'date', required: true, indexed: true }, { name: 'to_day', type: 'date', required: true }, { name: 'days', type: 'formula', expression: 'days_between(from_day, to_day) + 1' }], states: { initial: 'submitted', states: [{ name: 'submitted' }, { name: 'approved' }, { name: 'rejected' }], transitions: [{ from: ['submitted'], to: 'approved' }, { from: ['submitted'], to: 'rejected' }] } } }], triggers: [{ entity: 'request', events: ['created'], workflow: 'notify-manager' }] }) };
     return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
+  };
+  // 1.7.0 (B-11703): the template model drafts the same plan (its own reply path ignores `reply`).
+  const templated = ollama.templated;
+  ollama.templated = (messages, opts) => {
+    const system = messages.find((x) => x.role === 'system')?.content ?? '';
+    if (system.includes('write a plan for the task below')) return { content: JSON.stringify({ steps: [{ title: 'Read the question and what it asks for', tools: [], data: ['the question'] }, { title: 'Work out the figure exactly', tools: ['calculate'], data: ['the numbers in the question'] }] }) };
+    return templated(messages, opts);
   };
   // 1.6.0 (B-8501): an outside PostgreSQL table for the Apps screen, as a SQLite stand-in behind the real connection
   // flow (register, schema, allow-list, attach, pull, write through).
@@ -265,6 +280,8 @@ async function main() {
   await repo.place(vision.id, pool.id, 'cold', 'e2e');
   models['llava:7b'] = vision.id;
   await repo.createProfile(profile('VISION'.padEnd(26, '0'), 'vision', 'Vision', 'llava:7b'));
+  // 1.7.0 (B-12303): the embedding profile composer suggestions rank the catalogue with (DISCOVERY_EMBED_PROFILE).
+  await repo.createProfile(profile('EMBED'.padEnd(26, '0'), 'embed', 'Embed', 'nomic-embed-text'));
   const imageKinds = await s.guard.classifiers.create(tenantId, { name: 'Image kinds', engine: 'vision', labels: ['receipt', 'screenshot'], profile: 'vision', description: 'Whether an image is a receipt or a screenshot, scored by the vision profile.' }, { userId: root.id, name: 'Mara Okafor' });
   await s.db('classifiers').where({ id: imageKinds.id }).update({ status: 'published' });
   await s.gateway.pollAll();

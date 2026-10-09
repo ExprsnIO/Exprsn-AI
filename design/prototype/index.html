@@ -508,7 +508,7 @@ table.dt .actions{white-space:nowrap}
   // ---------- Navigation model ----------
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
+      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'catalog', label: 'Catalogue', icon: 'grid' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge' }, { id: 'memory', label: 'Memory', icon: 'memory' }, { id: 'workflows', label: 'Workflows', icon: 'workflows' },
       { id: 'scripts', label: 'Scripts', icon: 'scripts' }, { id: 'media', label: 'Media', icon: 'media' }, { id: 'images', label: 'Images', icon: 'images' },
       // 1.5.0 (Sprint 29 boards): the workspace screens for the 1.4.0 domains
@@ -911,6 +911,8 @@ table.dt .actions{white-space:nowrap}
     c7: [
       { id: 'i1', kind: 'tool', name: 'jira-internal.lookup_issue', side: 'read', by: 'user', state: 'done', args: { key: 'FIN-1188' }, result: '{"key":"FIN-1188","status":"Open","assignee":"m.okafor"}' },
       { id: 'i2', kind: 'tool', name: 'jira-internal.create_issue', side: 'write', by: 'model', state: 'awaiting', approval: 'owner', args: { project: 'FIN', summary: 'Vendor onboarding: Fabrikam' }, expires: 'in 23 h' },
+      // 1.7.0 (B-11703): a plan card: the model's plan before any tool runs, decided by the owner.
+      { id: 'i6', kind: 'plan', name: 'plan', by: 'model', state: 'awaiting', approval: 'owner', expires: 'in 23 h', steps: [{ title: 'Pull last week\'s card transactions', tools: ['cards.query'], data: ['the card feed, 7 days'] }, { title: 'Join them to the ledger on amount and date within two days', tools: ['ledger.query', 'calc.table'], data: ['ledger lines for the same days'] }, { title: 'Report the lines without a match', tools: [], data: [] }], offered: ['cards.query', 'ledger.query', 'calc.table', 'jira-internal.create_issue'] },
       { id: 'i3', kind: 'agent', name: 'Vendor desk', by: 'user', state: 'running', run: 'r-7f31', chain: 'ch-2a19', steps: [{ n: 1, lane: 'think', title: 'Plan', state: 'ok' }, { n: 2, lane: 'do', title: 'vendors.lookup', state: 'ok' }, { n: 3, lane: 'do', title: 'vendors.create_record', state: 'waiting' }] },
       { id: 'i4', kind: 'workflow', name: 'vendor-onboarding v4', by: 'user', state: 'running', run: 'wf-c044', chain: 'ch-2a19', approvals: [{ id: 'ap-1', step: 'Sign-off', role: 'workflow-admin', shows: 'DPA for Fabrikam, country DE' }] }
     ]
@@ -991,6 +993,38 @@ table.dt .actions{white-space:nowrap}
     c3: [], c4: [{ n: 1, title: 'cards.query ⋈ ledger.query', sub: 'Tool result, 3 rows, this turn' }], c5: [{ n: 2, title: 'Travel policy v7.md', sub: 'Policy KB, section 4.3, score 0.94' }], c6: []
   };
 
+  // 1.7.0 (B-12301): "What you can do" on a new chat: the catalogue's entries for this profile, a few per category.
+  const DISCOVER = [
+    { cat: 'Documents', items: [{ kind: 'workflow', name: 'summarise-contract', desc: 'A one-page summary of a contract, clauses cited.', example: 'Summarise this contract for me' }, { kind: 'agent', name: 'Contract reviewer', desc: 'Lists the clauses that need a lawyer.', example: 'Review this NDA for unusual terms' }] },
+    { cat: 'Finance', items: [{ kind: 'workflow', name: 'quarterly-variance', desc: 'The variance note, drafted for sign-off.', example: 'Draft the Q3 variance note' }, { kind: 'agent', name: 'Data analyst', desc: 'Questions about the numbers, with sources.', example: 'How far over budget was travel in Q3?' }] },
+    { cat: 'Writing', items: [{ kind: 'skill', name: 'concise', desc: 'One sentence, the figure first.', example: 'What is the refund window?' }] }
+  ];
+  const TRIG = { workflow: '/', tool: '/', agent: '@', skill: '+' };
+  const composeOf = (it) => (it.kind === 'agent' ? '@' + it.name + ': ' + it.example : TRIG[it.kind] + it.name + ' ' + it.example);
+  // 1.7.0 (B-12303): POST /api/catalog/suggestions ranks these by the embedding profile's similarity to the draft.
+  const SUGGEST = [
+    { key: 'workflow:summarise-contract', kind: 'workflow', name: 'summarise-contract', words: ['summar', 'contract', 'agreement', 'msa'], example: 'Summarise this contract for me' },
+    { key: 'agent:Contract reviewer', kind: 'agent', name: 'Contract reviewer', words: ['contract', 'nda', 'review', 'clause'], example: 'Review this NDA for unusual terms' },
+    { key: 'workflow:quarterly-variance', kind: 'workflow', name: 'quarterly-variance', words: ['variance', 'budget', 'quarter', 'q3'], example: 'Draft the Q3 variance note' },
+    { key: 'tool:calculate', kind: 'tool', name: 'calculate', words: ['percent', 'sum', 'total', 'calculate'], example: 'What is 17.5% of 48,210?' }
+  ];
+  function suggestFor(st, convo, text) {
+    const t = text.toLowerCase(); const gone = (st.dismissed && st.dismissed[convo.id]) || [];
+    return SUGGEST.map((x) => ({ x, n: x.words.filter((w) => t.includes(w)).length })).filter((r) => r.n && gone.indexOf(r.x.key) < 0).sort((a, b) => b.n - a.n).slice(0, 3).map((r) => r.x);
+  }
+  function suggestHtml(st, convo) {
+    if (st.suggestOff) return '<div class="suggestrow muted" style="font-size:12px">Suggestions are off for profile ' + esc(st.profile || convo.profile) + '.</div>';
+    const list = st.suggestions || [];
+    if (!list.length) return '';
+    return '<div class="suggestrow" role="group" aria-label="Suggested for this message"><span class="muted" style="font-size:12px">Suggested:</span>' + list.map((x) => '<span class="schip"><button type="button" class="chip" data-usesug="' + esc(x.key) + '">' + UI.pill(x.kind, 'outline') + ' <span class="mono">' + esc(TRIG[x.kind] + x.name) + '</span></button><button type="button" class="iconbtn sm ghost" data-dismisssug="' + esc(x.key) + '" aria-label="Dismiss the suggestion ' + esc(x.name) + '">' + UI.icon('x', 12) + '</button></span>').join('') + '</div>';
+  }
+  function discoverHtml() {
+    return '<div class="discover panel"><div class="phead"><div class="eyebrow">What you can do</div><a href="#/catalog" data-gocat>See the whole catalogue</a></div>'
+      + '<div class="fg2" style="font-size:13px">Published to Finance Ops for you, through this profile. Pick one to fill the composer.</div>'
+      + DISCOVER.map((g) => '<div class="dcat"><div class="muted" style="font-size:12px;font-weight:600">' + esc(g.cat) + '</div>' + g.items.map((it) => '<button type="button" class="ditem" data-discover="' + esc(it.kind + ':' + it.name) + '"><span class="mono">' + esc(TRIG[it.kind] + it.name) + '</span><span class="desc">' + esc(it.desc) + '</span><span class="ex">"' + esc(it.example) + '"</span></button>').join('') + '</div>').join('')
+      + '</div>';
+  }
+
   App.register({
     id: 'chat', title: 'Chat', summary: 'Conversation list, thinking trace, citations, tools, agents, skills and workflows from the composer, approval and run cards, memory proposals',
     crumb: (st) => ['Chat', (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).title],
@@ -1014,6 +1048,18 @@ table.dt .actions{white-space:nowrap}
       { title: 'Workflow waiting on an approval', tone: 'info', text: '/workflow started vendor-onboarding v4; its sign-off is a card here, and approving it here resumes the chain. A call held anywhere in the chain is decided from this root too.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.wfDecided = {}; ctx.rerender(); } },
       { title: 'Skill for one turn', tone: 'neutral', text: '"One sentence" is on for this turn only; "Finance tone" is sticky. Removing a chip leaves its instructions out of the very next turn.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); } },
       { title: 'Hidden above the ceiling', tone: 'warn', text: 'The pickers never list an agent or skill whose ceiling is below the conversation\'s label; calling one by name is refused the same way.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = '@'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'What you can do on a new chat', tone: 'info', text: 'A new chat lists, by category, the workflows, agents and skills published to the workspace for you through this profile. Picking one fills the composer with its call and an example prompt.', apply(ctx) { ctx.state.convo = 'new'; ctx.rerender(); } },
+      { title: 'Suggestions while typing', tone: 'info', text: 'While you type, up to three entries whose description and examples match the draft show as chips, ranked by the embedding profile. No chat model is called.', apply(ctx) { ctx.state.convo = 'c2'; ctx.state.suggestOff = false; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = 'summarise this contract'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'Suggestion dismissed', tone: 'neutral', text: 'A dismissed suggestion stays away for the rest of this conversation, and comes back in another.', apply(ctx) { const st = ctx.state; st.convo = 'c2'; st.suggestOff = false; st.dismissed = st.dismissed || {}; st.dismissed.c2 = ['workflow:summarise-contract']; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = 'summarise this contract'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
+      { title: 'Suggestions off for the profile', tone: 'neutral', text: 'A profile admin turned composer suggestions off for this profile; the pickers still work.', apply(ctx) { ctx.state.convo = 'c2'; ctx.state.suggestOff = true; ctx.rerender(); } },
+      { title: 'Plan awaiting approval', tone: 'info', text: 'A plan-first profile drafts a plan (steps, tools, data) before any tool runs and shows it as a card. Approve it as drafted or edited, or decline it; write tools keep their own cards.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'awaiting' }; ctx.state.planEdited = false; ctx.rerender(); } },
+      { title: 'Plan approved as edited', tone: 'ok', text: 'The answer ran under the edited plan: only the tools it names were offered, and the plan is recorded on the message and in the chain.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'approved' }; ctx.state.planEdited = true; ctx.rerender(); } },
+      { title: 'Plan declined', tone: 'neutral', text: 'A declined plan ends the turn without running anything; the model is told on the next turn.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = { c4: 'declined' }; ctx.rerender(); } },
+      { title: 'Answer checked', tone: 'ok', text: 'A profile with reflection on gets a second pass over the answer against the question, its citations and tool results. The badge shows what it checked.', apply(ctx) { ctx.state.convo = 'c4'; ctx.state.plan = {}; ctx.state.checked = { c4: 'ok' }; ctx.rerender(); } },
+      { title: 'Answer revised by reflection', tone: 'warn', text: 'The second pass found a figure the tool results do not support and revised the answer. The original stays one click away; the revised text went through the same output screen.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.checked = { c1: 'revised' }; ctx.rerender(); } },
+      { title: 'Thinking shown to nobody', tone: 'neutral', text: 'The workspace policy keeps thinking from everyone: the stream carries none and the message holds only the token count. Reviewers-only hides it from the author too.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'nobody'; ctx.rerender(); } },
+      { title: 'Thinking budget near its limit', tone: 'warn', text: 'A notice near the limit of the profile\'s or the workspace\'s daily thinking budget; at the limit, turns think at low rather than being refused.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'author'; ctx.state.budget = { used: 8400, limit: 10000, who: 'analyst' }; ctx.rerender(); } },
+      { title: 'Thinking budget spent', tone: 'warn', text: 'The budget is spent for today: the turn ran at low instead of medium, the message says so, and the usage summary counts the drop.', apply(ctx) { ctx.state.convo = 'c1'; ctx.state.policy = 'author'; ctx.state.budget = { used: 10000, limit: 10000, who: 'analyst', spent: true }; ctx.rerender(); } },
       { title: 'Artifact open for a share reader', tone: 'neutral', text: 'A reader of a shared conversation sees the versions of the shown turns, read only, with the same sandboxed render.', apply(ctx) { ctx.state.convo = 'c6'; ctx.state.artifact = { id: 'a2', version: 1 }; ctx.state.readerView = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -1021,11 +1067,15 @@ table.dt .actions{white-space:nowrap}
       if (ctx.params.convo) { st.convo = ctx.params.convo; }
       st.convo = st.convo || 'c1'; st.sent = st.sent || {}; st.decided = st.decided || {}; st.memories = st.memories || {}; st.query = st.query || '';
       st.thinking = st.thinking || {}; st.level = st.level || 'medium';
+      // 1.7.0 (B-11701 to B-11704): the thinking policy in force, the budget notice, plan cards and reflection badges.
+      st.policy = st.policy || 'author'; st.budget = st.budget || null; st.plan = st.plan || {}; st.checked = st.checked || {};
       const isNew = st.convo === 'new';
       const convo = isNew ? { id: 'new', title: 'New conversation', label: 'internal', profile: st.profile || 'chat-default' } : CONVOS.find((c) => c.id === st.convo) || CONVOS[0];
       if (st.profile) convo.profile = st.profile;
       const prof = PROFILES.find((p) => p.id === convo.profile) || PROFILES[1];
-      const thread = (isNew ? [] : THREADS[convo.id] || []).concat(st.sent[convo.id] || []);
+      let thread = (isNew ? [] : THREADS[convo.id] || []).concat(st.sent[convo.id] || []);
+      const planState = st.plan[convo.id];
+      if (planState && convo.id === 'c4') thread = [thread[0], { role: 'plan', card: 'i6' }].concat(planState === 'approved' ? thread.slice(1) : []);
       const sources = SOURCES[convo.id] || [];
       const list = CONVOS.filter((c) => !st.query || c.title.toLowerCase().includes(st.query.toLowerCase()));
 
@@ -1067,7 +1117,31 @@ table.dt .actions{white-space:nowrap}
         else if (state === 'cancelled') h += '<div class="fg2" style="font-size:12px">Cancelled from the chat.</div>';
         return h + '</div>';
       };
+      /** B-11703: the plan card: the steps, the tools each names, the data it needs; approve as drafted or edited, or decline. */
+      const planCard = (c) => {
+        const state = planState === 'approved' ? 'approved' : planState === 'declined' ? 'denied' : 'awaiting';
+        const steps = st.planEdited ? c.steps.map((s, k) => (k === 1 ? Object.assign({}, s, { title: 'Join them to the ledger on amount and date within three days' }) : s)) : c.steps;
+        let h = '<div class="card ' + state + ' chat-plan" data-card="' + c.id + '"><div class="hstack gap6">' + UI.icon('brain', 13) + '<b>Plan</b>' + UI.pill(state, stateTone[state] || 'ok') + '<span class="muted" style="font-size:12px">proposed by the model before any tool runs</span></div>'
+          + '<ol>' + steps.map((s) => '<li>' + esc(s.title) + (s.tools.length ? ' <span class="mono fg2">' + esc(s.tools.join(', ')) + '</span>' : '') + (s.data.length ? '<div class="muted" style="font-size:12px">needs ' + esc(s.data.join(', ')) + '</div>' : '') + '</li>').join('') + '</ol>';
+        if (state === 'awaiting') h += '<div class="fg2" style="font-size:12px">Approved, the answer runs under this plan and only the tools it names are offered; write tools keep their own cards. Declined, nothing runs. Expires ' + esc(c.expires) + '.</div><div class="hstack gap6 wrap">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-planapprove' }) + UI.btn('Edit', { size: 'sm', attrs: 'data-planedit' }) + UI.btn('Decline', { kind: 'ghost', size: 'sm', attrs: 'data-plandecline' }) + '</div>';
+        else if (state === 'approved') h += '<div class="fg2" style="font-size:12px">' + UI.icon('check', 12) + ' Approved by you' + (st.planEdited ? ', step 2 edited' : ' as drafted') + '. The answer below ran under it; the plan is on the message and in the chain.</div>';
+        else h += '<div class="fg2" style="font-size:12px">' + UI.icon('x', 12) + ' Declined by you. Nothing ran; the model is told on the next turn.</div>';
+        return h + '</div>';
+      };
+      /** B-11704: the "checked" badge: what the second pass verified, or the revised answer with the original a click away. */
+      const checkedBadge = (key) => {
+        const c = st.checked[key]; if (!c) return '';
+        if (c === 'ok') return '<div class="chat-checked ok">' + UI.pill('checked', 'ok') + '<span>Second pass by <b>analyst</b>: the answer matches the question, both citations hold, the tool results support every figure. No findings.</span>' + UI.btn('Details', { kind: 'ghost', size: 'xs', attrs: 'data-checked="' + key + '"' }) + '</div>';
+        return '<div class="chat-checked warn">' + UI.pill('revised', 'warn') + '<span>Second pass by <b>analyst</b> found one problem: the 13,380 EUR figure has no calculation result or cited source behind it. The answer was revised and screened again.</span>' + UI.btn(st.showOriginal ? 'Show revised' : 'Show original', { kind: 'ghost', size: 'xs', attrs: 'data-original' }) + '</div>';
+      };
+      const thinkBar = (m, i, open) => {
+        const dropped = st.budget && st.budget.spent;
+        if (st.policy === 'nobody') return '<div class="thinkbar"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s, ' + m.thinking.tokens + ' tokens. Kept from everyone by the workspace policy.</span></div>';
+        if (st.policy === 'reviewers') return '<div class="thinkbar"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s, ' + m.thinking.tokens + ' tokens. Shown to reviewers only by the workspace policy.</span></div>';
+        return '<button type="button" class="thinkbar" data-think="' + i + '"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s at level ' + (dropped ? 'low, dropped from ' + esc(m.thinking.level) + ': the daily thinking budget for ' + esc(st.budget.who) + ' is spent' : esc(m.thinking.level)) + ', ' + m.thinking.tokens + ' tokens</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>' + (open ? '<div class="thinktrace">' + esc(m.thinking.text) + '</div>' : '');
+      };
       const renderMsg = (m, i) => {
+        if (m.role === 'plan') { const c = cardsOf.find((x) => x.id === m.card); return c ? '<div class="msg ai turn-plan">' + planCard(c) + '</div>' : ''; }
         if (m.role === 'tool' || m.role === 'agent' || m.role === 'workflow') {
           const c = cardsOf.find((x) => x.id === m.card); if (!c) return '';
           return '<div class="msg ai turn-' + m.role + '">' + (m.role === 'tool' ? toolCard(c) : m.role === 'agent' ? agentCard(c) : wfCard(c)) + '</div>';
@@ -1076,15 +1150,16 @@ table.dt .actions{white-space:nowrap}
         if (m.streaming) return '<div class="msg ai"><div class="thinkbar"><span>' + (m.phase === 'thinking' ? 'Thinking at level ' + esc(st.level) + '…' : 'Answering…') + '</span><span class="muted">' + UI.btn('Stop', { kind: 'ghost', size: 'xs', attrs: 'data-stop' }) + '</span></div><div class="answer serif">' + m.partial + '<span class="blink">▍</span></div></div>';
         const open = st.thinking[i];
         let h = '<div class="msg ai">';
-        if (m.thinking) h += '<button type="button" class="thinkbar" data-think="' + i + '"><span>' + UI.icon('brain', 13) + ' Thought for ' + m.thinking.secs + ' s at level ' + esc(m.thinking.level) + ', ' + m.thinking.tokens + ' tokens</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>' + (open ? '<div class="thinktrace">' + esc(m.thinking.text) + '</div>' : '');
+        if (m.thinking) h += thinkBar(m, i, open);
         if (m.raised) h += '<div class="raised"><span class="rule"></span>Label raised to ' + UI.label('confidential', { sm: true }) + ' by ' + esc(m.raised) + '<span class="rule"></span></div>';
         if (m.ctx) h += UI.ctx(m.ctx.title, m.ctx.body, m.ctx.level);
         if (st.guardStop && i === thread.length - 1) {
           h += '<div class="answer serif"><p>' + m.paras[0].replace(/<a[^>]*>\d<\/a>/g, '') + '</p></div>' + UI.notice('<b>Stopped by guardrail</b> Finance baseline v12, rule <span class="mono">no-personal-data-in-summaries</span>. The rest of this answer was withheld at the sentence boundary.', 'danger', '<a href="#" data-report="' + i + '">Report</a>');
         } else {
-          h += '<div class="answer serif">' + m.paras.map((p, pi) => '<p>' + (st.ungrounded && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span class="ungrounded" title="No calculation result or cited source backs this figure. Logged to flags.">13,380 EUR</span>') : p) + (st.resumed && pi === 0 ? '<span class="gap" title="Connection dropped at event 212 and resumed"> ⋯ </span>' : '') + '</p>').join('') + '</div>';
+          h += '<div class="answer serif">' + m.paras.map((p, pi) => '<p>' + (st.checked[convo.id] === 'revised' && !st.showOriginal && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span style="background:var(--warn-bg)" title="Revised by the second pass: the original figure had no calculation result or cited source behind it.">an amount the ledger result does not give</span>') : st.ungrounded && pi === m.paras.length - 1 ? p.replace('13,380 EUR', '<span class="ungrounded" title="No calculation result or cited source backs this figure. Logged to flags.">13,380 EUR</span>') : p) + (st.resumed && pi === 0 ? '<span class="gap" title="Connection dropped at event 212 and resumed"> ⋯ </span>' : '') + '</p>').join('') + '</div>';
         }
         if (m.artifacts) h += '<div class="hstack wrap gap6">' + m.artifacts.map((a) => UI.chip(UI.icon(a.key.endsWith('.html') ? 'images' : 'scripts', 12) + ' ' + esc(a.key) + ' <span class="muted">v' + a.version + '</span>', st.artifact && st.artifact.id === (ARTIFACTS[convo.id] || []).find((x) => x.key === a.key).id && st.artifact.version === a.version, 'data-artifact="' + esc((ARTIFACTS[convo.id] || []).find((x) => x.key === a.key).id) + '" data-version="' + a.version + '"')).join('') + '</div>';
+        if (m.paras && st.checked[convo.id] && i === thread.length - 1) h += checkedBadge(convo.id);
         h += '<div class="mactions">' + UI.iconbtn('copy', 'Copy', { cls: 'sm', attrs: 'data-copy="answer"' }) + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + i + '"' }) + UI.iconbtn('branch', 'Branch from here', { cls: 'sm', attrs: 'data-branchmsg="' + i + '"' }) + UI.iconbtn('flag', 'Report this answer', { cls: 'sm', attrs: 'data-report="' + i + '"' }) + (m.branch ? '<span class="hstack gap4">' + UI.iconbtn('chev', 'Previous branch', { cls: 'sm ghost', attrs: 'data-branch="prev" style="transform:rotate(180deg)"' }) + '<span>Branch ' + m.branch[0] + ' of ' + m.branch[1] + '</span>' + UI.iconbtn('chev', 'Next branch', { cls: 'sm ghost', attrs: 'data-branch="next"' }) + '</span>' : '') + '<span class="right muted">' + esc(m.meta || '') + '</span></div>';
         if (m.confirm && !st.decided[convo.id + i]) h += '<div class="confirmcard"><div class="hstack"><b>' + esc(m.confirm.title) + '</b>' + UI.pill('write', 'warn') + '</div><div class="mono fg2">' + esc(m.confirm.tool) + '  ' + esc(m.confirm.args) + '</div><div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">' + esc(m.confirm.note) + '</span><span class="hstack gap6">' + UI.btn('Deny', { size: 'sm', attrs: 'data-deny="' + i + '"' }) + UI.btn('Allow once', { kind: 'primary', size: 'sm', attrs: 'data-allow="' + i + '"' }) + '</span></div></div>';
         if (m.confirm && st.decided[convo.id + i]) h += '<div class="decided ' + (st.decided[convo.id + i] === 'allow' ? 'ok' : '') + '">' + UI.icon(st.decided[convo.id + i] === 'allow' ? 'check' : 'x', 13) + (st.decided[convo.id + i] === 'allow' ? ' Created <a href="#" data-jira>FIN-1187</a> in jira-internal as Mara Okafor. Logged to audit.' : ' Denied. The agent was told the action was refused and continued without it.') + '</div>';
@@ -1094,7 +1169,13 @@ table.dt .actions{white-space:nowrap}
       };
 
       root.innerHTML = '<style>'
+        + '.chat-plan ol{margin:4px 0 0;padding-left:20px;font-size:13px;line-height:1.5}.chat-plan li{margin:2px 0}'
+        + '.chat-checked{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--fg2);padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}.chat-checked.ok{border-color:var(--ok-fg)}.chat-checked.warn{border-color:var(--warn-fg)}.chat-checked > span{flex:1 1 240px}'
         + '.chat-list{display:flex;flex-direction:column;gap:2px}'
+        + '.discover{display:flex;flex-direction:column;gap:10px}.discover .phead{display:flex;justify-content:space-between;align-items:center;gap:8px}.discover .dcat{display:flex;flex-direction:column;gap:4px}'
+        + '.ditem{all:unset;display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;cursor:pointer}.ditem:hover{background:var(--accent-tint)}.ditem:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.ditem .desc{font-size:12px;color:var(--fg2)}.ditem .ex{font-size:12px;font-style:italic;color:var(--muted);overflow-wrap:anywhere}'
+        + '.suggestrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.suggestrow .schip{display:inline-flex;align-items:center;gap:2px}'
+
         + '.chat-thread{display:flex;flex-direction:column;gap:14px;padding:20px 24px;max-width:760px;width:100%;margin:0 auto}'
         + '.msg.user{display:flex;justify-content:flex-end;align-items:flex-end;gap:6px}.msg.user .bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px}.msg.user .uactions{opacity:0}.msg.user:hover .uactions{opacity:1}'
         + '.msg.ai{display:flex;flex-direction:column;gap:10px;max-width:640px}'
@@ -1123,17 +1204,19 @@ table.dt .actions{white-space:nowrap}
         + '<div class="page tight" style="display:flex;flex-direction:column">'
         + '<div class="grow" style="overflow:auto"><div class="chat-thread" id="thread">'
         + (st.cold ? '<div class="coldbar">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(prof.id) + '</b> is loading on gpu-large-2, about 20 s. Your message will send when it is warm.</span><span class="skeleton" style="width:80px"></span></div>' : '')
-        + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })))
+        + (thread.length ? thread.map(renderMsg).join('') : UI.empty('Start with a question', 'Pick a profile, attach files or a knowledge base, and ask. Answers cite their sources and show their label.', UI.btn('Ask about Q3 travel', { size: 'sm', attrs: 'data-suggest' })) + discoverHtml())
         + (st.runWorkflow ? '<div class="panel" style="gap:8px"><div class="phead"><div class="eyebrow">Run workflow: video-to-notes v3</div>' + UI.pill('running', 'info') + '</div>' + UI.timeline([{ title: 'Extract frames', text: 'media worker, 48 frames', tone: 'ok' }, { title: 'Transcribe audio', text: 'whisper, 12 min of audio', tone: 'ok' }, { title: 'Summarise', text: 'analyst, thinking medium', tone: 'accent' }, { title: 'Guardrail check', text: 'waiting', tone: '' }]) + '<div>' + UI.btn('Open in Runs', { size: 'sm', attrs: 'data-goruns' }) + '</div></div>' : '')
         + '</div></div>'
+        + (st.budget ? UI.notice('<b>Thinking budget' + (st.budget.spent ? ' spent.' : ' near its limit.') + '</b> ' + st.budget.used.toLocaleString('en-GB') + ' of ' + st.budget.limit.toLocaleString('en-GB') + ' thinking tokens today for <b>' + esc(st.budget.who) + '</b>. ' + (st.budget.spent ? 'Turns think at low until midnight UTC rather than being refused.' : 'At the limit, turns think at low rather than being refused.'), 'warn') : '')
         + '<div class="composer"><div class="inner"><div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + esc(prof.id) + (prof.agent ? '' : ' · ' + esc(prof.model.split(':')[0])), true, 'data-pick="profile"') + '</span><span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' Finance KB', true, 'data-pick="kb"') + '</span>' + UI.chip('Travel policy', true, 'data-toggle') + UI.chip(UI.icon('attach', 12) + ' q3-ledger.csv, scanned ' + UI.label('confidential', { sm: true }), true, 'data-attach') + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.level), false, 'data-pick="level"') + '</span></div>'
         + '<div class="skillchips" data-region="skills">' + skillChips(st, convo) + '</div>'
+        + '<div data-region="suggest">' + suggestHtml(st, convo) + '</div>'
         + '<div class="relative" data-region="picker">' + (st.picker ? pickerHtml(st, convo) : '') + '</div>'
         + '<label class="sr" for="composer">Message</label><textarea id="composer" placeholder="Ask something. Type / for a tool or workflow, @ for an agent, + for a skill." aria-describedby="composer-hint"></textarea>'
         + '<span id="composer-hint" class="sr">Slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
         + '<div class="hstack"><div class="hstack gap6">' + UI.iconbtn('attach', 'Attach a file', { attrs: 'data-attachbtn' }) + UI.iconbtn('workflows', 'Run a workflow', { attrs: 'data-wf' }) + UI.iconbtn('images', 'Generate an image', { attrs: 'data-img' }) + '</div><div class="hstack right gap12"><span class="muted num" style="font-size:12px">18,400 of 32,768 context tokens</span>' + UI.btn('Send', { kind: 'primary', icon: 'send', attrs: 'data-send' }) + '</div></div></div></div></div>'
         + '<aside class="inspector w300">' + artifactsHtml(st, convo) + '<div class="eyebrow">Sources</div><div class="vstack gap4" id="sources">' + (sources.length ? sources.map((s) => '<div class="src" data-src="' + s.n + '"><span class="n">' + s.n + '</span><span><span style="font-weight:600;display:block">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.sub) + '</span></span></div>').join('') : '<div class="muted" style="font-size:12px">No sources cited in this conversation.</div>') + '</div>'
-        + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
+        + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Thinking', esc(st.level) + ', ceiling ' + esc(prof.thinking) + '; ' + (st.policy === 'nobody' ? 'kept from everyone' : st.policy === 'reviewers' ? 'shown to reviewers' : 'shown to you') + ' by policy'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
         + '<div class="eyebrow">Quota today</div>' + UI.meter('Tokens', '310k of 500k', 62) + UI.meter('GPU-seconds this month', '16,380 of 18,000', 91, 'warn') + '</aside>';
 
       // ---- events ----
@@ -1141,6 +1224,12 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-new]', () => { st.convo = 'new'; ctx.rerender(); setTimeout(() => { const c = ctx.$('#composer'); if (c) c.focus(); }, 30); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-think]', (e, t) => { st.thinking[t.dataset.think] = !st.thinking[t.dataset.think]; ctx.rerender(); });
+      // B-11703, B-11704: plan decisions and the reflection badge.
+      ctx.on('click', '[data-planapprove]', () => { st.plan[convo.id] = 'approved'; st.planEdited = false; ctx.rerender(); ctx.toast('Plan approved. The answer runs under it; only the tools it names are offered.', 'ok'); });
+      ctx.on('click', '[data-plandecline]', () => { st.plan[convo.id] = 'declined'; ctx.rerender(); ctx.toast('Plan declined. Nothing ran; the model is told on the next turn.'); });
+      ctx.on('click', '[data-planedit]', () => ctx.modal({ title: 'Edit the plan', body: '<div class="vstack gap8">' + UI.field('Step 1', UI.input('Pull last week\'s card transactions', { attrs: 'data-ps="1"' })) + UI.field('Step 2', UI.input('Join them to the ledger on amount and date within three days', { attrs: 'data-ps="2"' })) + UI.field('Step 3', UI.input('Report the lines without a match', { attrs: 'data-ps="3"' })) + '<div class="fg2" style="font-size:12px">A step can only name tools this conversation can call: cards.query, ledger.query, calc.table, jira-internal.create_issue.</div></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Approve as edited', { kind: 'primary', attrs: 'data-planok' }), onMount(el) { el.querySelector('[data-planok]').addEventListener('click', () => { App.closeOverlay(); st.plan[convo.id] = 'approved'; st.planEdited = true; ctx.rerender(); ctx.toast('Plan approved as edited. The answer runs under it.', 'ok'); }); } }));
+      ctx.on('click', '[data-checked]', () => ctx.drawer({ title: 'Checked by analyst', body: UI.kv([['Question', 'answered: the reconciliation and the unmatched lines'], ['Citations', '1 of 1 holds: cards.query ⋈ ledger.query, 3 rows'], ['Tool results', 'every figure traces to a result'], ['Findings', 'none'], ['Metered', '640 tokens to this conversation'], ['Screened', 'no revised answer; nothing to screen']], 1) }));
+      ctx.on('click', '[data-original]', () => { st.showOriginal = !st.showOriginal; ctx.rerender(); });
       ctx.on('click', '.cite', (e, t) => { e.preventDefault(); const s = ctx.$('.src[data-src="' + t.dataset.cite + '"]'); ctx.$$('.src').forEach((x) => x.classList.remove('hi')); if (s) { s.classList.add('hi'); s.scrollIntoView({ block: 'nearest' }); } });
       ctx.on('click', '.src', (e, t) => {
         const s = sources.find((x) => String(x.n) === t.dataset.src);
@@ -1166,7 +1255,14 @@ table.dt .actions{white-space:nowrap}
         else if (st.picker && open) st.picker.q = v.slice(1);
         else if (st.picker && !open) st.picker = null;
         const host = ctx.$('[data-region="picker"]'); if (host) host.innerHTML = st.picker ? pickerHtml(st, convo) : '';
+        // B-12303: suggestions after a pause in typing (debounced on the client), never while a picker is open.
+        clearTimeout(st.suggestTimer);
+        st.suggestTimer = setTimeout(() => { st.suggestions = st.picker || st.suggestOff || v.trim().length < 3 ? [] : suggestFor(st, convo, v); const r = ctx.$('[data-region="suggest"]'); if (r) r.innerHTML = suggestHtml(st, convo); }, 300);
       });
+      ctx.on('click', '[data-usesug]', (e, t) => { const x = SUGGEST.find((y) => y.key === t.dataset.usesug); const ta = ctx.$('#composer'); if (!x || !ta) return; ta.value = x.kind === 'agent' ? '@' + x.name + ': ' + ta.value : TRIG[x.kind] + x.name + ' ' + ta.value; st.suggestions = []; ctx.$('[data-region="suggest"]').innerHTML = ''; ta.focus(); ctx.toast((x.kind === 'agent' ? 'Enter starts a run of ' : x.kind === 'skill' ? 'Enter adds ' : 'Enter opens ') + esc(x.name) + ' with your text.'); });
+      ctx.on('click', '[data-dismisssug]', (e, t) => { st.dismissed = st.dismissed || {}; st.dismissed[convo.id] = (st.dismissed[convo.id] || []).concat([t.dataset.dismisssug]); st.suggestions = (st.suggestions || []).filter((x) => x.key !== t.dataset.dismisssug); ctx.$('[data-region="suggest"]').innerHTML = suggestHtml(st, convo); const ta = ctx.$('#composer'); if (ta) ta.focus(); ctx.toast('Dismissed for the rest of this conversation.'); });
+      ctx.on('click', '[data-discover]', (e, t) => { let it = null; DISCOVER.forEach((g) => g.items.forEach((x) => { if (x.kind + ':' + x.name === t.dataset.discover) it = x; })); const ta = ctx.$('#composer'); if (it && ta) { ta.value = composeOf(it); ta.focus(); } });
+      ctx.on('click', '[data-gocat]', (e) => { e.preventDefault(); ctx.navigate('catalog'); });
       ctx.on('keydown', '#composer', (e) => {
         if (!st.picker) return;
         const items = pickerItems(st, convo);
@@ -1207,6 +1303,9 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-jira]', (e) => { e.preventDefault(); ctx.toast('External links open after a confirmation because jira-internal is an allow-listed internal domain.'); });
       const th = ctx.$('#thread'); if (th) th.scrollTop = th.scrollHeight;
       if (ctx.params.convo) { delete ctx.params.convo; }
+      // B-12301: "Use in Chat" from the catalogue opens a new chat with the composer filled in.
+      if (st.fill) { const f = st.fill; st.fill = null; setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = f; ta.focus(); } }, 30); }
+      if (ctx.params.fill) delete ctx.params.fill;
     }
   });
 
@@ -1278,6 +1377,105 @@ table.dt .actions{white-space:nowrap}
     };
     st.timer = setTimeout(tick, st.level === 'off' ? 50 : 1200);
   }
+})();
+
+</script>
+<script>
+(function () {
+  const { UI, esc } = App;
+
+  // ---------- data ----------
+  // 1.7.0 (B-12301): GET /api/catalog: the workspace form of a conversation's capabilities, through one profile.
+  // `available: false` is an entry the profile's allow-list hides ("not on this profile") with the profiles that offer it.
+  const PROFILES = [{ name: 'chat-default', display: 'Chat default' }, { name: 'analyst', display: 'Analyst' }, { name: 'coder', display: 'Coder' }];
+  const E = (kind, name, o) => Object.assign({ kind, name, key: kind + ':' + name, version: '1.0.0', label: 'internal', description: '', purpose: '', examples: [], category: 'Other', side: null, available: true, profiles: [], missing: [], isNew: false }, o);
+  const ENTRIES = [
+    E('workflow', 'summarise-contract', { version: 'v2', description: 'Summarises a contract: the parties, the term, the obligations and the risks, with the clauses cited.', purpose: 'Read a contract and get a one-page summary you can forward.', examples: ['Summarise this contract for me', 'What are the termination terms in the Fabrikam MSA?'], category: 'Documents', isNew: true }),
+    E('agent', 'Contract reviewer', { version: '1.2.0', description: 'Reviews an agreement against the playbook and lists the clauses that need a lawyer.', purpose: 'Check a contract before it is signed.', examples: ['Review this NDA for unusual terms'], category: 'Documents', label: 'confidential' }),
+    E('skill', 'contract-redline', { version: '2.1.0', description: 'Marks changes against the standard template in redline style.', purpose: 'Answers that show what changed against the template.', examples: ['Redline this clause against our template'], category: 'Documents', available: false, profiles: ['analyst'] }),
+    E('tool', 'ledger.query', { version: '1.1.2', side: 'read', description: 'Reads posted ledger lines by cost centre and period.', purpose: 'Look up what was posted, without leaving the chat.', examples: ['What did FIELD-SALES post in September?'], category: 'Finance', label: 'confidential', available: false, profiles: ['analyst'] }),
+    E('workflow', 'quarterly-variance', { version: 'v1', description: 'Compares actuals with budget per cost centre and drafts the variance note for approval.', purpose: 'The quarter\'s variance note, drafted and sent for sign-off.', examples: ['Draft the Q3 variance note'], category: 'Finance' }),
+    E('agent', 'Data analyst', { version: '4.2.0', description: 'Answers questions over the ledger and the Finance KB with exact calculations.', purpose: 'Questions about the numbers, answered with sources.', examples: ['How far over budget was travel in Q3?'], category: 'Finance', label: 'confidential' }),
+    E('tool', 'calculate', { version: 'built-in', side: 'read', description: 'Exact arithmetic by the calculation worker.', purpose: 'Sums and percentages computed exactly, not by the model.', examples: ['What is 17.5% of 48,210?'], category: 'Built in' }),
+    E('skill', 'concise', { description: 'Answers in one sentence with the figure first and the source second.', purpose: 'Short answers.', examples: ['What is the refund window?'], category: 'Writing' }),
+    E('agent', 'Meeting helper', { version: '0.9.0', description: 'Turns meeting notes into actions and owners.', missing: ['purpose', 'examples', 'category'] })
+  ];
+  const TRIGGER = { workflow: '/', tool: '/', agent: '@', skill: '+' };
+  const callOf = (e) => TRIGGER[e.kind] + e.name;
+  const composeOf = (e, example) => (e.kind === 'agent' ? '@' + e.name + ': ' + (example || '') : callOf(e) + ' ' + (example || ''));
+  const KIND_LABEL = { workflow: 'Workflows', agent: 'Agents', tool: 'Tools', skill: 'Skills' };
+
+  App.register({
+    id: 'catalog', title: 'Catalogue', summary: 'What you can do: the workflows, agents, tools and skills you may use here, by category, with how to call them',
+    crumb: ['Catalogue'],
+    commands: [{ label: 'Open the catalogue', sub: 'Catalogue', run(app) { app.navigate('catalog'); } }],
+    states: [
+      { title: 'Newly published', tone: 'info', text: 'A notice links here: the entry is highlighted with a "New" pill, and its card says how to call it.', apply(ctx) { ctx.state.sel = 'workflow:summarise-contract'; ctx.state.fromNotice = true; ctx.rerender(); } },
+      { title: 'Not on this profile', tone: 'warn', text: 'An entry the profile\'s allow-list hides is listed as "not on this profile" with the profiles that offer it; switching profile makes it callable.', apply(ctx) { ctx.state.hidden = true; ctx.state.sel = 'tool:ledger.query'; ctx.rerender(); } },
+      { title: 'Entry without examples', tone: 'neutral', text: 'An entry published before the catalogue fields existed is listed with what it has, under Other, and opens Chat with only its call filled in.', apply(ctx) { ctx.state.sel = 'agent:Meeting helper'; ctx.rerender(); } },
+      { title: 'Nothing published yet', tone: 'neutral', text: 'No workflow, agent, tool or skill is published to this workspace for you yet.', apply(ctx) { ctx.state.empty = true; ctx.rerender(); } },
+      { title: 'Above your clearance', tone: 'neutral', text: 'Entries above your clearance are never listed, not even as "not on this profile". The count says nothing about them.', apply(ctx) { ctx.state.clearance = true; ctx.rerender(); } }
+    ],
+    render(root, ctx) {
+      const st = ctx.state;
+      if (st.profile === undefined) st.profile = 'chat-default';
+      if (st.kind === undefined) st.kind = 'all';
+      if (st.hidden === undefined) st.hidden = true;
+      if (ctx.params.entry) { st.sel = ctx.params.entry; st.fromNotice = true; delete ctx.params.entry; }
+      const q = (st.query || '').toLowerCase();
+      const viaAnalyst = st.profile === 'analyst';
+      const all = st.empty ? [] : ENTRIES.map((e) => (viaAnalyst && !e.available ? Object.assign({}, e, { available: true, profiles: [] }) : e));
+      const list = all.filter((e) => (st.kind === 'all' || e.kind === st.kind) && (st.hidden || e.available) && (!q || (e.name + ' ' + e.description + ' ' + e.purpose + ' ' + e.examples.join(' ')).toLowerCase().includes(q)));
+      const cats = [];
+      list.forEach((e) => { if (cats.indexOf(e.category) < 0) cats.push(e.category); });
+      cats.sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+      const sel = all.find((e) => e.key === st.sel) || null;
+
+      const cardHtml = (e) => '<div class="cat-card' + (e.available ? '' : ' off') + (sel && sel.key === e.key ? ' on' : '') + '" data-entry="' + esc(e.key) + '">'
+        + '<div class="hstack wrap gap6"><button type="button" class="cat-name" data-open="' + esc(e.key) + '">' + esc(e.name) + '</button>' + UI.pill(e.kind, 'outline') + (e.side && e.side !== 'read' ? UI.pill(e.side, 'warn') : '') + (e.isNew ? UI.pill('new', 'info') : '') + '<span class="right">' + UI.label(e.label, { sm: true }) + '</span></div>'
+        + '<div class="fg2 cat-desc">' + esc(e.description) + '</div>'
+        + (e.examples[0] ? '<div class="cat-ex">"' + esc(e.examples[0]) + '"</div>' : '')
+        + '<div class="hstack wrap gap6"><span class="mono cat-call">' + esc(callOf(e)) + '</span>'
+        + (e.available ? '<span class="right">' + UI.btn('Use in Chat', { size: 'sm', attrs: 'data-use="' + esc(e.key) + '" aria-label="Use ' + esc(e.name) + ' in Chat"' }) + '</span>'
+          : '<span class="muted cat-off">Not on this profile. Offered by ' + e.profiles.map(esc).join(', ') + '</span><span class="right">' + UI.btn('Switch to ' + esc(e.profiles[0]), { size: 'sm', kind: 'ghost', attrs: 'data-switch="' + esc(e.profiles[0]) + '"' }) + '</span>')
+        + '</div></div>';
+
+      const inspector = sel ? '<aside class="inspector w320 cat-insp">'
+        + '<div class="hstack wrap gap6"><span class="mono" style="font-size:14px">' + esc(sel.name) + '</span>' + UI.pill(sel.kind, 'outline') + UI.label(sel.label, { sm: true }) + '</div>'
+        + (st.fromNotice && sel.isNew ? UI.notice('Published to Finance Ops on 9 October. You were notified once; notices are in Settings.', 'info') : '')
+        + (sel.available ? '' : UI.notice('<b>Not on this profile.</b> ' + esc(st.profile) + '\'s allow-list leaves it out. ' + esc(sel.profiles.join(', ')) + ' offer' + (sel.profiles.length === 1 ? 's' : '') + ' it.', 'warn'))
+        + UI.kv([['Call', '<span class="mono">' + esc(callOf(sel)) + '</span>'], ['Category', esc(sel.category)], ['Purpose', sel.purpose ? esc(sel.purpose) : '<span class="muted">Not given</span>'], ['Version', '<span class="mono">' + esc(sel.version) + '</span>'], ['How to call it', sel.kind === 'agent' ? 'Type @ in the composer, pick the agent, and say what it should do.' : sel.kind === 'skill' ? 'Type + in the composer; the skill rides on the conversation until you remove it.' : sel.kind === 'workflow' ? 'Type / in the composer and pick the workflow; its input is a short form.' : 'Type / in the composer, or let the model call it when it needs it.']], 1)
+        + '<div class="eyebrow">Example prompts</div>'
+        + (sel.examples.length ? '<div class="vstack gap6">' + sel.examples.map((x, i) => '<div class="hstack gap6"><span class="grow cat-ex">"' + esc(x) + '"</span>' + (sel.available ? UI.btn('Use', { size: 'xs', attrs: 'data-useex="' + i + '" aria-label="Use the example ' + esc(x) + '"' }) : '') + '</div>').join('') + '</div>' : '<div class="muted" style="font-size:12px">No example yet. Its owner can add some in the Registry.</div>')
+        + '<div class="hstack">' + (sel.available ? UI.btn('Use in Chat', { kind: 'primary', attrs: 'data-use="' + esc(sel.key) + '"' }) : UI.btn('Switch to ' + esc(sel.profiles[0]), { kind: 'primary', attrs: 'data-switch="' + esc(sel.profiles[0]) + '"' })) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close-insp' }) + '</div>'
+        + '</aside>' : '';
+
+      const counts = { available: all.filter((e) => e.available).length, off: all.filter((e) => !e.available).length };
+      root.innerHTML = '<style>'
+        + '.cat-page > *{flex-shrink:0}.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}'
+        + '.cat-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);min-width:0}.cat-card.on{border-color:var(--accent);background:var(--accent-tint)}.cat-card.off{background:var(--panel2)}'
+        + '.cat-name{all:unset;cursor:pointer;font-weight:600;overflow-wrap:anywhere}.cat-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.cat-desc{font-size:13px}.cat-ex{font-size:13px;font-style:italic;color:var(--fg2);overflow-wrap:anywhere}.cat-call{font-size:12px;overflow-wrap:anywhere}.cat-off{font-size:12px}'
+        + '.cat-head{display:flex;align-items:baseline;gap:8px;margin:18px 0 8px}.cat-head h2{font-size:15px;margin:0}'
+        + '</style>'
+        + '<div class="page cat-page">' + UI.pagehead('What you can do', 'Workflows, agents, tools and skills you may use in <b>Finance Ops</b> through profile <b>' + esc(st.profile) + '</b>. Pick one to open Chat with it filled in.', '<span class="hstack gap6"><label class="sr" for="cat-profile">Profile</label>' + UI.select(PROFILES.map((p) => ({ value: p.name, label: p.display })), st.profile, 'id="cat-profile" data-profile') + '</span>')
+        + (st.clearance ? UI.notice('Entries above your clearance (internal) are never listed here, not even as "not on this profile".', 'info') : '')
+        + '<div class="toolbar">' + UI.search('Search names, descriptions and examples', 'data-search', st.query) + UI.seg([{ id: 'all', label: 'All' }, { id: 'workflow', label: 'Workflows' }, { id: 'agent', label: 'Agents' }, { id: 'tool', label: 'Tools' }, { id: 'skill', label: 'Skills' }], st.kind, 'data-kind') + UI.toggle('Show what this profile leaves out', st.hidden, 'data-hidden data-manual') + '<span class="muted right" style="font-size:12px">' + counts.available + ' you can call, ' + counts.off + ' not on this profile</span></div>'
+        + (all.length ? (list.length ? cats.map((c) => '<div class="cat-head"><h2>' + esc(c) + '</h2><span class="muted" style="font-size:12px">' + list.filter((e) => e.category === c).length + '</span></div><div class="cat-grid">' + list.filter((e) => e.category === c).map(cardHtml).join('') + '</div>').join('') : UI.empty('Nothing matches', 'Try another word, or show every kind.'))
+          : UI.empty('Nothing published for you yet', 'When a workflow, agent, tool or skill is published to Finance Ops within your clearance, it shows here and you get a notice.'))
+        + '</div>' + inspector;
+
+      ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
+      ctx.on('click', '[data-kind] [data-seg]', (e, t) => { st.kind = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', '[data-hidden]', () => { st.hidden = !st.hidden; ctx.rerender(); });
+      ctx.on('change', '[data-profile]', (e, t) => { st.profile = t.value; ctx.rerender(); ctx.toast('Listing what you can call through ' + esc(t.value) + '.'); });
+      ctx.on('click', '[data-open]', (e, t) => { st.sel = t.dataset.open; st.fromNotice = false; ctx.rerender(); });
+      ctx.on('click', '[data-close-insp]', () => { st.sel = null; ctx.rerender(); });
+      ctx.on('click', '[data-switch]', (e, t) => { st.profile = t.dataset.switch; ctx.rerender(); ctx.toast('Profile set to ' + esc(t.dataset.switch) + '. Its entries are callable now.', 'ok'); });
+      const use = (e, example) => { App.stateFor('chat').convo = 'new'; App.stateFor('chat').fill = composeOf(e, example); ctx.navigate('chat', { fill: e.key }); };
+      ctx.on('click', '[data-use]', (e, t) => { const x = all.find((y) => y.key === t.dataset.use); if (x) use(x, x.examples[0]); });
+      ctx.on('click', '[data-useex]', (e, t) => { if (sel) use(sel, sel.examples[+t.dataset.useex]); });
+    }
+  });
 })();
 
 </script>
@@ -1444,6 +1642,8 @@ table.dt .actions{white-space:nowrap}
     { id: '7e91', agent: 'Data analyst agent', started: '13:41:05', by: 'Mara Okafor', dur: 'finished in 9.8 s', status: 'succeeded', label: 'confidential', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [1, 2, 3, 4, 5], sum: { think: '2 steps, 2,306 tokens', do: '1 call, 0.8 s', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [5, 20], tokens: [2306, 10000] } },
     { id: '7d40', agent: 'quarterly-variance v1', started: '13:12:48', by: 'Mara Okafor', dur: 'waiting 12 min', status: 'waiting on approval', label: 'confidential', convo: 'c1', convoTitle: 'Q3 travel overrun', steps: [1, 2, 3, 4, 5, 6], waiting: true, sum: { think: '2 steps, 2,306 tokens', do: '1 call, 1 waiting', calc: '2 results, 0.04 CPU-s' }, budget: { steps: [6, 20], tokens: [2306, 10000] } },
     { id: '7b10', agent: 'Support triage 0.4.0', started: '12:10:03', by: 'Sam Reyes', dur: 'finished in 6.2 s', status: 'succeeded', label: 'internal', convo: 'c2', convoTitle: 'Invoice due date', steps: [8, 9], handedTo: { agent: 'Billing agent', run: '7b11' }, sum: { think: '1 step, 410 tokens', do: '1 handoff, 5.1 s', calc: 'no results' }, budget: { steps: [2, 12], tokens: [410, 12000] } },
+    // 1.7.0 (B-11703, B-11705): a plan-first run waits on its plan; its steps carry their thinking level.
+    { id: '7e95', agent: 'Data analyst agent', started: '14:31:02', by: 'Mara Okafor', dur: 'waiting 2 min', status: 'waiting on plan', label: 'confidential', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [11, 12, 13, 14], planFirst: true, sum: { think: '2 steps, 1,146 tokens', do: '1 call, 0.6 s', calc: '0 results' }, budget: { steps: [2, 20], tokens: [1146, 10000] } },
     { id: '7c22', agent: 'Data analyst agent', started: '11:58:30', by: 'Sam Reyes', dur: 'stopped after 41.2 s', status: 'budget stop', label: 'internal', convo: 'c4', convoTitle: 'Reconcile card feed', steps: [1, 2, 3, 4, 5, 6, 7], budgetStop: true, sum: { think: '12 steps, 9,860 tokens', do: '6 calls, 7.4 s', calc: '2 results, 0.05 CPU-s' }, budget: { steps: [20, 20], tokens: [9860, 10000] } }
   ];
   const STEPS = {
@@ -1463,6 +1663,15 @@ table.dt .actions{white-space:nowrap}
       kv: [['Proposal', '<span class="mono">agent:Billing agent {"task": "A customer asks: when is my invoice due?"}</span>'], ['Thinking level', 'low, 410 tokens'], ['Profile', '<a href="#" data-goprofile="chat-default">chat-default</a>'], ['Tools offered', '<span class="mono">agent_Billing_agent</span> <span class="muted">(handoff: a specialist that answers in this run\'s place), kb_search</span>']] },
     9: { n: 9, lane: 'do', title: 'agent:Billing agent', meta: 'handoff, 5.1 s', body: 'handed off: run 7b11 answered "Your invoice is due on the fifth of next month." and this run ended with it',
       kv: [['Tool', '<span class="mono">agent:Billing agent</span> (handoff listed in the agent definition)'], ['Context handed over', '<span class="mono">A customer asks: when is my invoice due?</span>'], ['Specialist run', '<a href="#" data-run="7b11" class="mono">7b11</a>, Billing agent 1.0.0, succeeded in 5.1 s'], ['Answer', 'Your invoice is due on the fifth of next month.'], ['Attributed to', 'Billing agent: the reader sees who answered; audited agent.run.handed_off'], ['Budget', 'the handed-to run\'s tokens count against this run\'s budget too']] },
+    // 1.7.0 (B-11703): the plan step of a plan-first run, the steps under the approved plan and a call outside it.
+    11: { n: 11, lane: 'think', title: 'Plan', meta: 'draft, 340 tok', body: 'plan: pull the card feed, join it to the ledger, report the residue', waiting: true, plan: true,
+      kv: [['Plan', '<ol style="margin:0;padding-left:18px"><li>Pull last week\'s card transactions <span class="mono">cards.query</span></li><li>Join them to the ledger on amount and date within two days <span class="mono">ledger.query</span>, <span class="mono">calc.table</span></li><li>Report the lines without a match</li></ol>'], ['Tools it names', '<span class="mono">cards.query, ledger.query, calc.table</span>'], ['Thinking level', 'off for the draft; the run thinks at medium, ceiling high'], ['Who decides', 'the run\'s owner, Mara Okafor; approve as drafted or edited, or decline'], ['Label', UI.label('confidential', { sm: true })]] },
+    12: { n: 12, lane: 'do', title: 'cards.query', meta: 'read-only, 0.6 s', body: 'SELECT ... FROM card_feed WHERE posted >= date(\'now\', \'-7 days\') ... 41 rows',
+      kv: [['Tool', '<span class="mono">cards.query</span>'], ['Plan step', '1 of 3, within the approved plan'], ['Side effect', 'none, read-only'], ['Rows', '41, under the 2,000 cap'], ['Label', UI.label('confidential', { sm: true })]] },
+    13: { n: 13, lane: 'think', title: 'Match the lines', meta: 'medium, 806 tok', body: 'proposal: file a Jira issue for the three unmatched lines',
+      kv: [['Proposal', '<span class="mono">jira-internal.create_issue</span>'], ['Thinking level', 'medium, 806 tokens, within ceiling high; counted against the run budget'], ['Plan step', 'none: the plan does not name this tool'], ['Label', UI.label('confidential', { sm: true })]] },
+    14: { n: 14, lane: 'do', title: 'jira-internal.create_issue', meta: 'write, outside the plan', body: 'waiting: the approved plan does not name jira-internal.create_issue; a new approval is needed', waiting: true, deviation: true,
+      kv: [['Tool', '<span class="mono">jira-internal.create_issue</span>'], ['Side effect', UI.pill('write', 'warn')], ['Plan', 'not in it: the plan names cards.query, ledger.query and calc.table'], ['Who decides', 'the run\'s owner, Mara Okafor'], ['Label', UI.label('confidential', { sm: true })]] },
     7: { n: 7, lane: 'think', title: 'Report failure', meta: 'low, 608 tok', body: 'proposal: tell the user the issue was not created',
       kv: [['Proposal', 'tell the user the issue was not created'], ['Thinking level', 'low, 608 tokens'], ['Profile', '<a href="#" data-goprofile="chat-default">chat-default</a> (cheaper profile for reporting)'], ['Input', 'the step 6 failure as a Context-tier segment'], ['Label', UI.label('confidential', { sm: true })]] }
   };
@@ -1493,14 +1702,14 @@ table.dt .actions{white-space:nowrap}
   /** The close chain as GET /api/chains/:id returns it, for the scenario in st (held, decided, or a child's budget stop). */
   function chainTree(st) {
     const fail = !!st.chainFail; const dec = st.chainDecided || null; const held = !fail && !dec;
-    const N = (id, depth, kind, name, o) => Object.assign({ id, depth, kind, name, ref: null, label: 'confidential', state: 'succeeded', error: null, errorType: null, decision: null, usage: { tokens: 0, steps: 0, wallMs: 0, gpuMs: 0 }, started: '14:20:04', dur: '', guardrails: [], replay: null, held: null, children: [] }, o);
+    const N = (id, depth, kind, name, o) => Object.assign({ id, depth, kind, name, ref: null, label: 'confidential', state: 'succeeded', error: null, errorType: null, decision: null, usage: { tokens: 0, steps: 0, wallMs: 0, gpuMs: 0 }, started: '14:20:04', dur: '', guardrails: [], replay: null, held: null, children: [], think: kind === 'agent-run' ? 'medium' : null, thinkingTokens: kind === 'agent-run' ? 1240 : 0, plan: null }, o);
     const u = (tokens, steps, wallMs, gpuMs) => ({ tokens, steps, wallMs, gpuMs });
     const run = held ? 'waiting' : 'succeeded';
     const n9 = fail ? N('n9', 5, 'tool-call', 'ledger.query@1.1.2', { started: '14:20:58', dur: '0.8 s', decision: 'allow', usage: u(0, 0, 800, 0) })
       : N('n9', 5, 'tool-call', 'feed.post@1.0.0', { started: '14:20:58', dur: held ? 'waiting 7 min' : '1.0 s', state: held ? 'waiting' : dec === 'reject' ? 'failed' : 'succeeded', errorType: dec === 'reject' ? 'rejected' : null, error: dec === 'reject' ? 'Rejected by Mara Okafor: not before the controller signs off. Nothing was run.' : null, decision: 'allow', usage: u(0, 0, held ? 0 : 1000, 0) });
     const clerk = N('n6', 4, 'agent-run', 'Clerk', { ref: '8a14', started: '14:20:52', dur: held ? 'waiting 7 min' : fail ? '9.1 s' : '7.6 s', state: fail ? 'failed' : run, errorType: fail ? 'budget' : null, error: fail ? 'Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls' : null, usage: u(held ? 1118 : 1498, held ? 2 : 3, held ? 5400 : 7600, held ? 3100 : 4200), guardrails: [['tool-call', 'allow', '14:20:58']], replay: { fromStep: [1, 2] }, held: held ? { tool: 'feed.post', side: 'write', since: '14:20:58', approvers: 'the run\'s owner or a tool admin', step: 2 } : null,
       children: [N('n7', 5, 'skill-load', 'variance-analysis@3.0.0', { started: '14:20:52', dur: '4 ms', usage: u(0, 0, 4, 0) }), N('n8', 5, 'skill-load', 'close-checklist@1.2.0', { started: '14:20:52', dur: '3 ms', usage: u(0, 0, 3, 0) }), n9] });
-    const broker = N('n2', 2, 'agent-run', 'Close broker', { ref: '8a13', started: '14:20:11', dur: held ? 'waiting 7 min' : '52.0 s', state: run, usage: u(held ? 2210 : 2750, held ? 4 : 5, held ? 41000 : 43000, held ? 9800 : 11000), guardrails: [['tool-call', 'allow', '14:20:13'], ['tool-call', 'allow', '14:20:51']], replay: { fromStep: [1, 2, 3, 4] },
+    const broker = N('n2', 2, 'agent-run', 'Close broker', { ref: '8a13', started: '14:20:11', think: 'low', thinkingTokens: 970, plan: { steps: ['Get the quarter\'s variance from workflow:quarterly-variance', 'Hand the post to agent:Clerk'], tools: ['workflow:quarterly-variance', 'agent:Clerk'], approvedBy: 'Mara Okafor' }, dur: held ? 'waiting 7 min' : '52.0 s', state: run, usage: u(held ? 2210 : 2750, held ? 4 : 5, held ? 41000 : 43000, held ? 9800 : 11000), guardrails: [['tool-call', 'allow', '14:20:13'], ['tool-call', 'allow', '14:20:51']], replay: { fromStep: [1, 2, 3, 4] },
       children: [
         N('n3', 3, 'tool-call', 'workflow:quarterly-variance', { started: '14:20:13', dur: '38.4 s', decision: 'allow', usage: u(0, 0, 0, 0), children: [N('n4', 4, 'workflow-run', 'quarterly-variance', { ref: 'wr_01J8M4R2', started: '14:20:13', dur: '38.2 s', usage: u(1180, 4, 38200, 6100), guardrails: [['context', 'allow', '14:20:40']], replay: { fromNode: ['ledger', 'variance', 'narrative', 'approve', 'post'] } })] }),
         N('n5', 3, 'tool-call', 'agent:Clerk', { started: '14:20:51', dur: held ? 'waiting 7 min' : '9.1 s', state: fail ? 'failed' : run, errorType: fail ? 'budget' : null, error: fail ? 'child_budget: Clerk 1.0.0 stopped at its budget: 4 of 4 tool calls' : null, decision: 'allow', children: [clerk] })
@@ -1580,7 +1789,8 @@ table.dt .actions{white-space:nowrap}
     const inspector = '<aside class="inspector w360"><div class="hstack"><div class="eyebrow grow">' + esc(KIND_TEXT[sel.kind]) + ', depth ' + sel.depth + '</div>' + UI.pill(sel.held ? 'held' : sel.state, sel.held ? 'info' : NODE_STATE[sel.state] || '') + '</div>'
       + '<div class="mono" style="font-size:14px;overflow-wrap:anywhere">' + esc(nodeTitle(sel)) + '</div>'
       + (sel.error ? UI.notice('<b>' + esc(sel.errorType || 'failed') + '.</b> ' + esc(sel.error), 'danger') : '')
-      + UI.kv([['Run', runLink], ['Label', UI.label(sel.label, { sm: true })], ['Guardrail decision', esc(sel.decision || (g.length ? g.map((x) => x[0] + ' ' + x[1]).join(', ') : 'none here'))], ['Tokens', fmt(sel.usage.tokens) + ' here, ' + fmt(sel.subtree.tokens) + ' with what it called'], ['Steps', sel.usage.steps + ' here, ' + sel.subtree.steps + ' in the subtree'], ['Wall time', secsOf(sel.usage.wallMs)], ['GPU time', secsOf(sel.usage.gpuMs)], ['Began', esc(sel.started)], ['Duration', esc(sel.dur)], ['Typed error', sel.errorType ? '<span class="mono">' + esc(sel.errorType) + '</span>' : 'none']], 1)
+      + UI.kv([['Run', runLink], ['Label', UI.label(sel.label, { sm: true })], ['Guardrail decision', esc(sel.decision || (g.length ? g.map((x) => x[0] + ' ' + x[1]).join(', ') : 'none here'))], ['Tokens', fmt(sel.usage.tokens) + ' here, ' + fmt(sel.subtree.tokens) + ' with what it called'], ['Steps', sel.usage.steps + ' here, ' + sel.subtree.steps + ' in the subtree'], ['Wall time', secsOf(sel.usage.wallMs)], ['GPU time', secsOf(sel.usage.gpuMs)], ['Thinking', sel.think ? esc(sel.think) + ' level, ' + fmt(sel.thinkingTokens) + ' tokens against the run budget' : 'none here'], ['Began', esc(sel.started)], ['Duration', esc(sel.dur)], ['Typed error', sel.errorType ? '<span class="mono">' + esc(sel.errorType) + '</span>' : 'none']], 1)
+      + (sel.plan ? '<div class="eyebrow">Plan</div><div class="fg2" style="font-size:12px">Approved by ' + esc(sel.plan.approvedBy) + '; the run followed it as its step list.</div><ol style="margin:4px 0 0;padding-left:18px;font-size:13px">' + sel.plan.steps.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ol><div class="mono fg2" style="font-size:12px">' + esc(sel.plan.tools.join(', ')) + '</div>' : '')
       + (g.length ? '<div class="eyebrow">Guardrail decisions</div>' + UI.kv(g.map((x) => [esc(x[0]), UI.pill(x[1], x[1] === 'allow' ? 'ok' : 'danger') + ' <span class="muted">' + esc(x[2]) + '</span>']), 1) : '')
       + (sel.held ? '<div class="eyebrow">Held here</div>' + UI.kv([['Call', '<span class="mono">' + esc(sel.held.tool) + '</span> ' + UI.pill(sel.held.side, 'warn')], ['Waiting since', esc(sel.held.since)], ['Who decides', esc(sel.held.approvers)]], 1) + '<div class="hstack gap6">' + UI.btn('Reject', { attrs: 'data-heldreject="' + sel.id + '"' }) + UI.btn('Approve', { kind: 'primary', attrs: 'data-heldapprove="' + sel.id + '"' }) + '</div>' : '')
       + (sel.replay ? '<div class="eyebrow">Replay</div>' + UI.field(sel.replay.fromStep ? 'From step' : 'From workflow step', UI.select(replayOpts, replayOpts[0].value, 'data-replayfrom')) + '<div>' + UI.btn('Replay from this node', { icon: 'refresh', attrs: 'data-replaynode' }) + '</div><div class="muted" style="font-size:12px">Runs again as a new chain with the same principal and label; earlier steps are reused from the checkpoints.</div>' : '<div class="muted" style="font-size:12px">' + esc(KIND_TEXT[sel.kind]) + ' nodes do not replay on their own; replay the run above them.</div>')
@@ -1617,6 +1827,10 @@ table.dt .actions{white-space:nowrap}
       { title: 'Handed off', tone: 'info', text: 'Support triage handed the conversation to Billing agent with the context it chose. The specialist\'s answer is the run\'s answer, attributed to Billing agent, and the run ended with it.', apply(ctx) { ctx.state.chain = null; ctx.state.run = '7b10'; ctx.state.sel = 9; ctx.rerender(); } },
       { title: 'Chain tree', tone: 'neutral', text: 'A run that delegated opens its chain as a tree: every agent run, tool call, skill load and workflow run under the root, with timing, tokens, labels and guardrail decisions. The tree\'s token total equals what the chain metered.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n0'; st.chainFail = false; st.chainDecided = null; ctx.rerender(); } },
       { title: 'Held three levels down', tone: 'info', text: 'A write call held in a delegate\'s delegate pauses the whole chain. It is approved from the root run, with the path from the root to the call shown.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n6'; st.chainFail = false; st.chainDecided = null; ctx.rerender(); } },
+      { title: 'Plan awaiting approval', tone: 'info', text: 'A plan-first run drafts its plan as its first step and waits. Nothing runs until the owner approves it as drafted or edited, or declines it.', apply(ctx) { const st = ctx.state; st.chain = null; st.run = '7e95'; st.sel = 11; st.planDecided = null; ctx.rerender(); } },
+      { title: 'Call outside the plan', tone: 'warn', text: 'Under an approved plan the run follows the steps it names. A call the plan does not name pauses the run for a new approval; the approved steps still show which plan step they belong to.', apply(ctx) { const st = ctx.state; st.chain = null; st.run = '7e95'; st.planDecided = 'approve'; st.sel = 14; ctx.rerender(); } },
+      { title: 'Plan declined', tone: 'neutral', text: 'A declined plan ends the run as cancelled: nothing ran, the chain records the draft and who declined it.', apply(ctx) { const st = ctx.state; st.chain = null; st.run = '7e95'; st.planDecided = 'decline'; st.sel = 11; ctx.rerender(); } },
+      { title: 'Thinking per node', tone: 'neutral', text: 'Each agent run in the chain shows the thinking level it ran at and the thinking tokens it spent against the run budget; a run under an approved plan shows the plan.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n2'; st.chainFail = false; st.chainDecided = null; ctx.rerender(); } },
       { title: 'Child failed with a typed error', tone: 'danger', text: 'Clerk stopped at its budget. Close broker received the failure as a tool error starting child_budget and answered without the post; the node records errorType budget.', apply(ctx) { const st = ctx.state; st.chain = CHAIN_ID; st.node = 'n5'; st.chainFail = true; st.chainDecided = null; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -1634,7 +1848,7 @@ table.dt .actions{white-space:nowrap}
       const denied = st.denied && run.id === '7f3a';
       const waiting = run.waiting && !st.decided;
       const budgetStop = run.budgetStop && !st.resumed;
-      const status = run.chain ? chainStatus(run) : denied ? 'failed step' : run.waiting ? (st.decided === 'approve' ? 'succeeded' : st.decided === 'deny' ? 'failed step' : run.status) : run.budgetStop ? (st.resumed ? 'running' : run.status) : run.status;
+      const status = run.chain ? chainStatus(run) : run.planFirst ? (st.planDecided === 'approve' ? 'waiting on approval' : st.planDecided === 'decline' ? 'cancelled' : run.status) : denied ? 'failed step' : run.waiting ? (st.decided === 'approve' ? 'succeeded' : st.decided === 'deny' ? 'failed step' : run.status) : run.budgetStop ? (st.resumed ? 'running' : run.status) : run.status;
 
       // Steps for this run, with state overrides.
       const step = (n) => {
@@ -1654,7 +1868,8 @@ table.dt .actions{white-space:nowrap}
         }
         return s;
       };
-      const steps = run.steps.map(step);
+      const steps = run.steps.map(step).filter((s) => !run.planFirst || st.planDecided === 'approve' || s.n === 11);
+      if (run.planFirst && st.planDecided) { const pl = steps.find((s) => s.n === 11); pl.waiting = false; pl.failed = st.planDecided === 'decline'; pl.meta = st.planDecided === 'decline' ? 'draft, declined' : st.planEdited ? 'draft, approved as edited' : 'draft, approved'; pl.body = st.planDecided === 'decline' ? 'declined by Mara Okafor; nothing ran' : 'approved by Mara Okafor' + (st.planEdited ? ' with step 2 edited' : '') + '; the run follows it as its step list'; }
       const laneSum = Object.assign({}, run.sum);
       if (denied) laneSum.do = '1 call denied, 1 call 1.1 s';
 
@@ -1662,7 +1877,7 @@ table.dt .actions{white-space:nowrap}
       const rows = steps.map((s) => {
         let h = '<div class="runs-row"><div class="runs-n num">' + s.n + '</div>' + ['think', 'do', 'calc'].map((l) => '<div>' + (s.lane === l ? card(s) : '') + '</div>').join('') + '</div>';
         if (DIVIDERS[s.n]) h += '<div class="runs-div"><div></div><div class="runs-divline' + (denied ? ' danger' : '') + '"><span class="rule"></span><span>' + (denied ? 'Policy denied: tool egress ceiling internal, run is confidential. The denial goes back to the thinking step as data.' : esc(DIVIDERS[s.n])) + '</span><span class="rule"></span></div></div>';
-        if (s.waiting) h += '<div class="runs-div"><div></div><div class="runs-divline info"><span class="rule"></span><span>' + (s.awaiting ? 'Waiting on the child run ' + esc(s.awaiting) + '. This run holds its checkpoint and continues with the child\'s answer or its typed error.' : s.held ? 'Held for approval. The chain waits; the call is decided from the root run 8a12.' : 'Approval requested from Mara Okafor, 12 min ago. The run holds its checkpoint until a decision.') + '</span><span class="rule"></span></div></div>';
+        if (s.waiting) h += '<div class="runs-div"><div></div><div class="runs-divline info"><span class="rule"></span><span>' + (s.plan ? 'Waiting for the plan to be approved by the run\'s owner. Nothing runs until then; the draft expires with the run\'s wait limit.' : s.deviation ? 'Call outside the approved plan: jira-internal.create_issue is not in it. A new approval is needed before it runs; the plan can be extended to include it.' : s.awaiting ? 'Waiting on the child run ' + esc(s.awaiting) + '. This run holds its checkpoint and continues with the child\'s answer or its typed error.' : s.held ? 'Held for approval. The chain waits; the call is decided from the root run 8a12.' : 'Approval requested from Mara Okafor, 12 min ago. The run holds its checkpoint until a decision.') + '</span><span class="rule"></span></div></div>';
         return h;
       }).join('');
 
@@ -1670,6 +1885,8 @@ table.dt .actions{white-space:nowrap}
       const inspectorActions = selStep.lane === 'calc' ? UI.btn('Copy with provenance', { attrs: 'data-copyprov' })
         : selStep.awaiting && selStep.waiting ? '<div class="hstack gap6 wrap">' + UI.btn('Open the child run', { attrs: 'data-run="' + selStep.awaiting + '"' }) + UI.btn('Open the chain tree', { kind: 'ghost', attrs: 'data-openchain' }) + '</div>'
         : selStep.held && selStep.waiting ? UI.notice('Held for the chain rooted at run <span class="mono">8a12</span>. It is decided there, where the path from the root is shown.', 'info', UI.btn('Open the root run', { size: 'sm', attrs: 'data-run="8a12"' }))
+        : selStep.plan && selStep.waiting ? '<div class="hstack gap6 wrap">' + UI.btn('Approve plan', { kind: 'primary', attrs: 'data-planapprove' }) + UI.btn('Edit', { attrs: 'data-planedit' }) + UI.btn('Decline', { attrs: 'data-plandecline' }) + '</div>'
+        : selStep.deviation && selStep.waiting ? '<div class="hstack gap6 wrap">' + UI.btn('Approve this call', { kind: 'primary', attrs: 'data-devapprove' }) + UI.btn('Deny', { attrs: 'data-devdeny' }) + '</div>'
         : selStep.waiting ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', attrs: 'data-approve' }) + UI.btn('Deny', { attrs: 'data-deny' }) + '</div>'
         : selStep.failed ? UI.btn('Replay from this step', { icon: 'refresh', attrs: 'data-replay="' + selStep.n + '"' })
         : selStep.n === 5 ? UI.btn(st.showAnswer ? 'Hide final answer' : 'Show final answer', { attrs: 'data-toggleanswer' })
@@ -1738,6 +1955,11 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-replay]', (e, t) => openReplay(+t.dataset.replay));
       ctx.on('click', '[data-raise]', async () => { const ok = await ctx.confirm({ title: 'Raise the step limit and resume', tone: 'primary', ok: 'Raise to 40 and resume', body: '<div class="fg2">The run keeps its checkpoint after step 20. Raising the limit applies to this run only; the agent\'s default stays at 20.</div>', kv: [['Run', '<span class="mono">' + esc(run.id) + '</span>'], ['Owner', esc(run.by)], ['Steps', '20 of 20 used'], ['Tokens', '9,860 of 10,000 used']] }); if (!ok) return; st.resumed = true; ctx.rerender(); ctx.toast('Limit raised to 40. Run ' + esc(run.id) + ' resumed from step 21.', 'ok'); });
       ctx.on('click', '[data-approve]', async () => { const ok = await ctx.confirm({ title: 'Approve jira-internal.create_issue', tag: 'write', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The doing worker runs the call with your delegated token. The action is logged to audit with you as approver.</div>', kv: [['Project', 'FIN'], ['Summary', 'Q3 variance review'], ['Tool ceiling', 'confidential'], ['Waited', '12 min']] }); if (!ok) return; st.decided = 'approve'; ctx.rerender(); ctx.toast('Approved. FIN-1188 created in jira-internal as Mara Okafor.', 'ok'); });
+      ctx.on('click', '[data-planapprove]', async () => { const ok = await ctx.confirm({ title: 'Approve the plan', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The run follows these three steps and calls only cards.query, ledger.query and calc.table. A call outside the plan pauses for a new approval; write tools keep their own cards. Audited as agent.plan.approved.</div>' }); if (!ok) return; st.planDecided = 'approve'; st.planEdited = false; st.sel = 12; ctx.rerender(); ctx.toast('Plan approved. The run follows it as its step list.', 'ok'); });
+      ctx.on('click', '[data-planedit]', () => ctx.modal({ title: 'Edit the plan', body: '<div class="vstack gap8">' + UI.field('Step 1', UI.input('Pull last week\'s card transactions', { attrs: 'data-ps="1"' })) + UI.field('Step 2', UI.input('Join them to the ledger on amount and date within two days', { attrs: 'data-ps="2"' })) + UI.field('Step 3', UI.input('Report the lines without a match', { attrs: 'data-ps="3"' })) + '<div class="fg2" style="font-size:12px">Tools stay as drafted; a step can only name tools this run can call.</div></div>', actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Approve as edited', { kind: 'primary', attrs: 'data-planok' }), onMount(el) { el.querySelector('[data-planok]').addEventListener('click', () => { App.closeOverlay(); st.planDecided = 'approve'; st.planEdited = true; st.sel = 12; ctx.rerender(); ctx.toast('Plan approved as edited. The run follows it as its step list.', 'ok'); }); } }));
+      ctx.on('click', '[data-plandecline]', async () => { const ok = await ctx.confirm({ title: 'Decline the plan', tone: 'danger', ok: 'Decline', body: '<div class="fg2">The run ends as cancelled. Nothing ran; the draft stays on the run and in the chain. Audited as agent.plan.declined.</div>' }); if (!ok) return; st.planDecided = 'decline'; ctx.rerender(); ctx.toast('Plan declined. The run ended; nothing ran.', 'warn'); });
+      ctx.on('click', '[data-devapprove]', async () => { const ok = await ctx.confirm({ title: 'Approve jira-internal.create_issue outside the plan', tag: 'write', tone: 'primary', ok: 'Approve', body: '<div class="fg2">The plan is extended with this call and the run continues. Audited as agent.plan.approved with the deviation.</div>' }); if (!ok) return; ctx.toast('Call approved; the plan now includes it and the run continues.', 'ok'); });
+      ctx.on('click', '[data-devdeny]', async () => { const ok = await ctx.confirm({ title: 'Deny the call outside the plan', tone: 'danger', ok: 'Deny', body: '<div class="fg2">Nothing is written. The run receives the denial as data and keeps to its plan.</div>' }); if (!ok) return; ctx.toast('Denied. The run keeps to its approved plan.'); });
       ctx.on('click', '[data-deny]', async () => { const ok = await ctx.confirm({ title: 'Deny this action', tone: 'danger', ok: 'Deny', body: '<div class="fg2">Nothing is written. The agent receives the denial as data and its next thinking step decides how to report it.</div>' }); if (!ok) return; st.decided = 'deny'; ctx.rerender(); ctx.toast('Denied. The run continues with the denial as data.'); });
 
       function openReplay(from) {
@@ -2839,7 +3061,7 @@ table.dt .actions{white-space:nowrap}
   const { UI, esc } = App;
 
   const PROFILES = [
-    { id: 'analyst', model: 'qwen2.5:32b-q4_K_M', short: 'qwen2.5:32b', sub: 'qwen2.5:32b, alias of none', status: 'published', maxLabel: 'confidential', pool: 'gpu-large', residency: 'warm', num_ctx: '16384', temperature: '0.2', prompt: 'prompts/analyst, v4', promptKey: 'prompts/analyst@v4', think: 'medium, users may choose up to high', thinkKey: '{ default: medium, ceiling: high }', fallback: 'general-8b after 8 s queue wait', fallbackKey: '{ profile: general-8b, afterQueueWait: 8s }', stable: 'sha256:41ab..', canary: 'sha256:c07e..', canaryPct: 10, maxTools: 24, maxSchema: 6000, schemaUsed: 3480,
+    { id: 'analyst', model: 'qwen2.5:32b-q4_K_M', short: 'qwen2.5:32b', sub: 'qwen2.5:32b, alias of none', status: 'published', maxLabel: 'confidential', pool: 'gpu-large', residency: 'warm', num_ctx: '16384', temperature: '0.2', prompt: 'prompts/analyst, v4', promptKey: 'prompts/analyst@v4', think: 'medium, users may choose up to high', thinkKey: '{ default: medium, ceiling: high }', thinkingBudget: '250,000', planFirst: true, reflect: 'judge-8b', fallback: 'general-8b after 8 s queue wait', fallbackKey: '{ profile: general-8b, afterQueueWait: 8s }', stable: 'sha256:41ab..', canary: 'sha256:c07e..', canaryPct: 10, maxTools: 24, maxSchema: 6000, schemaUsed: 3480,
       bindings: [
         { server: 'kb-search', builtin: true, tools: 'all 3 tools', n: 3, confirm: 'never', ceiling: 'confidential' },
         { server: 'jira-internal', tools: 'search_issues, get_issue, create_issue', n: 3, confirm: 'on write', ceiling: 'confidential' },
@@ -2931,6 +3153,25 @@ table.dt .actions{white-space:nowrap}
   function profileList(st) { return st.showEmbed ? PROFILES.concat([EMBED]) : PROFILES; }
   function resolve(st, p) { if (!p.alias) return p; const target = (st.aliasTarget || {})[p.id] || p.alias; return PROFILES.find((x) => x.id === target) || p; }
 
+  /** 1.7.0 (B-11701, B-11702): the thinking policy per tenant and per workspace, and the thinking tokens spent today. */
+  const POLICIES = { tenant: { name: 'Tenant', visibility: 'author', retention: 'as the answer', exports: true, budget: '' }, finance: { name: 'Finance workspace', visibility: 'reviewers', retention: '7 days', exports: false, budget: '400,000', own: true }, sales: { name: 'Sales workspace', visibility: 'author', retention: 'as the answer', exports: true, budget: '', inherits: true } };
+  function thinkingPolicyPanel(st, target) {
+    st.tpScope = st.tpScope || 'tenant'; st.tp = st.tp || {};
+    const base = POLICIES[st.tpScope]; const f = Object.assign({}, base, st.tp[st.tpScope] || {});
+    const used = st.thinkSpent && target.id === 'analyst' ? 250000 : 84120; const limit = 250000;
+    return UI.panel('Thinking policy', UI.seg(Object.keys(POLICIES).map((k) => ({ id: k, label: POLICIES[k].name })), st.tpScope, 'data-tp-scope')
+      + (f.inherits ? UI.notice('This workspace inherits the tenant\'s policy. Set a value to give it its own.', 'info') : f.own ? UI.notice('This workspace has its own policy; it wins over the tenant\'s. Reset it to inherit again.', 'info') : '')
+      + '<div class="formgrid" style="--cols:2">'
+      + UI.field('Who sees thinking', UI.select([{ value: 'author', label: 'the author' }, { value: 'reviewers', label: 'reviewers only' }, { value: 'nobody', label: 'nobody' }], f.visibility, 'data-tp="visibility"'), 'Never above the viewer\'s clearance. With nobody, the stream carries none and the message keeps only the token count')
+      + UI.field('Keep thinking for', UI.select(['as the answer', '0 days', '7 days', '30 days', '90 days'], f.retention, 'data-tp="retention"'), 'Dropped apart from the answer; the token count stays')
+      + UI.field('Exports', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Exports carry thinking', f.exports, 'data-tp-exports') + '</div>', 'Only for an exporter the visibility lets see it')
+      + UI.field('Workspace thinking budget per day', UI.input(f.budget, { placeholder: 'none', attrs: 'data-tp="budget" class="input mono"' }).replace('class="input" ', ''), 'Thinking tokens across every profile in the workspace')
+      + '</div>'
+      + UI.meter('Thinking tokens today, ' + esc(target.id), used.toLocaleString('en-GB') + ' of ' + limit.toLocaleString('en-GB'), (used / limit) * 100, used >= limit ? 'danger' : used / limit >= 0.8 ? 'warn' : '')
+      + '<div class="muted" style="font-size:12px">Applied to chat, the OpenAI-compatible API (reasoning.effort is mapped and capped the same way), agent runs and the chain view. Audited as thinking.policy.updated.</div>',
+      { actions: UI.btn('Save policy', { kind: 'primary', size: 'sm', attrs: 'data-tp-save' }) + (st.tpScope !== 'tenant' ? UI.btn('Inherit from tenant', { kind: 'ghost', size: 'sm', attrs: 'data-tp-reset' }) : ''), attrs: 'id="thinking-policy"' });
+  }
+
   App.register({
     id: 'profiles', title: 'Profiles', summary: 'Pinned model version, options, prompt, pool, residency, ceiling, MCP bindings and tool budgets', section: 'admin',
     crumb: (st, params) => ['Admin', 'Profiles', params.profile || st.selected || 'analyst'],
@@ -2941,6 +3182,9 @@ table.dt .actions{white-space:nowrap}
       { title: 'Over tool budget', tone: 'warn', text: '31 tools are bound against a budget of 24. The profile exposes find_tools and loads matches per step.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.overBudget = true; ctx.rerender(); } },
       { title: 'Alias repoint', tone: 'info', text: 'Moving chat-default from general-8b to analyst shows which workspaces are affected before it applies.', apply(ctx) { ctx.state.selected = 'chat-default'; ctx.state.openRepoint = 'analyst'; ctx.rerender(); } },
       { title: 'Ceiling conflict', tone: 'danger', text: 'A server reaching restricted data cannot bind to a profile capped at confidential.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.openBind = 'hr-records'; ctx.rerender(); } },
+      { title: 'Thinking policy', tone: 'info', text: 'Who sees thinking, how long it is kept apart from the answer and whether exports carry it, per tenant and per workspace. Finance keeps it for reviewers only and drops it after 7 days.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.tpScope = 'finance'; ctx.state.openPolicy = true; ctx.rerender(); } },
+      { title: 'Thinking budget spent', tone: 'warn', text: 'analyst spent its 250,000 thinking tokens for today. Turns think at low until midnight UTC rather than being refused; 14 turns were dropped so far.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.thinkSpent = true; ctx.rerender(); } },
+      { title: 'Plan first and reflection', tone: 'neutral', text: 'analyst drafts a plan before any tool runs and has judge-8b check every answer. An agent on this profile asking for thinking above the ceiling is refused at publish, with the ceiling named.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.thinkSpent = false; ctx.rerender(); } },
       { title: 'Red-team gate', tone: 'danger', text: 'Publishing analyst version 5 is refused: the Baseline suite resisted 25 of 28 attacks for these settings. Three attacks succeeded and are flags. No evaluation override opens the red-team gate; a passing run or the gate turned off does.', apply(ctx) { ctx.state.selected = 'analyst'; ctx.state.redteamGate = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -2951,7 +3195,7 @@ table.dt .actions{white-space:nowrap}
       const p = list.find((x) => x.id === st.selected) || list[0];
       const isAlias = !!p.alias;
       const target = isAlias ? resolve(st, p) : p;
-      const f = Object.assign({ model: target.model, pool: target.pool, residency: target.residency, num_ctx: target.num_ctx, temperature: target.temperature, maxLabel: target.maxLabel, prompt: target.prompt, think: target.think, fallback: target.fallback }, st.form[target.id] || {});
+      const f = Object.assign({ model: target.model, pool: target.pool, residency: target.residency, num_ctx: target.num_ctx, temperature: target.temperature, maxLabel: target.maxLabel, prompt: target.prompt, think: target.think, fallback: target.fallback, thinkingBudget: target.thinkingBudget || '', planFirst: !!target.planFirst, reflect: target.reflect || 'off' }, st.form[target.id] || {});
       const ptr = st.pointer[target.id] || { stable: target.stable, canary: target.canary, pct: target.canaryPct };
       const bindings = (target.bindings || []).concat(st.extraBindings[target.id] || []).filter((b) => !(st.unbound[target.id] || {})[b.server]);
       const overBudget = st.overBudget && target.id === 'analyst';
@@ -2977,6 +3221,7 @@ table.dt .actions{white-space:nowrap}
         if (overBudget) bindRows.push({ cells: ['erp-sap', 'all 3 tools', 'on write', UI.label('confidential', { sm: true })], attrs: 'data-binding="erp-sap"' }, { cells: ['browser-sandbox ' + UI.pill('per-session'), 'all 3 tools', 'always', UI.label('internal', { sm: true })], attrs: 'data-binding="browser-sandbox"' }, { cells: ['jira-internal ' + UI.pill('extended'), 'all 18 project tools', 'on write', UI.label('confidential', { sm: true })], attrs: 'data-binding="jira-internal"' });
         main = UI.pagehead(p.id, UI.pill(p.status) + ' What users pick in chat: a pinned model version plus options, prompt, pool, residency, ceiling and tools', UI.btn('Preview effective tools for a user', { attrs: 'data-preview' }) + UI.btn('Save draft', { kind: 'primary', attrs: 'data-save' }))
           + (p.note ? UI.notice(esc(p.note) + ' <a href="#" data-go="models">Open Models</a>', 'info') : '')
+          + (st.thinkSpent && target.id === 'analyst' ? UI.notice('<b>Thinking budget spent.</b> analyst used 250,000 of 250,000 thinking tokens today. Turns think at low until midnight UTC rather than being refused; 14 turns dropped so far.', 'warn') : '')
           + (p.noTools ? UI.notice('<b>Binding refused.</b> nomic-embed-text lacks the tools capability, so the registry rejects any MCP binding on this profile. <a href="#" data-go="models">See the model</a>', 'danger') : '')
           + '<div class="formgrid" style="--cols:3">'
           + UI.field('Model version', UI.select([target.model + ', ' + target.stable.replace('..', '..')].concat(ptr.canary ? [target.model + ', ' + ptr.canary + ' (canary)'] : []), target.model + ', ' + target.stable, 'data-f="model"'), '<a href="#" data-go="models">Open in Models</a>')
@@ -2987,6 +3232,9 @@ table.dt .actions{white-space:nowrap}
           + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], f.maxLabel, 'data-f="maxLabel"'))
           + UI.field('System prompt', UI.select(['prompts/analyst, v4', 'prompts/analyst, v3', 'prompts/general, v2', 'prompts/coder, v1', 'prompts/vision, v1', 'none'], f.prompt, 'data-f="prompt"'))
           + UI.field('Think', UI.select(['off', 'low, users may choose up to medium', 'medium, users may choose up to high', 'high, users may choose up to high'], f.think, 'data-f="think"'))
+          + UI.field('Thinking budget per day', UI.input(f.thinkingBudget, { placeholder: 'none', attrs: 'data-f="thinkingBudget" class="input mono"' }).replace('class="input" ', ''), 'Thinking tokens; at the limit turns think at low rather than being refused')
+          + UI.field('Plan first', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Draft a plan before any tool runs', f.planFirst, 'data-planfirst') + '</div>', 'The plan is a card the person approves, edits or declines')
+          + UI.field('Reflection', UI.select(['off', 'this profile', 'judge-8b', 'general-8b'], f.reflect, 'data-f="reflect"'), 'A second pass checks the answer against the question, citations and tool results')
           + UI.field('Fallback chain', UI.select(['none', 'general-8b after 8 s queue wait', 'general-8b after 10 s queue wait', 'fast after 5 s queue wait', 'analyst after 8 s queue wait'], f.fallback, 'data-f="fallback"'))
           + '</div>'
           + UI.field('Untrusted content', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Mark retrieved and tool text as data', f.trust !== 'off', 'data-trust') + '</div>', 'Knowledge chunks, crawled pages, tool, MCP and HTTP results reach the model in delimiters with their words joined by a marker, so instructions in them read as data. On by default (B-6901).')
@@ -2997,7 +3245,8 @@ table.dt .actions{white-space:nowrap}
             + (overBudget ? UI.notice('31 tools are bound against a budget of 24. The profile exposes <span class="mono">find_tools</span> instead and loads matches per step from the tool description index.', 'warn', UI.btn('Raise budget', { size: 'sm', attrs: 'data-raise' })) : '')
             + '<div class="grid2">' + UI.meter('Tools', toolCount + ' of ' + target.maxTools, target.maxTools ? (toolCount / target.maxTools) * 100 : 0, toolCount > target.maxTools ? 'danger' : '') + UI.meter('Schema tokens', schemaUsed.toLocaleString('en-GB') + ' of ' + target.maxSchema.toLocaleString('en-GB'), target.maxSchema ? (schemaUsed / target.maxSchema) * 100 : 0, schemaUsed > target.maxSchema ? 'danger' : '') + '</div>', { actions: UI.btn('Bind server', { size: 'sm', attrs: 'data-bind', disabled: !!p.noTools, title: p.noTools ? 'Model has no tools capability' : '' }) })
           + '</div><div style="width:330px;flex-shrink:0">' + UI.panel('YAML', '<pre class="profiles-yaml">' + esc(yaml) + '</pre>', { actions: UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="profile yaml"' }) }) + '</div></div>'
-          + redTeamPanel(st, target, ctx);
+          + redTeamPanel(st, target, ctx)
+          + thinkingPolicyPanel(st, target);
       }
 
       root.innerHTML = '<style>'
@@ -3012,6 +3261,12 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-profile-link]', (e, t) => { e.preventDefault(); st.selected = t.dataset.profileLink; ctx.rerender(); });
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go, t.dataset.go === 'models' ? { model: target.model } : undefined); });
       ctx.on('change', '[data-f]', (e, t) => { st.form[target.id] = st.form[target.id] || {}; st.form[target.id][t.dataset.f] = t.value; st.dirty = true; ctx.rerender(); });
+      ctx.on('change', '[data-planfirst]', (e, t) => { st.form[target.id] = st.form[target.id] || {}; st.form[target.id].planFirst = t.checked; st.dirty = true; ctx.rerender(); ctx.toast(t.checked ? esc(target.id) + ' drafts a plan before any tool runs, in the draft.' : 'Plan first off in the draft.'); });
+      ctx.on('click', '[data-tp-scope] [data-seg]', (e, t) => { st.tpScope = t.dataset.seg; ctx.rerender(); });
+      ctx.on('change', '[data-tp]', (e, t) => { st.tp[st.tpScope] = Object.assign({}, st.tp[st.tpScope], { [t.dataset.tp]: t.value, inherits: false, own: st.tpScope !== 'tenant' }); ctx.rerender(); });
+      ctx.on('change', '[data-tp-exports]', (e, t) => { st.tp[st.tpScope] = Object.assign({}, st.tp[st.tpScope], { exports: t.checked, inherits: false, own: st.tpScope !== 'tenant' }); ctx.rerender(); });
+      ctx.on('click', '[data-tp-save]', () => ctx.toast('Thinking policy saved for ' + esc(POLICIES[st.tpScope].name) + '. It applies to the next turn; audited as thinking.policy.updated.', 'ok'));
+      ctx.on('click', '[data-tp-reset]', async () => { const ok = await ctx.confirm({ title: 'Inherit the tenant policy', tone: 'warn', ok: 'Inherit', body: '<div class="fg2">' + esc(POLICIES[st.tpScope].name) + ' drops its own policy and follows the tenant\'s from the next turn.</div>' }); if (!ok) return; st.tp[st.tpScope] = { inherits: true, own: false, visibility: POLICIES.tenant.visibility, retention: POLICIES.tenant.retention, exports: POLICIES.tenant.exports, budget: '' }; ctx.rerender(); ctx.toast('Policy reset; the workspace inherits the tenant\'s.', 'ok'); });
       ctx.on('change', '[data-trust]', (e, t) => { st.form[target.id] = st.form[target.id] || {}; st.form[target.id].trust = t.checked ? 'on' : 'off'; st.dirty = true; ctx.rerender(); ctx.toast(t.checked ? 'Untrusted content is marked for ' + esc(target.id) + ' in the draft.' : 'Marking off in the draft: retrieved and tool text reach ' + esc(target.id) + ' unmarked unless a guardrail annotates it.', t.checked ? 'ok' : 'warn'); });
       ctx.on('click', '[data-save]', () => { st.dirty = false; ctx.toast('Draft saved for <b>' + esc(p.id) + '</b>. The published version keeps serving until a model admin publishes the draft.', 'ok', 5000); });
       ctx.on('click', '[data-raise]', () => ctx.modal({ title: 'Raise tool budget for analyst', body: UI.field('maxTools', UI.input('32', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.field('maxSchemaTokens', UI.input('9000', { attrs: 'class="input mono"' }).replace('class="input" ', '')) + UI.notice('A 32B model keeps tool-calling accuracy up to about 30 tools in the conformance suite. Above that, find_tools stays the safer choice.', 'warn'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save to draft', { kind: 'primary', attrs: 'data-close data-ok' }), onMount(m) { m.querySelector('[data-ok]').addEventListener('click', () => { st.overBudget = false; target.maxTools = 32; target.maxSchema = 9000; ctx.rerender(); ctx.toast('Budget raised to 32 tools, 9,000 schema tokens in the draft.', 'ok'); }); } }));
@@ -4072,6 +4327,36 @@ table.dt .actions{white-space:nowrap}
   const statusPill = (s) => UI.pill(s, s === 'published' ? 'ok' : s === 'in review' ? 'info' : s === 'deprecated' ? 'warn' : s === 'retired' ? 'danger' : '');
   const VERSIONS = ['draft', 'in review', 'published', 'deprecated', 'retired'];
 
+  // 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category. Entries published before the fields
+  // existed have none and keep working; an entry offered in chat (an agent, a skill, a tool a profile lists) is not
+  // submitted without them.
+  const CARDS = {
+    'kb.search': { purpose: 'Find the passages that answer a question in the knowledge bases you can read.', examples: ['Find the travel policy section on per diems'], category: 'Knowledge' },
+    'ledger.query': { purpose: 'Look up what was posted, without leaving the chat.', examples: ['What did FIELD-SALES post in September?'], category: 'Finance' },
+    'contract-redline': { purpose: 'Answers that show what changed against the template.', examples: ['Redline this clause against our template'], category: 'Documents' },
+    'Data analyst': { purpose: 'Questions about the numbers, answered with sources.', examples: ['How far over budget was travel in Q3?', 'Which cost centre grew fastest this year?'], category: 'Finance' },
+    'Meeting notes': { purpose: 'Turn a recording or notes into actions and owners.', examples: [], category: 'Meetings' },
+    'travel-policy-lookup': { purpose: '', examples: [], category: '' }
+  };
+  const ON_PROFILE = ['kb.search', 'ledger.query', 'jira-internal.create_issue'];
+  const TRIG = { tool: '/', agent: '@', skill: '+' };
+  const cardOf = (st, e) => (st.cards && st.cards[e.id]) || CARDS[e.id] || { purpose: '', examples: [], category: '' };
+  const offeredInChat = (e) => e.kind !== 'tool' || ON_PROFILE.indexOf(e.id) >= 0;
+  const missingOf = (c) => [!c.purpose ? 'purpose' : null, !(c.examples || []).length ? 'example prompt' : null, !c.category ? 'category' : null].filter(Boolean);
+  function cardPreview(st, e) {
+    const c = cardOf(st, e); const call = TRIG[e.kind] + e.id;
+    return '<div class="reg-card"><div class="hstack wrap gap6"><b>' + esc(e.id) + '</b>' + UI.pill(e.kind, 'outline') + '<span class="right">' + UI.label(e.label, { sm: true }) + '</span></div>'
+      + '<div class="fg2" style="font-size:13px">' + esc(c.purpose || 'No purpose yet.') + '</div>'
+      + (c.examples && c.examples[0] ? '<div class="reg-ex">"' + esc(c.examples[0]) + '"</div>' : '<div class="muted" style="font-size:12px">No example prompt yet.</div>')
+      + '<div class="hstack wrap gap6"><span class="mono" style="font-size:12px">' + esc(call) + '</span><span class="muted right" style="font-size:12px">' + esc(c.category || 'Other') + '</span></div></div>';
+  }
+  function cardFields(ctx, e, then) {
+    const st = ctx.state; const c = cardOf(st, e);
+    ctx.modal({ title: 'Catalogue card for ' + esc(e.id), body: '<div class="vstack gap8">' + UI.field('Purpose', UI.input(c.purpose || '', { placeholder: 'What a person gets from it, in one line', attrs: 'data-cpurpose maxlength="500"' })) + UI.field('Example prompts', UI.textarea((c.examples || []).join('\n'), { rows: 3, placeholder: 'One per line, up to five', attrs: 'data-cexamples' }), 'The first one fills the composer when someone picks it from the catalogue.') + UI.field('Category', UI.input(c.category || '', { placeholder: 'Documents, Finance, Writing', attrs: 'data-ccat maxlength="60"' })) + UI.notice('These are not part of the schema hash: a published entry can gain them without a new version or a new review.', 'info') + '</div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-csave' }),
+      onMount(m) { m.querySelector('[data-csave]').addEventListener('click', () => { st.cards = st.cards || {}; st.cards[e.id] = { purpose: m.querySelector('[data-cpurpose]').value.trim(), examples: m.querySelector('[data-cexamples]').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 5), category: m.querySelector('[data-ccat]').value.trim() }; if (st.missingFor === e.id && !missingOf(st.cards[e.id]).length) st.missingFor = null; App.closeOverlay(); ctx.rerender(); ctx.toast('Catalogue card saved.', 'ok'); if (then) then(); }); } });
+  }
+
   let bound = false; const cur = {};
 
   App.register({
@@ -4090,6 +4375,8 @@ table.dt .actions{white-space:nowrap}
       { title: 'Red-team gate on approve', tone: 'danger', text: 'Approving Support triage 0.4.0 is refused: its gated suite has no passing run for this version\'s hash. Run the suite against the version, or turn the gate off.', apply(ctx) { const st = ctx.state; st.tab = 'review'; st.sel = 'Support triage'; st.over = st.over || {}; st.over['Support triage'] = 'in review'; st.redteamRefused = true; ctx.rerender(); } },
       { title: 'Test harness', tone: 'info', text: 'Runs the tool in the sandbox with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.tab = 'tools'; ctx.state.sel = 'ledger.query'; ctx.state.harnessOpen = true; ctx.rerender(); runHarness(ctx); } },
       { title: 'HTTP host refused', tone: 'danger', text: 'A test call to a host that resolves to a cloud metadata address, an internal host the operator has not named, or a public host off the tenant\'s list is refused before anything is sent.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { url: 'http://169.254.169.254/latest/meta-data/{path}', test: 'refused' }); } },
+      { title: 'Missing for the catalogue', tone: 'danger', text: 'Submitting an agent offered in chat without an example prompt is refused, naming the missing field. The entry stays a draft.', apply(ctx) { const st = ctx.state; st.tab = 'skills'; st.sel = 'travel-policy-lookup'; st.over = st.over || {}; st.over['travel-policy-lookup'] = 'draft'; st.missingFor = 'travel-policy-lookup'; ctx.rerender(); } },
+      { title: 'Catalogue card preview', tone: 'info', text: 'The reviewer sees the card the catalogue will show: purpose, the first example prompt, the call and the category.', apply(ctx) { const st = ctx.state; st.tab = 'review'; st.sel = 'Meeting notes'; st.cards = st.cards || {}; st.cards['Meeting notes'] = { purpose: 'Turn a recording or notes into actions and owners.', examples: ['Turn these notes into actions'], category: 'Meetings' }; ctx.rerender(); } },
       { title: 'Literal credential refused', tone: 'danger', text: 'Saving an HTTP tool with a literal Authorization header, API key query parameter or secret body field is refused: credentials go in as vault references, resolved at call time.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { header: 'Bearer 9f3ab21c7d4e5f6a', literal: true }); } }
     ],
     render(root, ctx) {
@@ -4156,6 +4443,9 @@ table.dt .actions{white-space:nowrap}
         + deprecatedNote + retiredNote
         + (st.redteamRefused && sel.kind === 'agent' && selStatus === 'in review' ? UI.notice('<b>Red-team gate.</b> Approving ' + esc(sel.version) + ' needs a passing run of ' + esc((sel.redteam || {}).suite || 'its suite') + ' for this version\'s hash. No run exists for it yet.', 'danger', UI.btn('Red team', { size: 'sm', attrs: 'data-redteam' })) : '')
         + UI.kv([['Owner', esc(sel.owner)], ['Version', '<span class="mono">' + esc(sel.version) + '</span> <span class="muted">' + esc(selStatus) + '</span>'], ['Schema hash', '<span class="mono">' + esc(sel.hash) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="' + esc(sel.hash) + '"' })], ['Implemented as', esc(sel.impl)], ['Required scopes', '<span class="mono">' + esc(sel.scopes) + '</span>'], ['Ceiling label', UI.label(sel.label, { sm: true })], ['Confirmation required', esc(sel.confirm) + (sel.side && sel.side !== 'read-only' ? ' <span class="muted">(' + esc(sel.side) + ' class)</span>' : '')], ['Rate limit', esc(sel.rate)], ['Secrets', '<span class="mono">' + esc(sel.secrets) + '</span>'], ['MCP hint', esc(sel.hint)]].concat(sel.http ? [['Request', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.method + ' ' + sel.http.url) + '</span>'], ['Parameters', esc(sel.http.params)], ['Headers', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.headers) + '</span>'], ['Response', esc('JSON pointer ' + sel.http.pointer + ', at most ' + sel.http.cap + ', ' + sel.http.timeout + ' timeout')], ['Calls', esc(sel.http.calls)], ['Outbound guard', 'resolved once, every address checked, connection pinned, redirects not followed']] : []).concat(chainRows(ed(sel))).concat([['Used by', usedByText(sel) + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
+        + (st.missingFor === sel.id ? UI.notice('<b>Missing for the catalogue.</b> ' + esc(sel.id) + ' is offered in chat, so the catalogue needs ' + esc(missingOf(cardOf(st, sel)).join(', ')) + '. It stays a draft.', 'danger', UI.btn('Add them', { size: 'sm', attrs: 'data-cardedit' })) : '')
+        + '<div class="hstack"><div class="eyebrow grow">Catalogue card</div>' + (selStatus !== 'retired' ? UI.btn('Edit', { kind: 'ghost', size: 'xs', icon: 'edit', attrs: 'data-cardedit aria-label="Edit the catalogue card"' }) : '') + '</div>'
+        + cardPreview(st, sel) + (missingOf(cardOf(st, sel)).length ? '<div class="muted" style="font-size:12px">' + (offeredInChat(sel) ? 'Asked for at submit: ' : 'Not asked for (no profile offers it in chat): ') + esc(missingOf(cardOf(st, sel)).join(', ')) + '</div>' : '')
         + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) + '</div>'
         + '<div class="vstack gap4">' + checks.map((c) => '<div class="hstack" style="color:var(--' + (c[1] ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c[1] ? 'check' : 'x', 14) + '<span style="color:var(--fg)">' + esc(c[0]) + '</span></div>').join('')
         + (!checksOk && sel.egressNote ? '<div style="font-size:12px;color:var(--danger-fg)">' + esc(sel.egressNote) + '</div>' : '') + (sel.kind !== 'tool' ? chainProblems(sel).map((x) => '<div style="font-size:12px;color:var(--danger-fg)">' + esc(x) + '</div>').join('') : '') + '</div>'
@@ -4169,7 +4459,7 @@ table.dt .actions{white-space:nowrap}
         + UI.btn('Test harness', { kind: 'ghost', icon: 'play', attrs: 'data-harness-open' }) + '</div>'
         + harness + '</aside>';
 
-      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
+      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.reg-card{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.reg-ex{font-size:13px;font-style:italic;color:var(--fg2);overflow-wrap:anywhere}.registry-page .tabs .count{margin-left:2px}</style>'
         + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Allowed hosts', { attrs: 'data-hosts' }) + UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('New HTTP tool', { attrs: 'data-newhttp' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit' }))
         + (st.showEgress && !st.egressFixed ? UI.notice('<b>Undeclared egress.</b> mail.send_internal opened a connection to <span class="mono">ldap.northwind.internal</span> during checks. Approve stays disabled until the owner declares or removes the destination.', 'danger', UI.btn('Declare destination', { size: 'sm', attrs: 'data-declare' })) : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: entries.filter((e) => e.kind === 'tool').length }, { id: 'skills', label: 'Skills', count: entries.filter((e) => e.kind === 'skill').length }, { id: 'agents', label: 'Agents', count: entries.filter((e) => e.kind === 'agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
@@ -4218,6 +4508,9 @@ table.dt .actions{white-space:nowrap}
       });
       on('click', '[data-submitreview]', async () => {
         const ctx = cur.ctx; const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel);
+        // B-12304: checked at submit: an entry offered in chat needs a purpose, an example prompt and a category.
+        const miss = offeredInChat(e) ? missingOf(cardOf(cur.st, e)) : [];
+        if (miss.length) { cur.st.missingFor = e.id; ctx.rerender(); ctx.toast('<b>Missing for the catalogue.</b> Add ' + esc(miss.join(', ')) + ' before submitting.', 'danger', 6000); return; }
         const ok = await ctx.confirm({ title: 'Submit ' + esc(e.id) + ' for review', tag: 'review', tone: 'info', body: '<p class="fg2" style="margin:0">Automated checks run first: schema, dependency scan and declared egress. A tool admin reviews after they finish.</p>', kv: [['Version', e.version], ['Owner', e.owner]], ok: 'Submit' });
         if (ok) { cur.st.over[e.id] = 'in review'; e.submitted = 'today, ' + e.owner; ctx.rerender(); ctx.toast(esc(e.id) + ' is in the review queue.', 'ok'); }
       });
@@ -4228,6 +4521,7 @@ table.dt .actions{white-space:nowrap}
       on('click', '[data-publishmore]', () => publishScope(cur.ctx, find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel)));
       on('click', '[data-editentry]', () => { const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); if (e.kind === 'tool') cur.ctx.toast('Tool drafts are edited in their source: script, OpenAPI document or MCP server. The registry only records the entry.'); else editChain(cur.ctx, e); });
       on('click', '[data-submit]', () => submitEntry(cur.ctx));
+      on('click', '[data-cardedit]', () => { const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); if (e) cardFields(cur.ctx, e); });
       on('click', '[data-newhttp]', () => httpForm(cur.ctx, {}));
       on('click', '[data-hosts]', () => hostsDrawer(cur.ctx));
       on('click', '[data-entrylink]', (e, t) => { e.preventDefault(); const x = find(t.dataset.entrylink); if (!x) return; cur.st.sel = x.id; cur.st.tab = x.kind === 'tool' ? 'tools' : x.kind + 's'; cur.ctx.rerender(); });
@@ -4443,7 +4737,10 @@ table.dt .actions{white-space:nowrap}
         + UI.field('Side-effect class', UI.select(['read-only', 'write', 'destructive', 'external-comms'], 'write', 'data-side'), 'write, destructive and external-comms require user confirmation by default')
         + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal', 'data-label'))
         + UI.field('Required scopes', UI.input('tools:invoke')) + UI.field('Allowed egress zones', UI.input('none', {}), 'Every observed destination must be declared here')
-        + '<div class="span2">' + UI.field('Rate limit', UI.input('60 per user per hour')) + '</div></div>'
+        + '<div class="span2">' + UI.field('Rate limit', UI.input('60 per user per hour')) + '</div>'
+        + '<div class="span2">' + UI.field('Purpose', UI.input('', { placeholder: 'What a person gets from it, in one line', attrs: 'data-spurpose' }), 'Shown on the catalogue card') + '</div>'
+        + '<div class="span2">' + UI.field('Example prompts', UI.textarea('', { rows: 2, placeholder: 'One per line', attrs: 'data-sexamples' }), 'At least one for an entry offered in chat') + '</div>'
+        + UI.field('Category', UI.input('', { placeholder: 'Documents, Finance, Writing', attrs: 'data-scat' })) + '</div>'
         + UI.notice('Submitting creates a <b>draft</b>. Automated checks run, then a tool admin reviews it. Nothing reaches a tenant before review.', 'info'),
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save draft and run checks', { kind: 'primary', attrs: 'data-ok' }),
       cls: 'wide',
@@ -4453,6 +4750,7 @@ table.dt .actions{white-space:nowrap}
           App.closeOverlay();
           const st = ctx.state; st.added = st.added || [];
           const entry = { id: name, kind, side: kind === 'tool' ? side : undefined, version, label, egress: 'none', status: 'draft', owner: 'Mara Okafor', scopes: 'tools:invoke', confirm: side === 'read-only' ? 'never' : 'always', rate: '60 per user per hour', secrets: 'none', hint: 'none', hash: Math.random().toString(16).slice(2, 10), impl: 'OpenAPI operation', contents: 'Instructions only', tools: 'none', profile: 'plan: chat-default at medium', skills: 'none', kbs: 'none', guard: 'Default baseline v9', limits: '12 steps, 6,000 tokens, 60 s, 4 tool calls', checks: [['Schema valid', true], ['Dependency scan clean', true], ['Declared egress matches observed', true]] };
+          st.cards = st.cards || {}; st.cards[name] = { purpose: m.querySelector('[data-spurpose]').value.trim(), examples: m.querySelector('[data-sexamples]').value.split('\n').map((x) => x.trim()).filter(Boolean), category: m.querySelector('[data-scat]').value.trim() };
           st.added.push(entry); st.sel = name; st.tab = kind === 'tool' ? 'tools' : kind + 's';
           ctx.rerender(); ctx.toast('Draft ' + esc(name) + ' ' + esc(version) + ' saved. Checks are running in the sandbox.', 'ok');
         });
@@ -5771,11 +6069,31 @@ table.dt .actions{white-space:nowrap}
   const fpFor = (thr) => Math.max(0, Math.round((22 - (thr - 0.78) * 200) * 10) / 10);
   const wouldFor = (thr) => Math.max(0, Math.round(311 - (thr - 0.78) * 2000));
 
+  // 1.7.0 (B-9601): a rule drafted from a description. The prototype stands in for the profile's model: personal data
+  // becomes a PII detector, credentials a secrets detector, quoted words a pattern; hold, block, mask, flag and warn
+  // pick the action. The draft is always shadow; saving adds it to the draft version of the current profile.
+  const describeDraft = (text, cp) => {
+    const t = String(text || '').toLowerCase();
+    const action = /\b(hold|approv)/.test(t) ? 'require-approval' : /\b(block|refuse|withhold|stop)/.test(t) ? 'block' : /\b(redact|mask)/.test(t) ? 'redact' : /\bflag/.test(t) ? 'flag' : 'warn';
+    let mechanism, name, type, detail;
+    if (/card number|credit card|payment card/.test(t)) { mechanism = 'detector pii.payment_card'; name = 'Card numbers'; type = 'PII'; detail = 'detectors: [payment_card]\n  threshold: 0.8'; }
+    else if (/\biban|bank account/.test(t)) { mechanism = 'detector pii.iban'; name = 'Bank accounts'; type = 'PII'; detail = 'detectors: [iban]\n  threshold: 0.8'; }
+    else if (/e-?mail/.test(t)) { mechanism = 'detector pii.email'; name = 'Email addresses'; type = 'PII'; detail = 'detectors: [email]\n  threshold: 0.8'; }
+    else if (/(api|access) key|password|credential|secret|private key|token/.test(t)) { mechanism = 'detector secrets.*'; name = 'Credentials'; type = 'pattern'; detail = 'detectors: ["*"]\n  threshold: 0.6'; }
+    else { const q = /"([^"]+)"/.exec(String(text || '')); const words = q ? q[1] : String(text || '').trim().split(/\s+/).slice(-2).join(' '); mechanism = 're2 pattern'; name = 'Mentions of ' + words; type = 'pattern'; detail = "pattern: '" + words.replace(/'/g, "''") + "'"; }
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const yaml = 'id: ' + id + '\nname: ' + name + '\ncheckpoint: ' + cp + '\ntype: ' + type.toLowerCase() + '\nmechanism:\n  kind: ' + (type === 'PII' ? 'pii' : mechanism.indexOf('secrets') >= 0 ? 'secrets' : 'pattern') + '\n  ' + detail + '\naction: ' + action + '\nstage: shadow\nonError: closed\nseverity: ' + (action === 'block' ? 'high' : 'medium') + '\nenabled: true\ndescription: ' + String(text || '').trim();
+    return { id, name, cp, type, action, mechanism, yaml, description: String(text || '').trim(), diff: yaml.split('\n').map((l, i) => (i === 0 ? '+- ' : '+  ') + l).join('\n') };
+  };
+  const ruleFromDraft = (d) => ({ id: d.id, name: d.name, cp: d.cp, type: d.type, action: d.action, stage: 'shadow', triggers: '0.0%', fp: '0.0%', latency: '0.4 ms', onError: 'closed', mechanism: d.mechanism, threshold: d.type === 'PII' ? 0.8 : undefined, drafted: true, description: d.description });
+  const CARD_DESCRIPTION = 'hold answers that quote a card number';
+
   App.register({
     id: 'guardrails', title: 'Guardrails', summary: 'Profiles, rules, form and YAML editor, live test, shadow replay, approvals', section: 'admin',
     crumb: (st) => { const p = PROFILES.find((x) => x.id === st.profile) || PROFILES[0]; return ['Admin', 'Guardrails', p.name + ' v' + p.version]; },
     commands: [
       { label: 'Test a guardrail rule', sub: 'Guardrails', run(app) { const s = app.stateFor('guardrails'); s.focusTest = true; app.render(); } },
+      { label: 'Describe a rule', sub: 'Guardrails', run(app) { app.render(); setTimeout(() => { const b = document.querySelector('[data-describe]'); if (b) b.click(); }, 50); } },
       { label: 'Promote a rule to enforce', sub: 'Guardrails', run(app) { const s = app.stateFor('guardrails'); s.cp = 'model-output'; s.rule = 'no-legal-advice'; app.render(); setTimeout(() => { const b = document.querySelector('#main [data-promote]'); if (b) b.click(); }, 80); } }
     ],
     states: [
@@ -5783,6 +6101,7 @@ table.dt .actions{white-space:nowrap}
       { title: 'Baseline locked', tone: 'warn', text: 'A tenant admin cannot relax a platform baseline rule. It shows locked, with the owner and a request-change link.', apply(ctx) { const st = ctx.state; st.profile = 'finance-v12'; st.cp = 'model-output'; st.rule = 'safety'; st.view = 'form'; st.lockTried = true; ctx.rerender(); } },
       { title: 'Second approver', tone: 'info', text: 'Changes to the platform baseline wait for a second guardrail admin.', apply(ctx) { const st = ctx.state; st.profile = 'platform-v4'; st.cp = 'model-output'; st.rule = 'secrets-out'; st.pendingApproval = { rule: 'secrets-out', by: 'Mara Okafor', at: '19 Sep 14:20', change: 'threshold entropy 3.8 to 4.2' }; ctx.rerender(); } },
       { title: 'Poisoned page blocked', tone: 'danger', text: 'In block mode a crawled page that tries to instruct the model is left out of the context and counted; in annotate mode it reaches the model marked, with a warning.', apply(ctx) { const st = ctx.state; st.cp = 'untrusted-content'; st.rule = 'injection-untrusted'; st.injMode = 'block'; st.injBlocked = true; ctx.rerender(); } },
+      { title: 'Rule drafted from a description', tone: 'info', text: '"Hold answers that quote a card number" becomes a PII rule on model output, saved in shadow: it records what it would hold and changes nothing until it is replayed, promoted and published with a second approver.', apply(ctx) { const st = ctx.state; st.profile = 'finance-v13'; st.cp = 'model-output'; const d = describeDraft(CARD_DESCRIPTION, 'model-output'); if (!RULES.some((r) => r.id === d.id)) RULES.push(ruleFromDraft(d)); st.rule = d.id; st.draftNote = { id: d.id, text: CARD_DESCRIPTION }; ctx.rerender(); } },
       { title: 'Fail closed', tone: 'danger', text: 'While the guard model is down, confidential and tool-calling turns are held. Each fail-open decision elsewhere is flagged.', apply(ctx) { const st = ctx.state; st.guardDown = true; st.cp = 'model-output'; st.rule = 'safety'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -5856,7 +6175,8 @@ table.dt .actions{white-space:nowrap}
         + '<div class="gr-list">' + CHECKPOINTS.map((c) => { const n = RULES.filter((r) => r.cp === c.id && (profile.id !== 'platform-v4' || r.baseline)).length; return UI.listItem(esc(c.label), n + ' rule' + (n === 1 ? '' : 's'), { active: c.id === st.cp, attrs: 'data-cp="' + c.id + '"' }); }).join('') + '</div>'
         + '<div class="divider"></div>' + UI.btn('Add rule', { icon: 'plus', size: 'sm', cls: 'block', attrs: 'data-addrule' + (profile.locked ? ' disabled' : '') }) + '</div>'
         + '<div class="page">'
-        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('View diff', { attrs: 'data-diff' }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || stage === 'enforce' }))
+        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('Describe a rule', { attrs: 'data-describe' + (profile.locked ? ' disabled' : '') }) + UI.btn('View diff', { attrs: 'data-diff' }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || stage === 'enforce' }))
+        + (st.draftNote && rule && rule.id === st.draftNote.id ? UI.notice('<b>Drafted from a description</b> ("' + esc(st.draftNote.text) + '") and saved to ' + esc(profile.name) + ' v' + (profile.version + (profile.status === 'draft' ? 0 : 1)) + ' in shadow. It records what it would ' + esc(rule.action === 'require-approval' ? 'hold' : rule.action) + ' and changes nothing. Replay it over recent traffic below, then promote it; the version publishes under the usual dual control.', 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-draftok' })) : '')
         + (st.guardDown ? UI.notice('<b>Guard model down, failing closed.</b> llama-guard3:8b on gpu-small-1 has not answered since 14:02. Confidential and tool-calling turns are held; 12 turns elsewhere fell open under <span class="mono">onError: allow</span> and were flagged.', 'danger', '<a href="#" data-goflags>Flags</a> <a href="#" data-gopools>Pools</a>') : '')
         + reviewbar
         + '<div class="hstack"><div class="eyebrow">' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label) + ' checkpoint</div><span class="muted" style="font-size:12px">' + UI.pill(profile.status === 'published' ? 'v' + profile.version + ' published' : 'v' + profile.version + ' draft') + '</span><span class="right muted" style="font-size:12px">Precedence: platform baseline, tenant, workspace, agent. The most restrictive result wins.</span></div>'
@@ -5895,6 +6215,31 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-reqchange]', (e) => { e.preventDefault(); ctx.modal({ title: 'Request a change to the platform baseline', body: UI.field('Rule', UI.input(rule.name, { readonly: true })) + UI.field('Proposed change', UI.textarea('', { placeholder: 'What should change, and why. The owning admins see this with your workspace context.', rows: 3 })) + UI.notice('Platform guardrail admins own this rule. Tenant profiles can only add stricter rules on top of it.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send request', { kind: 'primary', attrs: 'data-sendreq' }), onMount(m) { m.querySelector('[data-sendreq]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Request sent to Platform guardrail admins.', 'ok'); }); } }); });
       ctx.on('click', '[data-approve]', () => { st.pendingApproval = null; ctx.rerender(); ctx.toast('Approved. Platform baseline v5 is published to every tenant.', 'ok'); });
       ctx.on('click', '[data-withdraw]', () => { st.pendingApproval = null; ctx.rerender(); ctx.toast('Change withdrawn. Platform baseline stays at v4.'); });
+      ctx.on('click', '[data-draftok]', () => { st.draftNote = null; ctx.rerender(); });
+      ctx.on('click', '[data-describe]', () => ctx.modal({ cls: 'wide', title: 'Describe a rule for ' + esc(profile.name),
+        body: '<div class="formgrid" style="--cols:2">' + UI.field('Describe what the rule should do', UI.textarea('', { rows: 3, placeholder: 'for example: ' + CARD_DESCRIPTION, attrs: 'data-desc aria-label="Description"' }), 'The description passes the user-input guardrail, then the profile drafts one rule in the GuardrailRule schema.') + UI.field('Profile', UI.select(['general', 'analyst'], 'general', 'data-dprofile aria-label="Profile"'), 'A published profile on this tenant. The call is metered to you.') + UI.field('Checkpoint', UI.select(CHECKPOINTS.map((c) => ({ value: c.id, label: c.label })), st.cp, 'data-dcp aria-label="Checkpoint"')) + '</div>' + '<div data-result></div>',
+        actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-draft' }) + UI.btn('Save in shadow', { kind: 'primary', attrs: 'data-savedraft disabled' }),
+        onMount(m) {
+          let d = null;
+          m.querySelector('[data-draft]').addEventListener('click', () => {
+            const text = m.querySelector('[data-desc]').value.trim();
+            if (text.length < 3) { ctx.toast('Describe the rule first.', 'warn'); return; }
+            d = describeDraft(text, m.querySelector('[data-dcp]').value);
+            const taken = RULES.some((r) => r.id === d.id);
+            m.querySelector('[data-result]').innerHTML = '<div class="eyebrow" style="margin-top:10px">Draft</div>' + UI.code(d.yaml, 'yaml')
+              + '<div class="eyebrow">Diff against ' + esc(profile.name) + ' v' + profile.version + '</div>' + UI.code(d.diff, 'diff')
+              + (taken ? UI.notice('A rule named ' + esc(d.id) + ' exists in this profile; the draft is saved as ' + esc(d.id) + '-2.', 'warn') : UI.notice('Validated against the GuardrailRule schema; the pattern compiles under RE2. Saved in <b>shadow</b>: it records findings and blocks nothing until it is promoted and the version is published.', 'info'));
+            if (taken) d.id = d.id + '-2';
+            m.querySelector('[data-savedraft]').disabled = false;
+          });
+          m.querySelector('[data-savedraft]').addEventListener('click', () => {
+            if (!d) return;
+            RULES.push(ruleFromDraft(d));
+            st.cp = d.cp; st.rule = d.id; st.draftNote = { id: d.id, text: d.description };
+            App.closeOverlay(); ctx.rerender();
+            ctx.toast(esc(d.name) + ' saved to ' + esc(profile.name) + ' v' + (profile.version + (profile.status === 'draft' ? 0 : 1)) + ' in shadow. Audit entry written.', 'ok', 5000);
+          });
+        } }));
       ctx.on('click', '[data-addrule]', () => ctx.modal({ title: 'Add rule to ' + esc(CHECKPOINTS.find((c) => c.id === st.cp).label), body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example flag-customer-ids-on-transfer' })) + UI.field('Type', UI.select(['pattern', 'PII', 'topic policy', 'safety', 'prompt injection', 'grounding', 'budget'], 'PII')) + UI.field('Action', UI.select(['allow', 'log', 'warn', 'redact', 'flag', 'block', 'require-approval', 'reroute'], 'flag')) + UI.field('Severity', UI.select(['low', 'medium', 'high'], 'medium')) + '</div>' + UI.notice('New rules start as drafts in shadow mode. They enforce only after a test run and a replay.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }), onMount(m) { m.querySelector('[data-create]').addEventListener('click', () => { App.closeOverlay(); const id = 'new-' + Date.now(); RULES.push({ id, name: m.querySelector('input').value || 'New rule', cp: st.cp, type: m.querySelectorAll('select')[0].value, action: m.querySelectorAll('select')[1].value, stage: 'shadow', triggers: '0.0%', fp: '0.0%', latency: '0 ms', onError: 'allow', mechanism: 'detector pii.*', threshold: '0.80' }); st.rule = id; st.profile = 'finance-v13'; ctx.rerender(); ctx.toast('Draft rule created in Finance baseline v13. It runs in shadow.', 'ok'); }); } }));
       ctx.on('click', '[data-injmode]', async (e, t) => {
         const to = t.dataset.injmode;
@@ -7223,6 +7568,12 @@ table.dt .actions{white-space:nowrap}
     { ws: 'People Ops', id: '01J8PEOPLE0000000000000BBB', ceiling: 'confidential', enabled: true, groups: ['agents', 'knowledge'], label: 'confidential', dpop: true, updated: '4 Oct 2026, Mara Okafor' },
     { ws: 'Field Sales', id: '01J8FIELDS0000000000000CCC', ceiling: 'internal', enabled: false, groups: ['workflows', 'agents', 'knowledge', 'tools', 'records'], label: 'internal', dpop: false, updated: null }
   ];
+  // 1.7.0 (B-12201): the tenant's standing approvals for MCP write calls, as an identity admin sees them.
+  const MCPSTANDING0 = [
+    { id: 'a1', user: 'mia', ws: 'Finance Ops', tool: 'records_create', client: 'Claude', side: 'write', label: 'internal', until: 'Oct 16, 10:30', uses: 14, state: 'active' },
+    { id: 'a2', user: 'noah', ws: 'Finance Ops', tool: null, client: null, side: 'destructive', label: 'internal', until: 'Oct 12, 18:00', uses: 2, state: 'active' },
+    { id: 'a3', user: 'mia', ws: 'People Ops', tool: 'records_update', client: 'Claude', side: 'write', label: 'confidential', until: 'Oct 8, 09:00', uses: 31, state: 'expired' }
+  ];
   const MCPCLIENTS0 = [
     { name: 'Claude', clientId: 'c_5a64c298', type: 'public', redirect: 'https://claude.ai/api/mcp/auth_callback', scopes: 'tools:invoke agents:run inference:invoke knowledge:read records:read records:write', used: 'today 10:12', created: '2 Oct 2026' },
     { name: 'MCP Inspector', clientId: 'c_0be41c77', type: 'public', redirect: 'http://localhost:6274/oauth/callback', scopes: 'records:read', used: 'never', created: '6 Oct 2026' }
@@ -7287,6 +7638,7 @@ table.dt .actions{white-space:nowrap}
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7102): the MCP server.
       { title: 'MCP server published', tone: 'ok', text: 'A workspace publishes its MCP server: clients connect to its URL, sign in through this issuer and see the groups it publishes, filtered by each person\'s roles and the label.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpJust = 'Finance Ops'; ctx.rerender(); } },
+      { title: 'Standing approval revoked by an admin', tone: 'warn', text: 'An identity admin sees every standing approval of the tenant (who granted it, for which client, tool, class and period, and how many calls it covered) and can revoke any; the person\'s next covered call waits for a per-call approval again. Audited mcp.server.standing.revoked with by: admin.', apply(ctx) { const st = ctx.state; st.tab = 'mcp'; st.mcpStanding = MCPSTANDING0.map((x) => Object.assign({}, x)); st.mcpStanding[1].state = 'revoked'; st.mcpStandingNote = true; ctx.rerender(); } },
       { title: 'Token for another resource', tone: 'danger', text: 'A token issued for the API or another workspace is refused with 401, and WWW-Authenticate names the protected resource metadata so the client can get the right one (RFC 8707, RFC 9728).', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpRefusal = true; ctx.rerender(); } },
       { title: 'Self-registration on', tone: 'warn', text: 'With dynamic client registration on, any MCP client that reaches the issuer can register itself; each one still asks every person for consent, and only for the MCP scopes.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpDcr = true; ctx.rerender(); } }
     ],
@@ -7296,7 +7648,7 @@ table.dt .actions{white-space:nowrap}
       if (ctx.params.client) { const c = st.clients.find((x) => x.name === ctx.params.client || x.id === ctx.params.client); if (c) { st.client = c.id; st.tab = 'clients'; } }
       if (ctx.params.tab) st.tab = ctx.params.tab;
       st.policy = st.policy || JSON.parse(JSON.stringify(POLICY0)); st.policyView = st.policyView || 'policy'; st.signups = st.signups || SIGNUPS0.map((x) => Object.assign({}, x)); st.invites = st.invites || INVITES0.map((x) => Object.assign({}, x)); st.imports = st.imports || IMPORTS0.map((x) => Object.assign({}, x)); st.dids = st.dids || DIDS0.map((x) => Object.assign({}, x)); st.signupFilter = st.signupFilter || 'pending';
-      st.mcpPubs = st.mcpPubs || MCPPUBS0.map((x) => Object.assign({}, x, { groups: x.groups.slice() })); st.mcpClients = st.mcpClients || MCPCLIENTS0.slice(); if (st.mcpDcr == null) st.mcpDcr = false;
+      st.mcpPubs = st.mcpPubs || MCPPUBS0.map((x) => Object.assign({}, x, { groups: x.groups.slice() })); st.mcpStanding = st.mcpStanding || MCPSTANDING0.map((x) => Object.assign({}, x)); st.mcpClients = st.mcpClients || MCPCLIENTS0.slice(); if (st.mcpDcr == null) st.mcpDcr = false;
       const client = st.clients.find((c) => c.id === st.client) || st.clients[2];
       const signing = st.keys.find((k) => k.state === 'signing');
 
@@ -7492,7 +7844,11 @@ table.dt .actions{white-space:nowrap}
           + UI.table(['Workspace', 'MCP server', 'Tool groups', 'Label', 'DPoP', 'Connection URL', { label: '', right: true }], st.mcpPubs.map((x) => ({ cells: ['<b>' + esc(x.ws) + '</b><div class="muted" style="font-size:11px">ceiling ' + esc(x.ceiling) + '</div>', x.enabled ? UI.pill('published', 'ok') : UI.pill('off', 'outline'), esc(x.groups.map((g) => (MCP_GROUPS.find((y) => y[0] === g) || [g, g])[1]).join(', ')), UI.label(x.label, { sm: true }), x.dpop ? UI.pill('required', 'info') : '<span class="muted">optional</span>', x.enabled ? '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(MCP_BASE + x.id) + '</span>' : '<span class="muted">not published</span>', '<span class="hstack gap6" style="justify-content:flex-end">' + (x.enabled ? UI.iconbtn('copy', 'Copy the URL of ' + x.ws, { attrs: 'data-mcpcopy="' + esc(x.id) + '"', cls: 'sm ghost' }) : '') + UI.btn('Edit', { size: 'sm', attrs: 'data-mcpedit="' + esc(x.id) + '" aria-label="Edit the MCP server of ' + esc(x.ws) + '"' }) + '</span>'], attrs: 'data-mcprow="' + esc(x.id) + '"' })), { minWidth: '760px', clickable: false })
           + '<div class="muted" style="font-size:12px">Clients find the issuer from the server\'s protected resource metadata (RFC 9728) and ask for a token for that server\'s URL (RFC 8707). Tokens for the API or another workspace are refused with 401.</div>'
           + UI.panel('Clients that registered themselves', UI.table(['Client', 'Client ID', 'Redirect URI', 'Scopes', 'Last used', { label: '', right: true }], st.mcpClients.map((c) => [esc(c.name) + ' ' + UI.pill(c.type, 'outline'), '<span class="mono">' + esc(c.clientId) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.redirect) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.scopes) + '</span>', esc(c.used), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-mcpclient="' + esc(c.clientId) + '" aria-label="Open ' + esc(c.name) + ' under OIDC clients"' }) + '</span>']), { minWidth: '640px', clickable: false, emptyTitle: 'No self-registered clients', emptyText: 'With self-registration on, MCP clients that register themselves are listed here.' })
-            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>');
+            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>')
+          // B-12201: standing approvals across the tenant.
+          + UI.panel('Standing approvals', '<div class="fg2" style="font-size:12px">People grant them under Settings, MCP access: a client may run write calls as them without a per-call approval, for one tool or every write tool of a server, for up to 30 days. Guardrail holds still wait. Revoke any of them here.</div>'
+            + (st.mcpStandingNote ? UI.notice('<b>Revoked.</b> noah\'s next write call from any client in Finance Ops waits for his approval again. Audited mcp.server.standing.revoked (by: admin).', 'warn') : '')
+            + UI.table(['Person', 'Covers', 'Client', 'Up to', 'Until', 'Covered calls', { label: '', right: true }], st.mcpStanding.map((a) => ({ cells: [esc(a.user), (a.tool ? '<span class="mono">' + esc(a.tool) + '</span>' : '<b>Every write tool</b>') + '<div class="muted" style="font-size:11px">' + esc(a.ws) + '</div>', a.client ? esc(a.client) : '<span class="muted">any client</span>', UI.pill(a.side, a.side === 'write' ? 'warn' : 'danger') + ' ' + UI.label(a.label, { sm: true }), esc(a.until), String(a.uses), '<span class="hstack" style="justify-content:flex-end">' + (a.state === 'active' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-standrevokeadmin="' + a.id + '" aria-label="Revoke the standing approval of ' + esc(a.user) + ' for ' + esc(a.tool || 'every write tool') + '"' }) : UI.pill(a.state, a.state === 'revoked' ? 'danger' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No standing approvals', emptyText: 'Every write call from an MCP client waits for the person\'s approval.' }));
       }
       function mcpEdit(id) {
         const x = st.mcpPubs.find((p) => p.id === id);
@@ -7529,6 +7885,11 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-mcpedit]', (e, t) => mcpEdit(t.dataset.mcpedit));
       ctx.on('click', '[data-mcpcopy]', (e, t) => { const url = MCP_BASE + t.dataset.mcpcopy; if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => ctx.toast('Copied.', 'ok'), () => ctx.toast('Copy failed; select the URL instead.', 'warn')); else ctx.toast('Copy failed; select the URL instead.', 'warn'); });
       ctx.on('click', '[data-mcpdismiss]', () => { st.mcpRefusal = false; ctx.rerender(); });
+      ctx.on('click', '[data-standrevokeadmin]', async (e, t) => {
+        const a = st.mcpStanding.find((x) => x.id === t.dataset.standrevokeadmin);
+        const ok = await ctx.confirm({ title: 'Revoke ' + esc(a.user) + '\'s standing approval?', tone: 'danger', body: '<div class="fg2">' + esc(a.user) + '\'s next ' + esc(a.tool || 'write') + ' call from ' + esc(a.client || 'any client') + ' in ' + esc(a.ws) + ' waits for a per-call approval again. The approval stays listed for 30 days with the ' + a.uses + ' calls it covered.</div>', ok: 'Revoke' });
+        if (!ok) return; a.state = 'revoked'; st.mcpStandingNote = true; ctx.rerender(); ctx.toast('Standing approval revoked. Audited mcp.server.standing.revoked.', 'ok');
+      });
       ctx.on('click', '[data-mcpclient]', (e, t) => { st.tab = 'clients'; ctx.rerender(); ctx.toast('Self-registered clients are listed with the others; ' + esc(t.dataset.mcpclient) + ' is a public client with PKCE.'); });
       ctx.on('click', '[data-mcpdcr]', async () => {
         const on = !st.mcpDcr;
@@ -7923,6 +8284,11 @@ table.dt .actions{white-space:nowrap}
     { id: 'h1', tool: 'records_create', ws: 'Finance Ops', client: 'Claude', side: 'write', args: '{"app": "close", "entity": "task", "values": {"title": "Reconcile the card feed", "due": "2026-10-09"}}', asked: 'today 10:41', expires: '11:41', state: 'pending' },
     { id: 'h2', tool: 'records_delete', ws: 'Finance Ops', client: 'Claude', side: 'destructive', args: '{"app": "close", "entity": "task", "id": "01J8TASK0000000000000000QQ"}', asked: 'today 10:44', expires: '11:44', state: 'pending' }
   ];
+  // 1.7.0 (B-12201): standing approvals for an MCP client's write calls: no per-call hold while one covers the call.
+  const STANDING0 = [
+    { id: 's1', ws: 'Finance Ops', tool: 'records_create', client: 'Claude', side: 'write', label: 'internal', until: 'Oct 16, 10:30', uses: 14, state: 'active', reason: 'Closing tasks from my own notes' },
+    { id: 's2', ws: 'Finance Ops', tool: null, client: null, side: 'write', label: 'internal', until: 'Oct 9, 09:00', uses: 3, state: 'expired', reason: null }
+  ];
   const NOTIFS = [['jobs', 'Finished jobs and workflow runs', true], ['approvals', 'Approvals waiting for me', true], ['flags', 'New flags in my queues', true], ['quota', 'Quota warnings', false]];
 
   const applyContrast = (mode) => {
@@ -7935,10 +8301,14 @@ table.dt .actions{white-space:nowrap}
     id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls), connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
+      { title: 'Weekly digest of new things', tone: 'neutral', text: 'Notices about newly published workflows, agents, tools and skills come once a week as one digest, linking to the catalogue.', apply(ctx) { ctx.state.catalogNotices = 'digest'; ctx.rerender(); } },
       { title: 'Key limited to one entity', tone: 'info', text: 'A key made for one app and one entity holds records:read (and records:write when picked) and nothing else: accepted under /api/apps only, refused with 403 step scope on another entity, another app or the rest of the API. The list shows the app and entity beside its scopes.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.keyNote = 'app'; ctx.rerender(); } },
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7103): MCP access.
       { title: 'MCP call held for approval', tone: 'warn', text: 'An MCP client asked to create a record in Finance Ops. Nothing runs until you approve here; the client then calls again with the same arguments within 15 minutes, once.', apply(ctx) { ctx.state.holds = HOLDS0.map((h) => Object.assign({}, h)); ctx.state.holdNote = true; ctx.rerender(); } },
+      // 1.7.0 (B-12201): standing approvals.
+      { title: 'Standing approval granted', tone: 'info', text: 'A standing approval covers the write calls of one tool (or every write tool of the server) from one client (or any), for up to 30 days, at your clearance in that workspace. Covered calls run at once, audited with the approval that covered them; a call the tool-call guardrail holds still waits for a reviewer. Audited mcp.server.standing.granted.', apply(ctx) { const st = ctx.state; st.standing = STANDING0.map((h) => Object.assign({}, h)); st.standingNote = 'granted'; ctx.rerender(); } },
+      { title: 'Standing approval revoked', tone: 'neutral', text: 'Revoking makes the next covered call wait for a per-call approval again. Revoked and expired approvals stay listed for 30 days with how many calls they covered. An identity admin can revoke anyone\'s under Identity, MCP server. Audited mcp.server.standing.revoked.', apply(ctx) { const st = ctx.state; st.standing = STANDING0.map((h) => Object.assign({}, h)); st.standing[0].state = 'revoked'; st.standingNote = 'revoked'; ctx.rerender(); } },
       { title: 'Connected through OAuth', tone: 'ok', text: 'Back from the MCP server\'s authorization server: the code was exchanged with the PKCE verifier and the tokens are sealed with the tenant key. Tools from that server now act as you.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); const a = st.accounts.find((x) => x.id === 'erp'); a.state = 'connected'; a.last = 'just now'; a.expires = 'refreshed when it expires'; st.oauthBack = 'ERP'; ctx.rerender(); } },
       { title: 'Re-consent needed', tone: 'warn', text: 'GitLab revoked the grant. The row shows reconnect and tools that depend on it are paused.', apply(ctx) { const st = ctx.state; st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a)); st.accounts.find((a) => a.id === 'gitlab').state = 're-consent needed'; ctx.rerender(); } },
       { title: 'Key expired', tone: 'neutral', text: 'Expired keys stay listed for 30 days for audit, then disappear.', apply(ctx) { ctx.state.expiredNote = true; ctx.rerender(); } },
@@ -7960,6 +8330,7 @@ table.dt .actions{white-space:nowrap}
       const st = ctx.state;
       st.accounts = st.accounts || ACCOUNTS0.map((a) => Object.assign({}, a));
       st.holds = st.holds || HOLDS0.map((h) => Object.assign({}, h));
+      st.standing = st.standing || STANDING0.map((h) => Object.assign({}, h));
       if (ctx.params.result === 'connected') { st.oauthBack = 'the MCP server'; delete ctx.params.result; }
       st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k));
       st.sessions = st.sessions || SESSIONS0.map((s) => Object.assign({}, s));
@@ -8000,7 +8371,11 @@ table.dt .actions{white-space:nowrap}
         + (st.contrast === 'AAA' ? UI.notice('<b>AAA contrast is on.</b> Muted text, borders and shadows now use the stronger tokens. Saved to your profile and applied on every device you sign in from.', 'info') : ''));
 
       const notifs = UI.panel('Notifications', '<div class="vstack gap6">' + NOTIFS.map((n) => UI.check(n[1], st.notifs[n[0]], 'data-notif="' + n[0] + '"')).join('') + '</div>'
-        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>');
+        + '<span class="muted" style="font-size:12px">Delivered in the console over /ws' + (st.notifs.jobs || st.notifs.approvals ? ', and by email for approvals where the tenant allows it' : '') + '.</span>'
+        // 1.7.0 (B-12302): notices when a workflow, agent, tool or skill is published to your workspace, once each.
+        + '<div class="eyebrow">New things you can use</div>'
+        + UI.seg([{ id: 'each', label: 'As they happen' }, { id: 'digest', label: 'Weekly digest' }, { id: 'off', label: 'Off' }], st.catalogNotices || 'each', 'data-catnotices aria-label="Notices about new things you can use"')
+        + '<span class="muted" style="font-size:12px">' + ((st.catalogNotices || 'each') === 'digest' ? 'One notice a week lists what was published to your workspaces within your clearance; 2 entries wait for the next one.' : (st.catalogNotices || 'each') === 'off' ? 'No notices. The catalogue still lists everything you can use.' : 'One notice per new workflow, agent, tool or skill published to your workspaces within your clearance, linking to it in the catalogue.') + '</span>');
 
       const acctRows = st.accounts.map((a) => {
         const connected = a.state === 'connected';
@@ -8022,7 +8397,13 @@ table.dt .actions{white-space:nowrap}
         + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Calls waiting for your approval</div>' + (pendingHolds.length ? UI.pill(pendingHolds.length + ' waiting', 'warn') : '') + '</div>'
         + (st.holdNote ? UI.notice('<b>Claude asked to change data in Finance Ops.</b> Nothing ran. Approve only calls you asked for: an approval covers one call with exactly these arguments, for 15 minutes.', 'warn') : '')
         + UI.table(['Tool', 'Client', 'Arguments', 'Asked', { label: '', right: true }], st.holds.map((h) => ({ cells: ['<span class="mono">' + esc(h.tool) + '</span> ' + UI.pill(h.side, h.side === 'write' ? 'warn' : 'danger') + '<div class="muted" style="font-size:11px">' + esc(h.ws) + '</div>', esc(h.client), '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(h.args) + '</span>', esc(h.asked) + '<div class="muted" style="font-size:11px">expires ' + esc(h.expires) + '</div>', '<span class="hstack gap6" style="justify-content:flex-end">' + (h.state === 'pending' ? UI.btn('Reject', { size: 'sm', kind: 'ghost', attrs: 'data-holdreject="' + h.id + '" aria-label="Reject ' + esc(h.tool) + '"' }) + UI.btn('Approve', { size: 'sm', kind: 'primary', attrs: 'data-holdapprove="' + h.id + '" aria-label="Approve ' + esc(h.tool) + '"' }) : UI.pill(h.state, h.state === 'approved' ? 'ok' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'Nothing waiting', emptyText: 'Write and destructive calls from MCP clients wait here for you.' })
-        + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls. Audited mcp.server.hold.approved and rejected.</span>');
+        + '<span class="muted" style="font-size:12px">Decided here, from this browser only: the client\'s own token can never approve its calls. Audited mcp.server.hold.approved and rejected.</span>'
+        // B-12201: standing approvals.
+        + '<div class="divider"></div><div class="hstack"><div class="eyebrow grow">Standing approvals</div>' + UI.btn('Grant a standing approval', { size: 'sm', kind: 'primary', icon: 'plus', attrs: 'data-standgrant' }) + '</div>'
+        + '<div class="fg2" style="font-size:12px">A standing approval lets a client run write calls as you without a per-call approval: one tool or every write tool of a server, one client or any, for up to 30 days, at your clearance in that workspace. A call the tool-call guardrail holds still waits for a reviewer.</div>'
+        + (st.standingNote === 'granted' ? UI.notice('<b>Claude may create records in Finance Ops for 7 days.</b> Each call is still audited (mcp.server.call with the approval that covered it) and metered; revoke it here at any time.', 'info') : st.standingNote === 'revoked' ? UI.notice('<b>Revoked.</b> The next records_create call from Claude waits for your approval again.', 'neutral') : '')
+        + UI.table(['Covers', 'Client', 'Up to', 'Until', 'Covered calls', { label: '', right: true }], st.standing.map((a) => ({ cells: [(a.tool ? '<span class="mono">' + esc(a.tool) + '</span>' : '<b>Every write tool</b>') + '<div class="muted" style="font-size:11px">' + esc(a.ws) + (a.reason ? ' · ' + esc(a.reason) : '') + '</div>', a.client ? esc(a.client) : '<span class="muted">any client</span>', UI.pill(a.side, a.side === 'write' ? 'warn' : 'danger') + ' ' + UI.label(a.label, { sm: true }), esc(a.until), String(a.uses), '<span class="hstack" style="justify-content:flex-end">' + (a.state === 'active' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-standrevoke="' + a.id + '" aria-label="Revoke the standing approval for ' + esc(a.tool || 'every write tool') + '"' }) : UI.pill(a.state, a.state === 'revoked' ? 'danger' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No standing approvals', emptyText: 'Every write call from an MCP client waits for your approval.' })
+        + '<span class="muted" style="font-size:12px">Granted and revoked here, from this browser only. Expired and revoked approvals stay listed for 30 days. Audited mcp.server.standing.granted, revoked and expired.</span>');
 
       const keyRows = st.keys.map((k) => {
         const expired = k.state === 'expired'; const revoked = k.state === 'revoked';
@@ -8085,6 +8466,7 @@ table.dt .actions{white-space:nowrap}
       ctx.on('change', '[data-theme]', (e, t) => { ctx.app.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '. Saved to your profile.'); });
       ctx.on('change', '[data-contrast]', (e, t) => { st.contrast = t.value === 'AAA' ? 'AAA' : 'AA'; applyContrast(st.contrast); ctx.rerender(); ctx.toast(st.contrast === 'AAA' ? 'AAA contrast on. Saved to your profile.' : 'Back to AA contrast.', 'ok'); });
       ctx.on('change', '[data-language]', (e, t) => { st.language = t.value; ctx.toast('Language set to ' + esc(t.value) + '. Model answers follow the prompt language, not this setting.'); });
+      ctx.on('click', '[data-catnotices] [data-seg]', (e, t) => { st.catalogNotices = t.dataset.seg; ctx.rerender(); ctx.toast(t.dataset.seg === 'digest' ? 'Weekly digest on. What is published waits for the next one.' : t.dataset.seg === 'off' ? 'Notices about new things you can use are off.' : 'Notices as they happen.', 'ok'); });
       ctx.on('change', '[data-notif]', (e, t) => { st.notifs[t.dataset.notif] = t.checked; ctx.toast('Notification preference saved.'); ctx.rerender(); });
       ctx.on('click', '[data-disconnect]', async (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.disconnect);
@@ -8101,6 +8483,28 @@ table.dt .actions{white-space:nowrap}
         const h = st.holds.find((x) => x.id === t.dataset.holdreject);
         const ok = await ctx.confirm({ title: 'Reject ' + h.tool + '?', tone: 'danger', body: '<div class="fg2">The call never runs; the client gets the same answer if it asks again.</div>', ok: 'Reject' });
         if (!ok) return; h.state = 'rejected'; st.holdNote = false; ctx.rerender(); ctx.toast(esc(h.tool) + ' rejected.', 'ok');
+      });
+      // B-12201: standing approvals.
+      ctx.on('click', '[data-standgrant]', () => {
+        ctx.modal({ title: 'Grant a standing approval', body: '<div class="fg2" style="margin-bottom:8px">The client runs the covered write calls as you, without a per-call approval, until the period ends or you revoke it. Guardrail holds still wait for a reviewer.</div><div class="formgrid">'
+          + UI.field('Workspace', UI.select(MCPSRV.map((m) => ({ value: m.ws, label: m.ws + ' (' + m.label + ')' })), 'Finance Ops', 'data-stws aria-label="Workspace"'))
+          + UI.field('Tool', UI.select([{ value: '', label: 'Every write tool of the server' }, { value: 'records_create', label: 'records_create (write)' }, { value: 'records_update', label: 'records_update (write)' }, { value: 'records_delete', label: 'records_delete (destructive)' }], 'records_create', 'data-sttool aria-label="Tool"'), 'The tools the server publishes to you that change data.')
+          + UI.field('Client', UI.input('', { placeholder: 'any client', attrs: 'data-stclient maxlength="100"' }), 'The OAuth client ID the client signed in with; blank covers any client acting as you.')
+          + UI.field('Up to', UI.select([{ value: 'write', label: 'Write calls' }, { value: 'destructive', label: 'Write and destructive calls' }], 'write', 'data-stside aria-label="Up to"'))
+          + UI.field('Period', UI.select([{ value: '1', label: '1 day' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days (the longest)' }], '7', 'data-stdays aria-label="Period"'))
+          + UI.field('Reason', UI.input('', { placeholder: 'optional, kept with the audit event', attrs: 'data-streason maxlength="300"' }))
+          + '</div>', actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Grant', { kind: 'primary', attrs: 'data-go' }),
+          onMount(m) { m.querySelector('[data-go]').addEventListener('click', () => {
+            const tool = m.querySelector('[data-sttool]').value || null; const side = m.querySelector('[data-stside]').value; const days = +m.querySelector('[data-stdays]').value;
+            if (tool === 'records_delete' && side !== 'destructive') { ctx.toast('records_delete is a destructive tool; the approval must cover destructive calls.', 'danger'); return; }
+            st.standing.unshift({ id: 's' + Date.now(), ws: m.querySelector('[data-stws]').value, tool, client: m.querySelector('[data-stclient]').value.trim() || null, side, label: 'internal', until: days === 1 ? 'tomorrow' : 'in ' + days + ' days', uses: 0, state: 'active', reason: m.querySelector('[data-streason]').value.trim() || null });
+            App.closeOverlay(); st.standingNote = 'granted'; ctx.rerender(); ctx.toast('Standing approval granted. Audited mcp.server.standing.granted.', 'ok');
+          }); } });
+      });
+      ctx.on('click', '[data-standrevoke]', async (e, t) => {
+        const a = st.standing.find((x) => x.id === t.dataset.standrevoke);
+        const ok = await ctx.confirm({ title: 'Revoke this standing approval?', tone: 'danger', body: '<div class="fg2">The next ' + esc(a.tool || 'write') + ' call from ' + esc(a.client || 'any client') + ' waits for your approval again. The approval stays listed for 30 days with the ' + a.uses + ' calls it covered.</div>', ok: 'Revoke' });
+        if (!ok) return; a.state = 'revoked'; st.standingNote = 'revoked'; ctx.rerender(); ctx.toast('Standing approval revoked.', 'ok');
       });
       ctx.on('click', '[data-connect]', (e, t) => {
         const a = st.accounts.find((x) => x.id === t.dataset.connect);

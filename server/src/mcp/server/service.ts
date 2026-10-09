@@ -79,6 +79,29 @@ export interface HoldRow {
   created_at: number;
 }
 
+/** 1.7.0 (B-12201): a person's standing approval for a client's write calls in one workspace's MCP server. */
+export interface StandingRow {
+  id: string;
+  tenant_id: string;
+  workspace_id: string;
+  user_id: string;
+  client_id: string | null;
+  tool: string | null;
+  side_effect: 'write' | 'destructive';
+  label: Label;
+  reason: string | null;
+  state: 'active' | 'revoked' | 'expired';
+  granted_by: string;
+  uses: number;
+  last_used_at: number | null;
+  expires_at: number;
+  revoked_by: string | null;
+  revoked_at: number | null;
+  created_at: number;
+}
+
+const SIDE_RANK: Record<'read' | 'write' | 'destructive', number> = { read: 0, write: 1, destructive: 2 };
+
 /** A tool as an MCP client sees it, with what it stands for here. */
 export interface McpServerTool {
   name: string;
@@ -279,6 +302,7 @@ export class McpServerService {
     const tool = (await this.catalog(p, groups)).find((t) => t.name === name);
     let out: McpCallOutcome;
     let holdId: string | null = null;
+    let standing: StandingRow | null = null;
     if (!tool) out = { ok: false, outcome: 'unknown', error: `No tool ${name} is published to you here.` };
     else {
       const callId = ulid();
@@ -286,8 +310,12 @@ export class McpServerService {
       const approval = await this.claimApproval(p, tool.name, args);
       holdId = approval;
       if (approval) ctx.approved = true;
+      // B-12201: a standing approval stands in for the per-call one; a guardrail hold still waits (dispatch.ts).
+      standing = !approval && tool.sideEffect !== 'read' ? await this.standingFor(p, tool, meta.clientId) : null;
+      if (standing) ctx.standing = true;
       try {
         out = await this.run(ctx, tool, args);
+        if (standing && out.outcome !== 'held') await this.db('mcp_standing_approvals').where({ id: standing.id }).update({ uses: this.db.raw('uses + 1'), last_used_at: Date.now() });
         if (out.outcome === 'held') {
           const h = await this.hold(p, tool, args, meta.clientId, out.error ?? null);
           holdId = h.id;
@@ -305,7 +333,7 @@ export class McpServerService {
       actor: { ...actorFrom(p, meta.ip), ...(meta.clientId ? { service: meta.clientId } : {}) },
       target: { workspace: p.workspaceId ?? null, tool: name },
       label: p.clearance,
-      detail: { group: tool?.group ?? null, outcome: out.outcome, sideEffect: tool?.sideEffect ?? null, hold: holdId, error: out.ok ? null : (out.error ?? null)?.slice(0, 300) ?? null, durationMs: Date.now() - started },
+      detail: { group: tool?.group ?? null, outcome: out.outcome, sideEffect: tool?.sideEffect ?? null, hold: holdId, standing: standing?.id ?? null, error: out.ok ? null : (out.error ?? null)?.slice(0, 300) ?? null, durationMs: Date.now() - started },
       traceId: meta.traceId
     });
     return out;
@@ -415,6 +443,139 @@ export class McpServerService {
     if (!callee) return { ok: false, outcome: 'error', error: 'The workflow behind this run is no longer published to you.' };
     const o = await s.tools.awaitResult(ctx, callee, {}, { kind: 'workflow-run', id });
     return this.fromOutcome(o, callee.entry.name);
+  }
+
+  // ---------- standing approvals (1.7.0, B-12201) ----------
+
+  /** The longest period a standing approval may run. */
+  private get standingMaxDays(): number {
+    return this.s().cfg.MCP_STANDING_APPROVAL_MAX_DAYS;
+  }
+
+  /**
+   * The active standing approval that covers this call: the caller's own, in this workspace, for this tool or any,
+   * for this client or any, up to the tool's side-effect class, granted at a label the call does not exceed.
+   */
+  private async standingFor(p: Principal, tool: McpServerTool, clientId: string | null): Promise<StandingRow | null> {
+    if (tool.sideEffect === 'read') return null;
+    const rows = (await this.db('mcp_standing_approvals').where({ tenant_id: p.tenantId, user_id: p.userId, workspace_id: p.workspaceId ?? '', state: 'active' }).andWhere('expires_at', '>', Date.now()).orderBy('created_at')) as StandingRow[];
+    return (
+      rows.find(
+        (r) => (r.tool === null || r.tool === tool.name) && (r.client_id === null || r.client_id === clientId) && SIDE_RANK[r.side_effect] >= SIDE_RANK[tool.sideEffect] && labelRank(p.clearance) <= labelRank(r.label)
+      ) ?? null
+    );
+  }
+
+  /** The write and destructive tools a person may call in a workspace's MCP server, for the grant form. */
+  async writeTools(p: Principal, workspaceId: string): Promise<{ name: string; title: string; group: string; sideEffect: 'write' | 'destructive' }[]> {
+    const pub = await this.publication(p.tenantId, workspaceId);
+    if (!pub?.enabled) throw notFound('MCP server');
+    const caller = await this.callerIn(p, pub);
+    if (!caller) throw notFound('MCP server');
+    return (await this.catalog(caller, pub.groups)).filter((t) => t.sideEffect !== 'read').map((t) => ({ name: t.name, title: t.title, group: t.group, sideEffect: t.sideEffect as 'write' | 'destructive' }));
+  }
+
+  /**
+   * Grants a standing approval for the caller's own calls: for one published write tool (or every one, `tool` null),
+   * for one client (or any), up to a side-effect class, for `days`, at the caller's clearance in that workspace.
+   */
+  async grantStanding(p: Principal, input: { workspaceId: string; clientId?: string | null; tool?: string | null; sideEffect: 'write' | 'destructive'; days: number; reason?: string | null }): Promise<StandingRow> {
+    const pub = await this.publication(p.tenantId, input.workspaceId);
+    if (!pub?.enabled) throw notFound('MCP server');
+    const caller = await this.callerIn(p, pub);
+    if (!caller) throw notFound('MCP server');
+    if (input.days < 1 || input.days > this.standingMaxDays) throw conflict(`A standing approval runs for 1 to ${this.standingMaxDays} days.`);
+    let tool: string | null = null;
+    if (input.tool) {
+      const t = (await this.catalog(caller, pub.groups)).find((x) => x.name === input.tool);
+      if (!t) throw notFound('Tool');
+      if (t.sideEffect === 'read') throw conflict(`${t.title} only reads; it never waits for an approval.`);
+      if (SIDE_RANK[input.sideEffect] < SIDE_RANK[t.sideEffect]) throw conflict(`${t.title} is a ${t.sideEffect} tool; the approval must cover ${t.sideEffect} calls.`);
+      tool = t.name;
+    }
+    const t = Date.now();
+    const row: StandingRow = {
+      id: ulid(),
+      tenant_id: p.tenantId,
+      workspace_id: input.workspaceId,
+      user_id: p.userId,
+      client_id: input.clientId?.trim() || null,
+      tool,
+      side_effect: input.sideEffect,
+      label: caller.clearance,
+      reason: input.reason?.trim().slice(0, 300) || null,
+      state: 'active',
+      granted_by: p.userId,
+      uses: 0,
+      last_used_at: null,
+      expires_at: t + input.days * 86_400_000,
+      revoked_by: null,
+      revoked_at: null,
+      created_at: t
+    };
+    await this.db('mcp_standing_approvals').insert(row);
+    return row;
+  }
+
+  private async standingView(rows: StandingRow[], tenantId: string) {
+    const s = this.s();
+    const names = new Map(((await s.tenants.workspaces(tenantId)) ?? []).map((w) => [w.id, w.name]));
+    const users = rows.length ? new Map(((await this.db('users').whereIn('id', [...new Set(rows.map((r) => r.user_id))]).select('id', 'username')) as { id: string; username: string }[]).map((u) => [u.id, u.username])) : new Map<string, string>();
+    const now = Date.now();
+    return rows.map((r) => ({
+      id: r.id,
+      workspaceId: r.workspace_id,
+      workspace: names.get(r.workspace_id) ?? null,
+      userId: r.user_id,
+      username: users.get(r.user_id) ?? null,
+      client: r.client_id,
+      tool: r.tool,
+      sideEffect: r.side_effect,
+      label: r.label,
+      reason: r.reason,
+      state: r.state === 'active' && Number(r.expires_at) <= now ? 'expired' : r.state,
+      uses: Number(r.uses),
+      lastUsedAt: r.last_used_at == null ? null : Number(r.last_used_at),
+      expiresAt: Number(r.expires_at),
+      createdAt: Number(r.created_at),
+      revokedAt: r.revoked_at == null ? null : Number(r.revoked_at)
+    }));
+  }
+
+  /** The caller's own standing approvals, newest first; revoked and expired ones stay listed for 30 days. */
+  async standing(p: Principal) {
+    const rows = (await this.db('mcp_standing_approvals').where({ tenant_id: p.tenantId, user_id: p.userId }).andWhere('expires_at', '>', Date.now() - 30 * 86_400_000).orderBy('created_at', 'desc').limit(100)) as StandingRow[];
+    return this.standingView(rows, p.tenantId);
+  }
+
+  /** Every standing approval of the tenant, for an identity admin. */
+  async standingAll(tenantId: string) {
+    const rows = (await this.db('mcp_standing_approvals').where({ tenant_id: tenantId }).andWhere('expires_at', '>', Date.now() - 30 * 86_400_000).orderBy('created_at', 'desc').limit(500)) as StandingRow[];
+    return this.standingView(rows, tenantId);
+  }
+
+  /** Revokes one: the person's own, or any of the tenant's when `admin`. The next covered call waits again. */
+  async revokeStanding(p: Principal, id: string, admin = false): Promise<StandingRow> {
+    const q = this.db('mcp_standing_approvals').where({ tenant_id: p.tenantId, id });
+    if (!admin) q.andWhere({ user_id: p.userId });
+    const r = (await q.first()) as StandingRow | undefined;
+    if (!r) throw notFound('Standing approval');
+    if (r.state !== 'active') throw conflict(`This standing approval is already ${r.state}.`);
+    const upd = { state: 'revoked' as const, revoked_by: p.userId, revoked_at: Date.now() };
+    const n = await this.db('mcp_standing_approvals').where({ id, state: 'active' }).update(upd);
+    if (!n) throw conflict('This standing approval was revoked meanwhile.');
+    return { ...r, ...upd };
+  }
+
+  /** Marks the tenant's standing approvals past their period as expired, audited once each (the chat sweep). */
+  async expireStanding(tenantId: string): Promise<number> {
+    const rows = (await this.db('mcp_standing_approvals').where({ tenant_id: tenantId, state: 'active' }).andWhere('expires_at', '<=', Date.now()).select('id', 'user_id', 'workspace_id', 'tool', 'client_id', 'label')) as Pick<StandingRow, 'id' | 'user_id' | 'workspace_id' | 'tool' | 'client_id' | 'label'>[];
+    for (const r of rows) {
+      const n = await this.db('mcp_standing_approvals').where({ id: r.id, state: 'active' }).update({ state: 'expired' });
+      if (!n) continue;
+      await this.s().audit.append({ tenantId, action: 'mcp.server.standing.expired', kind: 'system', actor: { service: 'mcp-server' }, target: { standing: r.id, workspace: r.workspace_id, user: r.user_id }, label: r.label, detail: { tool: r.tool, client: r.client_id } });
+    }
+    return rows.length;
   }
 
   // ---------- held calls ----------

@@ -3,12 +3,13 @@ import { actorFrom } from '../audit/chain.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { json } from '../db/knex.js';
-import { conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
+import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/problem.js';
 import { TOPICS } from '../platform/bus.js';
 import type { ResolvedTool, ToolOutcome } from '../registry/dispatch.js';
 import type { EntryRow, SideEffect } from '../registry/service.js';
 import { skillClosure } from '../registry/skills.js';
 import type { Services } from '../services.js';
+import { normalizePlan, type Plan } from '../thinking/service.js';
 import type { ConversationRow } from './service.js';
 import type { Chunk } from './streams.js';
 
@@ -30,7 +31,7 @@ import type { Chunk } from './streams.js';
  * Skills added with `+skill` ride on the conversation (sticky, or for one turn) into the system prompt.
  */
 
-export type InvocationKind = 'tool' | 'agent' | 'workflow';
+export type InvocationKind = 'tool' | 'agent' | 'workflow' | 'plan';
 export type InvocationState = 'awaiting' | 'held' | 'running' | 'done' | 'failed' | 'denied' | 'expired' | 'cancelled';
 
 export interface InvocationRow {
@@ -111,8 +112,25 @@ export class ChatInvocations {
   }
 
   async capabilities(p: Principal, conversationId: string) {
+    const c = await this.s().chat.conversation(p, conversationId);
+    return (await this.capabilitiesAt(p, { label: c.label, profile: c.profile_id, active: this.skillsOf(c) })).out;
+  }
+
+  /**
+   * 1.7.0 (B-12301): the workspace form of `capabilities`, with no conversation: what the caller may call in their
+   * current workspace through `profile` (a name or id; null for none), at the lowest label a new conversation can
+   * hold. The same decision as a conversation's list (the profile's tool list through the dispatcher, the runnable
+   * agents, the profile's skill allow-list, the workspace's published workflows); `allow` is the profile's lists, so
+   * the catalogue can tell an entry the allow-list hides from one the caller may not use at all.
+   */
+  async workspaceCapabilities(p: Principal, profile: string | null) {
+    const r = await this.capabilitiesAt(p, { label: 'public', profile, active: [] });
+    return { ...r.out, allow: r.allow };
+  }
+
+  private async capabilitiesAt(p: Principal, at: { label: Label; profile: string | null; active: ConversationSkill[] }) {
     const s = this.s();
-    const c = await s.chat.conversation(p, conversationId);
+    const c = { label: at.label, profile_id: at.profile };
     const perms = effectivePermissions(p);
     const out: {
       label: Label;
@@ -123,13 +141,13 @@ export class ChatInvocations {
       skills: { name: string; version: string; description: string | null; label: Label; active: 'sticky' | 'once' | null }[];
       workflows: { id: string; name: string; description: string | null; label: Label; inputSchema: Record<string, unknown> | null }[];
       active: ConversationSkill[];
-    } = { label: c.label, profile: null, tools: [], hidden: [], agents: [], skills: [], workflows: [], active: this.skillsOf(c) };
+    } = { label: c.label, profile: null, tools: [], hidden: [], agents: [], skills: [], workflows: [], active: at.active };
     let profileTools: string[] = [];
     let profileAgents: string[] = [];
     let profileSkills: string[] | null = null;
     if (c.profile_id) {
       try {
-        const r = await this.profileOf(p, c);
+        const r = await s.chat.resolveProfileFor(p, c.profile_id, c.label);
         out.profile = r.profile.name;
         profileTools = r.profile.tools.filter((t) => t !== 'calculate');
         profileAgents = r.profile.agents ?? [];
@@ -176,7 +194,7 @@ export class ChatInvocations {
         out.workflows.push({ id: w.id, name: w.name, description: w.description, label: w.label, inputSchema: 'missing' in callee ? null : (callee.input_schema ?? null) });
       }
     }
-    return out;
+    return { out, allow: { tools: profileTools, calculate: out.tools.some((t) => t.name === 'calculate'), skills: profileSkills, profileResolved: out.profile !== null } };
   }
 
   // ---------- B-4002, B-4003: a person calls a tool; write tools behind a card ----------
@@ -348,11 +366,64 @@ export class ChatInvocations {
   }
 
   /** B-4003: the owner (or a tool admin) decides an in-chat card. Expired cards are recorded as such. */
-  async decide(p: Principal, conversationId: string, id: string, decision: 'approve' | 'deny') {
+  // ---------- 1.7.0 (B-11703): plan cards ----------
+
+  /** The plan a plan-first profile drafted for an answer, shown as a card the person approves, edits or declines. */
+  async createPlanCard(c: ConversationRow, answerId: string, plan: Plan, offered: string[]): Promise<InvocationRow> {
+    const s = this.s();
+    const id = ulid();
+    const t = Date.now();
+    const row: InvocationRow = {
+      id, tenant_id: c.tenant_id, conversation_id: c.id, user_id: c.user_id, kind: 'plan', name: 'plan', entry_id: null, version: null, side_effect: null, proposed_by: 'model',
+      arguments: await this.seal(c.tenant_id, id, 'arguments', { ...plan, offered }), state: 'awaiting', approval: 'owner', decided_by: null, decided_at: null, expires_at: t + s.cfg.CHAT_CARD_TTL_SECONDS * 1000, run_kind: null, run_id: null, chain_id: null, message_id: null, answer_id: answerId, flag_id: null,
+      result: null, error: null, label: c.label, created_at: t, updated_at: t
+    };
+    await this.db('chat_invocations').insert(row);
+    await s.audit.append({ tenantId: c.tenant_id, action: 'chat.plan.proposed', kind: 'system', actor: { service: 'chat', user: c.user_id }, target: { conversation: c.id, invocation: id, message: answerId }, label: c.label, detail: { steps: plan.steps.length, tools: plan.tools } });
+    this.emit(c, 'chat.invocation', { invocationId: id, state: 'awaiting', kind: 'plan', name: 'plan', messageId: answerId });
+    return row;
+  }
+
+  /** The person's decision on a plan card: approved (as drafted or edited) the answer runs under it; declined, nothing runs. */
+  private async decidePlan(p: Principal, c: ConversationRow, row: InvocationRow, decision: 'approve' | 'deny', steps?: { title: string; tools?: string[]; data?: string[] }[]) {
+    const s = this.s();
+    const t = Date.now();
+    const stored = await this.open<(Plan & { offered?: string[] }) | null>(row.tenant_id, row.id, 'arguments', row.arguments, null);
+    if (decision === 'deny') {
+      await this.db('chat_invocations').where({ id: row.id }).update({ state: 'denied', decided_by: p.userId, decided_at: t, error: `Declined by ${p.displayName}.`, updated_at: t });
+      await s.audit.append({ tenantId: c.tenant_id, action: 'chat.plan.declined', kind: 'decision', actor: actorFrom(p), target: { conversation: c.id, invocation: row.id, message: row.answer_id }, label: c.label });
+      this.emit(c, 'chat.invocation', { invocationId: row.id, state: 'denied', kind: 'plan', name: 'plan', messageId: row.answer_id });
+      if (row.answer_id) await s.chat.runPlan(c.tenant_id, row.answer_id, 'deny', null, `${p.displayName} declined the plan.`);
+      return this.view({ ...row, state: 'denied', decided_by: p.userId, decided_at: t }, p, (stored ?? undefined) as Record<string, unknown> | undefined);
+    }
+    const edited = !!steps;
+    const plan: Plan = steps ? normalizePlan({ steps }, s.cfg.THINKING_PLAN_MAX_STEPS) : stored ? { steps: stored.steps, tools: stored.tools } : { steps: [], tools: [] };
+    if (!plan.steps.length) throw conflict('This plan has no steps to approve.');
+    const offered = stored?.offered ?? [];
+    const unknown = plan.tools.filter((x) => offered.length && !offered.includes(x));
+    if (unknown.length) throw badRequest(`The plan names tools this conversation cannot call: ${unknown.join(', ')}.`);
+    const args = { ...plan, offered, edited };
+    await this.db('chat_invocations').where({ id: row.id }).update({ state: 'done', decided_by: p.userId, decided_at: t, arguments: await this.seal(c.tenant_id, row.id, 'arguments', args), updated_at: t });
+    await s.audit.append({ tenantId: c.tenant_id, action: 'chat.plan.approved', kind: 'decision', actor: actorFrom(p), target: { conversation: c.id, invocation: row.id, message: row.answer_id }, label: c.label, detail: { edited, steps: plan.steps.length, tools: plan.tools } });
+    this.emit(c, 'chat.invocation', { invocationId: row.id, state: 'done', kind: 'plan', name: 'plan', messageId: row.answer_id });
+    if (row.answer_id) await s.chat.runPlan(c.tenant_id, row.answer_id, 'approve', plan, null);
+    return this.view({ ...row, state: 'done', decided_by: p.userId, decided_at: t }, p, args as unknown as Record<string, unknown>);
+  }
+
+  async decide(p: Principal, conversationId: string, id: string, decision: 'approve' | 'deny', steps?: { title: string; tools?: string[]; data?: string[] }[]) {
     const s = this.s();
     const c = await s.chat.conversation(p, conversationId);
     const row = await this.row(c.tenant_id, id);
     if (row.conversation_id !== c.id) throw notFound('Invocation');
+    if (row.kind === 'plan') {
+      if (row.user_id !== p.userId && !effectivePermissions(p).has('tools:manage')) throw forbidden('Only the conversation\'s owner or a tool admin decides this plan.', { step: 'role' });
+      if (row.state !== 'awaiting') throw conflict(`This plan is ${row.state}.`);
+      if (row.expires_at && row.expires_at < Date.now()) {
+        await this.expire(row);
+        throw conflict('This card expired before it was decided.');
+      }
+      return this.decidePlan(p, c, row, decision, steps);
+    }
     if (row.user_id !== p.userId && !effectivePermissions(p).has('tools:manage')) throw forbidden('Only the conversation\'s owner or a tool admin decides this call.', { step: 'role' });
     if (row.state !== 'awaiting') throw conflict(`This call is ${row.state}.`);
     const t = Date.now();
@@ -394,6 +465,8 @@ export class ChatInvocations {
   private async expire(row: InvocationRow): Promise<void> {
     const t = Date.now();
     await this.db('chat_invocations').where({ id: row.id, state: 'awaiting' }).update({ state: 'expired', error: 'The card expired before it was decided.', updated_at: t });
+    // 1.7.0 (B-11703): an answer waiting on its plan ends with the card.
+    if (row.kind === 'plan' && row.answer_id) await this.s().chat.runPlan(row.tenant_id, row.answer_id, 'expired', null, 'The plan expired before it was decided.').catch(() => undefined);
     await this.s().audit.append({ tenantId: row.tenant_id, action: 'chat.tool.expired', kind: 'system', actor: { service: 'chat', user: row.user_id }, target: { conversation: row.conversation_id, invocation: row.id, tool: row.name }, label: row.label, detail: { proposedBy: row.proposed_by } });
   }
 
@@ -641,7 +714,9 @@ export class ChatInvocations {
       error: r.error,
       label: r.label,
       createdAt: r.created_at,
-      updatedAt: r.updated_at
+      updatedAt: r.updated_at,
+      // 1.7.0 (B-11703): a plan card's steps and the tools the turn may call under it.
+      ...(r.kind === 'plan' && a ? { plan: { steps: (a as { steps?: unknown }).steps ?? [], tools: (a as { tools?: unknown }).tools ?? [], offered: (a as { offered?: unknown }).offered ?? [], edited: !!(a as { edited?: unknown }).edited } } : {})
     };
     if (!ACTIVE.includes(r.state) || !r.run_id) return base;
     // Live runs: what the card shows while it works, and what waits for a decision in the chain (B-4106, B-4009).

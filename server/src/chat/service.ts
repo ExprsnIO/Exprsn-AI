@@ -12,7 +12,7 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { QuotaService } from '../tenancy/quotas.js';
 import { QueueTimeout, type Gateway, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
 import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.js';
-import { ThinkSplitter, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
+import { splitThink, ThinkSplitter, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
@@ -21,6 +21,7 @@ import type { DlpInspector } from '../compliance/dlp-types.js';
 import type { HoldLookup } from '../compliance/holds.js';
 import type { ResolvedTool, ToolDispatcher, ToolOutcome } from '../registry/dispatch.js';
 import type { ChatInvocations } from './invocations.js';
+import { planInstruction, parsePlan, parseReflection, type BudgetState, type Plan, type Reflection, type ThinkingPolicy, type ThinkingService } from '../thinking/service.js';
 import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
 import { toolResultContent, type UntrustedVerdict } from '../guardrails/injection.js';
 import { StreamGuard, type CheckLimiter, type Release, type Screen } from '../guardrails/stream.js';
@@ -37,7 +38,7 @@ export type { Chunk } from './streams.js';
  * both are `withdrawn` when the reviewer rejects it. Since Sprint 26 (B-1903) a message can be `hidden` by moderation:
  * shown to no one (its owner included) until an upheld appeal restores its previous state.
  */
-export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted' | 'awaiting' | 'hidden';
+export type MessageState = 'queued' | 'streaming' | 'complete' | 'stopped' | 'failed' | 'held' | 'withdrawn' | 'interrupted' | 'awaiting' | 'hidden' | 'planning';
 
 export interface ConversationRow {
   id: string;
@@ -93,6 +94,10 @@ interface MessageRow {
   /** 1.7.0 (B-4002, B-4004, B-4009): a tool turn, an answer attributed to an agent, or a workflow run's outcome. */
   turn?: 'tool' | 'agent' | 'workflow' | null;
   invocation_id?: string | null;
+  /** 1.7.0 (B-11701 to B-11704): the approved plan (sealed JSON), the reflection (sealed JSON), when the policy drops the thinking. */
+  plan?: string | null;
+  checked?: string | null;
+  thinking_purge_at?: number | null;
 }
 
 interface Stream {
@@ -134,6 +139,13 @@ interface Stream {
   /** Store writes and snapshots, one at a time. */
   io: Promise<void>;
   timer: NodeJS.Timeout | null;
+  /** 1.7.0 (B-11701): the policy hides the thinking from this stream's reader, or keeps it out of storage. */
+  hideThinking: boolean;
+  storeThinking: boolean;
+  /** 1.7.0 (B-11702): what the budgets decided for this turn. */
+  budget: BudgetState | null;
+  /** 1.7.0 (B-11703): the approved plan this turn runs under. */
+  plan: Plan | null;
 }
 
 /** What a continued answer starts from. */
@@ -205,6 +217,8 @@ export class ChatService {
   readonly answerListeners: ((e: AnswerEvent) => void)[] = [];
   /** 1.7.0 (B-40): cards for write tools the model proposes, agents it hands turns to, and the conversation's skills. */
   invocations: ChatInvocations | null = null;
+  /** 1.7.0 (B-117): the thinking policy, budgets, plans and reflection (set by `services.ts`). */
+  thinking: ThinkingService | null = null;
 
   constructor(
     private readonly db: Db,
@@ -450,7 +464,8 @@ export class ChatService {
     const c = await this.conversation(p, id);
     await this.interruptStale(c.id);
     const rows = (await this.db('messages').where({ conversation_id: c.id }).orderBy([{ column: 'created_at' }, { column: 'id' }])) as MessageRow[];
-    const messages = await Promise.all(rows.map((m) => this.messageView(m, p)));
+    const vis = await this.thinkingVisibleFor(c, p);
+    const messages = await Promise.all(rows.map((m) => this.messageView(m, p, vis)));
     return { id: c.id, kind: c.kind, title: await this.open(c.tenant_id, c.id, 'title', c.title), label: c.label, profileId: c.profile_id, workspaceId: c.workspace_id, headId: c.head_id, skills: json<{ name: string; mode: string }[]>(c.skills ?? null, []), createdAt: c.created_at, updatedAt: c.updated_at, archived: c.archived_at != null, messages };
   }
 
@@ -458,7 +473,7 @@ export class ChatService {
    * A message as its owner sees it. While streaming, only the screened text. A held answer shows nothing but its
    * state until a reviewer approves it. A citation's quoted passage is left out when it is above the reader's clearance.
    */
-  private async messageView(m: MessageRow, p?: Principal) {
+  private async messageView(m: MessageRow, p?: Principal, thinkingVisible = true) {
     const live = this.streams.get(m.id);
     const held = (m.role === 'assistant' && m.state === 'held' && !live) || m.state === 'hidden';
     const tools = held ? [] : live ? live.tools : json<Chunk['tool'][]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
@@ -468,7 +483,8 @@ export class ChatService {
       parentId: m.parent_id,
       role: m.role,
       content: held ? '' : live ? live.shown : ((await this.open(m.tenant_id, m.id, 'content', m.content)) ?? ''),
-      thinking: held ? null : live ? live.shownThinking || null : await this.open(m.tenant_id, m.id, 'thinking', m.thinking),
+      // 1.7.0 (B-11701): the policy decides who sees the thinking; the token count stays.
+      thinking: held || !thinkingVisible ? null : live ? live.shownThinking || null : await this.open(m.tenant_id, m.id, 'thinking', m.thinking),
       tools,
       state: live ? live.state : m.state,
       seq: live ? live.seq : Number(m.seq),
@@ -487,8 +503,17 @@ export class ChatService {
       completedAt: m.completed_at == null ? null : Number(m.completed_at),
       guard: json<Record<string, unknown> | null>(m.guard ?? null, null),
       turn: m.turn ?? null,
-      invocationId: m.invocation_id ?? null
+      invocationId: m.invocation_id ?? null,
+      // 1.7.0 (B-11703, B-11704): the plan the turn ran under and the reflection's verdict.
+      plan: held ? null : json<Plan | null>(await this.open(m.tenant_id, m.id, 'plan', m.plan ?? null), null),
+      checked: held ? null : json<Reflection | null>(await this.open(m.tenant_id, m.id, 'checked', m.checked ?? null), null)
     };
+  }
+
+  /** 1.7.0 (B-11701): whether the policy lets `p` see the thinking of this conversation's answers. */
+  private async thinkingVisibleFor(c: Pick<ConversationRow, 'tenant_id' | 'workspace_id' | 'user_id'>, p?: Principal): Promise<boolean> {
+    if (!this.thinking || !p) return !!p;
+    return this.thinking.visibleTo(await this.thinking.policyFor(c.tenant_id, c.workspace_id), p, c.user_id);
   }
 
   // ---------- profiles ----------
@@ -506,6 +531,8 @@ export class ChatService {
       if (!target || target.alias_of || target.status !== 'published') continue;
       const m = models.find((x) => x.id === target!.model_id);
       if (!m || (m.state !== 'approved' && m.state !== 'deprecated')) continue;
+      // 1.7.0 (B-12303): an embedding-only model (the embedding profile suggestions use) cannot answer a chat.
+      if (m.capabilities.includes('embedding') && !m.capabilities.includes('completion')) continue;
       if (!clears(p.clearance, target.label)) continue;
       out.push({
         id: row.id,
@@ -593,6 +620,12 @@ export class ChatService {
     if (hold) {
       await this.fileHeldPrompt(p, { ...c, label }, user, content, hold);
       return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label, state: 'awaiting' as const, reason: hold.reason ?? 'Held for review.' };
+    }
+    // 1.7.0 (B-11703): a plan-first profile drafts a plan the person decides on before the answer runs any tool.
+    if (r.profile.plan_first && this.thinking && this.invocations && this.toolDispatch) {
+      await this.db('messages').where({ id: assistant.id }).update({ state: 'planning' });
+      void this.gateway.turn(() => this.draftPlan(p, { ...c, label }, { ...assistant, state: 'planning' }, r, think)).catch((err: Error) => this.log.error({ err, message: assistant.id }, 'plan draft crashed'));
+      return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label, state: 'planning' as const, reason: 'Waiting for the plan to be approved.' };
     }
     this.start(p, { ...c, label }, assistant, r, think, 'chat');
     return { userMessageId: user.id, messageId: assistant.id, profile: r.profile.name, model: r.model.name, think, label };
@@ -742,11 +775,12 @@ export class ChatService {
   private async resumeIn(c: ConversationRow, messageId: string, after: number, p: Principal) {
     // The message must belong to the conversation before the process-wide stream map is consulted.
     let m = await this.message(c, messageId);
+    const vis = await this.thinkingVisibleFor(c, p);
     const st = this.streams.get(m.id);
     if (st && st.conversationId === c.id && st.state !== 'held') {
       const first = st.chunks[0]?.seq ?? st.seq + 1;
       if (after + 1 >= first || after >= st.seq) return { state: st.state, seq: st.seq, chunks: st.chunks.filter((x) => x.seq > after) };
-      return { state: st.state, seq: st.seq, content: st.shown, thinking: st.shownThinking || null, tools: st.tools, usage: null, error: null };
+      return { state: st.state, seq: st.seq, content: st.shown, thinking: vis ? st.shownThinking || null : null, tools: st.tools, usage: null, error: null };
     }
     if (await this.interruptIfStale(m)) m = await this.message(c, messageId);
     for (let attempt = 0; LIVE.includes(m.state) && !st && attempt < 3; attempt++) {
@@ -759,7 +793,7 @@ export class ChatService {
       // Behind the snapshot: the snapshot, then whatever the buffer holds after it.
       const later = chunks.filter((x) => x.seq > snap);
       if (later.length && later[0]!.seq !== snap + 1) continue; // a newer snapshot landed between the two reads
-      const v = await this.messageView(row, p);
+      const v = await this.messageView(row, p, vis);
       let content = v.content;
       let thinking = v.thinking ?? '';
       const tools = [...v.tools];
@@ -770,7 +804,7 @@ export class ChatService {
       }
       return { state: row.state, seq: later.length ? later[later.length - 1]!.seq : snap, content, thinking: thinking || null, tools, usage: null, error: null };
     }
-    const v = await this.messageView(m, p);
+    const v = await this.messageView(m, p, vis);
     return { state: v.state, seq: v.seq, content: v.content, thinking: v.thinking, tools: v.tools, usage: v.usage, error: v.error };
   }
 
@@ -988,7 +1022,7 @@ export class ChatService {
     this.bus.publish(TOPICS.chatEvent, { userId: st.userId, tenantId: st.tenantId, event, data });
   }
 
-  private start(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', from?: Continuation): void {
+  private start(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel, kind: 'chat' | 'compare', from?: Continuation, opts: { plan?: Plan | null } = {}): void {
     const st: Stream = {
       messageId: m.id,
       conversationId: c.id,
@@ -1015,7 +1049,11 @@ export class ChatService {
       screens: { det: null, model: null },
       context: null,
       io: Promise.resolve(),
-      timer: null
+      timer: null,
+      hideThinking: false,
+      storeThinking: true,
+      budget: null,
+      plan: opts.plan ?? null
     };
     // The heartbeat keeps the lease on this answer and writes chunks to the shared buffer while the model is quiet.
     st.timer = setInterval(() => void this.beat(st), Math.max(250, Math.floor(this.leaseMs / 3)));
@@ -1061,6 +1099,7 @@ export class ChatService {
   }
 
   private push(st: Stream, chunk: Omit<Chunk, 'seq'>): void {
+    if (chunk.thinking && st.hideThinking) return; // 1.7.0 (B-11701): the policy keeps the thinking from this reader
     const c: Chunk = { seq: ++st.seq, ...chunk };
     st.chunks.push(c);
     if (st.chunks.length > LOCAL_CHUNKS) st.chunks.splice(0, st.chunks.length - LOCAL_CHUNKS);
@@ -1086,7 +1125,7 @@ export class ChatService {
         .where({ id: st.messageId })
         .update({
           content: await this.seal(st.tenantId, st.messageId, 'content', content),
-          thinking: thinking ? await this.seal(st.tenantId, st.messageId, 'thinking', thinking) : null,
+          thinking: thinking && st.storeThinking ? await this.seal(st.tenantId, st.messageId, 'thinking', thinking) : null,
           tools: tools.length ? await this.seal(st.tenantId, st.messageId, 'tools', JSON.stringify(tools)) : null,
           seq,
           state: st.state,
@@ -1110,7 +1149,7 @@ export class ChatService {
     for (let cur = byId.get(parentId); cur; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined) path.unshift(cur);
     const out: { row: MessageRow; message: ChatMessage }[] = [];
     for (const m of path) {
-      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting', 'hidden'].includes(m.state)) continue;
+      if (m.role === 'assistant' && ['failed', 'queued', 'held', 'withdrawn', 'awaiting', 'hidden', 'planning'].includes(m.state)) continue;
       if (m.role === 'user' && (m.state === 'held' || m.state === 'withdrawn' || m.state === 'hidden')) continue;
       let content = (await this.open(m.tenant_id, m.id, 'content', m.content)) ?? '';
       const images: string[] = [];
@@ -1415,6 +1454,8 @@ export class ChatService {
     let evalCounted = false;
     let lastWrite = Date.now();
     const produced = { content: st.content.length, thinking: st.thinking.length };
+    // 1.7.0 (B-11701): the policy in force for this conversation decides who sees the thinking and how long it is kept.
+    let policy: ThinkingPolicy | null = null;
     this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', profile: r.profile.name, model: r.model.name, ...(from ? { continuing: from.seq } : {}) });
     try {
       const onPosition = (position: number) => this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'queued', position });
@@ -1426,7 +1467,8 @@ export class ChatService {
         const msgs: ChatMessage[] = [];
         // 1.7.0 (B-4005): the conversation's skills (their closure) follow the profile's own instructions.
         const skills = this.invocations && kind === 'chat' ? await this.invocations.skillPrompt(p, c) : null;
-        const system = [rp.profile.system_prompt, skills?.text].filter((x): x is string => !!x).join('\n\n');
+        // 1.7.0 (B-11703): the approved plan follows the profile's instructions and the skills.
+        const system = [rp.profile.system_prompt, skills?.text, st.plan ? planInstruction(st.plan) : null].filter((x): x is string => !!x).join('\n\n');
         if (system) msgs.push({ role: 'system', content: system });
         msgs.push(...(await this.history(c, m.parent_id!, rp.model.capabilities.includes('vision'))));
         return { r: rp, messages: msgs, items: await this.gatherContext(p, c, m, rp, msgs) };
@@ -1467,8 +1509,29 @@ export class ChatService {
       // 1.7.0 (B-4006): the agents on the profile's list, as `agent:<name>` tools within the chain's depth and budgets.
       const callees: ResolvedTool[] = modelTools && this.toolDispatch && this.invocations && kind === 'chat' && (r.profile.agents ?? []).length ? (await this.toolDispatch.resolveCallees(p, { agents: r.profile.agents ?? [] }, c.label, extra.map((t) => t.fn))).tools : [];
       extra.push(...callees);
-      const toolsOn = (r.profile.tools.includes('calculate') || extra.length > 0) && modelTools;
-      const toolDefs = [...(r.profile.tools.includes('calculate') ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
+      // 1.7.0 (B-11703): under an approved plan only the tools it names are offered.
+      if (st.plan) {
+        const allowed = new Set(st.plan.tools);
+        for (let i = extra.length - 1; i >= 0; i--) if (!allowed.has(extra[i]!.fn) && !allowed.has(extra[i]!.entry.name)) extra.splice(i, 1);
+      }
+      const calcOn = r.profile.tools.includes('calculate') && (!st.plan || st.plan.tools.includes('calculate'));
+      const toolsOn = (calcOn || extra.length > 0) && modelTools;
+      const toolDefs = [...(calcOn ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
+      // 1.7.0 (B-11701, B-11702): who sees the thinking, and whether a spent budget drops the level.
+      policy = this.thinking ? await this.thinking.policyFor(c.tenant_id, c.workspace_id) : null;
+      st.hideThinking = !!policy && policy.visibility !== 'author';
+      st.storeThinking = !policy || policy.visibility !== 'nobody';
+      if (this.thinking) {
+        st.budget = await this.thinking.budget(c.tenant_id, c.workspace_id, r.profile, think);
+        if (st.budget.dropped) {
+          think = st.budget.level;
+          await this.db('messages').where({ id: m.id }).update({ think });
+        }
+        if (st.budget.dropped || st.budget.near) {
+          const side = st.budget.limit === 'workspace' ? st.budget.workspace : st.budget.profile;
+          this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'thinking-budget', dropped: st.budget.dropped, level: think, limit: st.budget.limit, used: side.used, max: side.limit });
+        }
+      }
       // B-11707: the model's thinking mode decides the request: the think parameter for a native model, the convention
       // appended to the system prompt for a template model (and its <think> blocks split out of the content below).
       const thinkReq = thinkingRequest(r.model, think, messages);
@@ -1614,6 +1677,9 @@ export class ChatService {
       calc_calls: prior.calcCalls + usage.calcCalls,
       gpu_ms: Math.round(prior.gpuMs + usage.gpuMs),
       first_token_ms: usage.firstTokenMs,
+      // 1.7.0 (B-11701, B-11703): when the policy drops the thinking, and the plan the turn ran under.
+      thinking_purge_at: policy && st.storeThinking && st.state !== 'interrupted' && this.thinking ? this.thinking.purgeAt(policy, Date.now()) : null,
+      ...(st.plan ? { plan: await this.seal(c.tenant_id, m.id, 'plan', JSON.stringify(st.plan)) } : {}),
       ...(guard ? { guard: JSON.stringify(guard.summary) } : {}),
       ...(guard?.raised ? { label: guard.raised } : {}),
       ...(passages ? { citations: passages } : {})
@@ -1623,12 +1689,16 @@ export class ChatService {
     // A replaced or held answer is read back from the store, not from the streamed chunks.
     if ((guard?.replaced || guard?.held) && this.streams.get(m.id) === st) this.streams.delete(m.id);
     if (metered) {
-      await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind, profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, conversationId: c.id, messageId: m.id, promptTokens: usage.promptTokens, outputTokens: usage.outputTokens, thinkingTokens: usage.thinkingTokens, calcCalls: usage.calcCalls, gpuMs: usage.gpuMs });
+      await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind, profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, conversationId: c.id, messageId: m.id, promptTokens: usage.promptTokens, outputTokens: usage.outputTokens, thinkingTokens: usage.thinkingTokens, thinkingDropped: !!st.budget?.dropped, calcCalls: usage.calcCalls, gpuMs: usage.gpuMs });
     }
     if (guard?.held) await this.fileHold(p, c, m, st, guard.decision);
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
     this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
     if (this.invocations && kind === 'chat' && (st.state === 'complete' || st.state === 'stopped')) await this.invocations.dropOnceSkills(c).catch(() => undefined);
+    // 1.7.0 (B-11704): the reflection pass checks a finished answer that was not withheld or held.
+    if (this.thinking && r.profile.reflect && st.state === 'complete' && !guard?.held && !(guard?.replaced && guard.decision.action !== 'redact') && st.content) {
+      await this.reflect(p, c, m, r, st).catch((err: Error) => this.log.warn({ err: err.message, message: m.id }, 'reflection failed'));
+    }
     for (const fn of this.answerListeners) {
       try {
         fn({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, userMessageId: m.parent_id, messageId: m.id, state: st.state, label: c.label });
@@ -1657,6 +1727,140 @@ export class ChatService {
     const chain = (await this.db('agent_runs').where({ id: pending.id }).first('chain_id')) as { chain_id: string | null } | undefined;
     const row = await this.invocations.adoptModelRun(c, m.id, ext.entry, pending.id, chain?.chain_id ?? null);
     return { ...o, ok: true, pending: undefined, result: { run: pending.id, agent: ext.entry.name, note: `${ext.entry.name} is still working (card ${row.id}); its answer will appear as its own turn in this conversation. Tell the person and finish your answer.` } } as ToolOutcome;
+  }
+
+  // ---------- 1.7.0 (B-11703, B-11704): plans and reflection ----------
+
+  /**
+   * A plan-first turn: the model drafts a plan from the conversation and the tools on offer (no tool runs), which
+   * becomes a card the person approves, edits or declines; the answer itself starts from the decision (`runPlan`).
+   * When the model gives no readable plan, the answer runs without one and says so in its status.
+   */
+  private async draftPlan(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, think: ThinkLevel): Promise<void> {
+    const thinking = this.thinking!;
+    let lease: Lease | null = null;
+    try {
+      const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
+      const resolved: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools : [];
+      const callees: ResolvedTool[] = modelTools && this.toolDispatch && (r.profile.agents ?? []).length ? (await this.toolDispatch.resolveCallees(p, { agents: r.profile.agents ?? [], workflows: [] }, c.label, resolved.map((t) => t.fn))).tools : [];
+      const offered = [...resolved, ...callees].map((t) => ({ name: t.fn, description: t.entry.description }));
+      if (r.profile.tools.includes('calculate') && modelTools) offered.unshift({ name: 'calculate', description: 'Exact arithmetic.' });
+      const skills = this.invocations ? await this.invocations.skillPrompt(p, c) : null;
+      const system = [r.profile.system_prompt, skills?.text].filter((x): x is string => !!x).join('\n\n') || null;
+      const history = await this.history(c, m.parent_id!, false);
+      const messages = thinking.planMessages(system, history, offered);
+      this.emit({ userId: p.userId, tenantId: c.tenant_id }, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'planning', profile: r.profile.name, model: r.model.name });
+      const ac = new AbortController();
+      lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: ac.signal });
+      let text = '';
+      let promptTokens = 0;
+      let outputTokens = 0;
+      const options: Record<string, unknown> = {};
+      if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
+      const thinkReq = thinkingRequest(r.model, 'off', messages);
+      for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...thinkReq, options }, ac.signal)) {
+        if (chunk.message?.content) text += chunk.message.content;
+        if (chunk.done) {
+          promptTokens += chunk.prompt_eval_count ?? 0;
+          outputTokens += chunk.eval_count ?? 0;
+        }
+      }
+      if (thinkingMode(r.model) === 'template') text = splitThink(text).content;
+      lease.release(null);
+      const pool = lease.pool.id;
+      lease = null;
+      if (promptTokens + outputTokens > 0) await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'chat', profileId: r.profile.id, model: r.model.name, poolId: pool, conversationId: c.id, messageId: m.id, promptTokens, outputTokens });
+      const plan = parsePlan(text, thinking.planMaxSteps());
+      if (!plan) {
+        this.log.warn({ message: m.id }, 'the model gave no readable plan; the answer runs without one');
+        await this.db('messages').where({ id: m.id }).update({ state: 'queued' });
+        this.emit({ userId: p.userId, tenantId: c.tenant_id }, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'plan-skipped' });
+        this.start(p, c, { ...m, state: 'queued' }, r, think, 'chat');
+        return;
+      }
+      await this.invocations!.createPlanCard(c, m.id, plan, offered.map((t) => t.name));
+    } catch (err) {
+      lease?.release(null);
+      const detail = err instanceof HttpProblem ? (err.detail ?? err.title) : (err as Error).message;
+      await this.db('messages').where({ id: m.id }).update({ state: 'failed', error: `The plan could not be drafted: ${detail}`.slice(0, 500), completed_at: Date.now() });
+      this.emit({ userId: p.userId, tenantId: c.tenant_id }, 'chat.done', { conversationId: c.id, messageId: m.id, state: 'failed', seq: 0, usage: null, error: detail, profile: r.profile.name, model: r.model.name });
+    }
+  }
+
+  /**
+   * The decision on a plan card: approved, the answer runs under the plan (only the tools it names are offered);
+   * declined or expired, the answer ends without running anything and says why.
+   */
+  async runPlan(tenantId: string, messageId: string, decision: 'approve' | 'deny' | 'expired', plan: Plan | null, reason: string | null): Promise<void> {
+    const m = (await this.db('messages').where({ tenant_id: tenantId, id: messageId }).first()) as MessageRow | undefined;
+    if (!m || m.state !== 'planning') return;
+    const c = (await this.db('conversations').where({ id: m.conversation_id }).first()) as ConversationRow | undefined;
+    if (!c) return;
+    if (decision !== 'approve' || !plan) {
+      await this.db('messages').where({ id: m.id, state: 'planning' }).update({ state: 'stopped', content: await this.seal(c.tenant_id, m.id, 'content', reason ?? 'The plan was declined; nothing ran.'), completed_at: Date.now(), seq: 1 });
+      await this.db('conversations').where({ id: c.id }).update({ updated_at: Date.now() });
+      this.bus.publish(TOPICS.chatEvent, { userId: c.user_id, tenantId: c.tenant_id, event: 'chat.done', data: { conversationId: c.id, messageId: m.id, state: 'stopped', seq: 1, usage: null, error: null, profile: m.profile_name, model: m.model } });
+      return;
+    }
+    const p = await this.principalForOwner(c.tenant_id, c.user_id, c.workspace_id);
+    if (!p) {
+      await this.db('messages').where({ id: m.id }).update({ state: 'failed', error: 'The conversation\'s owner is no longer active.', completed_at: Date.now() });
+      return;
+    }
+    const r = await this.resolveProfileFor(p, m.profile_id ?? '', c.label);
+    const claimed = await this.db('messages').where({ id: m.id, state: 'planning' }).update({ state: 'queued', plan: await this.seal(c.tenant_id, m.id, 'plan', JSON.stringify(plan)) });
+    if (claimed !== 1) return;
+    this.start(p, c, { ...m, state: 'queued' }, r, m.think ?? this.thinkLevel(r.profile), 'chat', undefined, { plan });
+  }
+
+  /**
+   * The reflection pass: a second look at a finished answer against its question, citations and tool results, by the
+   * profile's reflect profile or the profile itself. Findings or a revised answer become the "checked" badge on the
+   * message; a revised answer passes the `model-output` checkpoint like any answer. Metered to the conversation.
+   */
+  private async reflect(p: Principal, c: ConversationRow, m: MessageRow, r: ResolvedProfile, st: Stream): Promise<void> {
+    const thinking = this.thinking!;
+    const rr = r.profile.reflect_profile ? await this.resolveFor(p, r.profile.reflect_profile, c.label) : r;
+    const q = m.parent_id ? ((await this.db('messages').where({ id: m.parent_id }).first('content')) as { content: string | null } | undefined) : undefined;
+    const question = q?.content ? ((await this.open(c.tenant_id, m.parent_id!, 'content', q.content)) ?? '') : '';
+    const citations = (st.context?.citations ?? []).map((x, i) => ({ n: Number(x.n ?? i + 1), passage: st.context?.items[i]?.text ?? null, title: (x.title as string | null) ?? null }));
+    const messages = thinking.reflectionMessages({ question, answer: st.content, citations, tools: st.tools.map((t) => ({ name: t.name, output: t.output ?? t.result ?? null, ...(t.error ? { error: t.error } : {}) })) });
+    this.emit(st, 'chat.status', { conversationId: c.id, messageId: m.id, state: 'checking', profile: rr.profile.name });
+    const ac = new AbortController();
+    const lease = await this.gateway.acquire(rr.profile, rr.model, c.label, { signal: ac.signal });
+    let text = '';
+    let promptTokens = 0;
+    let outputTokens = 0;
+    let gpuMs = 0;
+    try {
+      const options: Record<string, unknown> = {};
+      if (rr.profile.num_ctx) options.num_ctx = rr.profile.num_ctx;
+      const thinkReq = thinkingRequest(rr.model, 'off', messages);
+      for await (const chunk of lease.client.chat({ model: rr.model.name, messages, ...thinkReq, options }, ac.signal)) {
+        if (chunk.message?.content) text += chunk.message.content;
+        if (chunk.done) {
+          promptTokens += chunk.prompt_eval_count ?? 0;
+          outputTokens += chunk.eval_count ?? 0;
+          gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+        }
+      }
+      if (thinkingMode(rr.model) === 'template') text = splitThink(text).content;
+    } finally {
+      lease.release(null);
+    }
+    if (promptTokens + outputTokens > 0) await this.quotas.record({ tenantId: c.tenant_id, workspaceId: c.workspace_id, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'chat', profileId: rr.profile.id, model: rr.model.name, poolId: lease.pool.id, conversationId: c.id, messageId: m.id, promptTokens, outputTokens, gpuMs });
+    const v = parseReflection(text);
+    let revised = v.revised;
+    if (revised) {
+      // A revised answer is screened like any answer; what the check withholds is dropped, a redaction is kept.
+      const d = await this.guardrails.check({ tenantId: c.tenant_id, workspaceId: c.workspace_id, checkpoint: 'model-output', text: revised, label: c.label, principal: p, source: { kind: 'message', id: m.id }, meta: { conversationId: c.id, profile: rr.profile.name, model: rr.model.name, part: 'reflection' } });
+      if (d.action === 'block' || d.action === 'require-approval') revised = null;
+      else if (d.action === 'redact') revised = d.text;
+    }
+    const checked: Reflection = { status: revised ? 'revised' : v.findings.length ? 'findings' : 'ok', findings: v.findings, revised, profile: rr.profile.name, model: rr.model.name, at: Date.now() };
+    await this.db('messages').where({ id: m.id }).update({ checked: await this.seal(c.tenant_id, m.id, 'checked', JSON.stringify(checked)) });
+    await this.audit.append({ tenantId: c.tenant_id, action: 'chat.reflection.checked', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: rr.profile.name }, label: c.label, detail: { status: checked.status, findings: checked.findings.length, revised: !!revised } });
+    this.emit(st, 'chat.checked', { conversationId: c.id, messageId: m.id, status: checked.status, findings: checked.findings.length, revised: !!revised });
   }
 
   /** Files a held answer in the flag queue, where a reviewer cleared for its label approves or rejects it. */

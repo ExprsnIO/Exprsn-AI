@@ -106,6 +106,8 @@ const base = z.object({
     CONNECTIONS_ALLOWED_HOSTS: z.string().default(''),
     MCP_TIMEOUT_MS: z.coerce.number().int().min(250).max(600_000).default(15_000),
     MCP_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /** The MCP server (B-12201): the longest period a standing approval for a client's write calls may run, in days. */
+    MCP_STANDING_APPROVAL_MAX_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     /** Script sandbox: docker or podman CLI (auto picks whichever is installed), or none. */
     SCRIPT_RUNNER: z.enum(['auto', 'docker', 'podman', 'none']).default('auto'),
     SCRIPT_IMAGE_PYTHON: z.string().default('python:3.13-slim'),
@@ -483,6 +485,18 @@ const base = z.object({
     CHAT_AGENT_WAIT_SECONDS: z.coerce.number().int().min(1).max(600).default(45),
     /** 1.7.0 (B-4004): how many recent turns `@agent` may pass along when the person allows it. */
     CHAT_AGENT_CONTEXT_TURNS: z.coerce.number().int().min(0).max(50).default(8),
+    /** 1.7.0 (B-11702): the share of a thinking-token budget spent at which a turn carries a notice. */
+    THINKING_BUDGET_NOTICE_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
+    /** 1.7.0 (B-11703): the most steps a plan may hold (longer plans are cut). */
+    THINKING_PLAN_MAX_STEPS: z.coerce.number().int().min(1).max(50).default(12),
+    /** 1.7.0 (B-11704): how much of the question, answer, citations and tool results the reflection pass reads, in characters each. */
+    THINKING_REFLECTION_MAX_CHARS: z.coerce.number().int().min(1000).max(200_000).default(12_000),
+    /** 1.7.0 (B-12303): the embedding profile composer suggestions rank the catalogue with; no chat model is called. */
+    DISCOVERY_EMBED_PROFILE: z.string().trim().min(1).max(63).default('embed'),
+    /** 1.7.0 (B-12303): the lowest similarity (0 to 1) between a draft and an entry's description and examples at which the entry is suggested. */
+    DISCOVERY_SUGGEST_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.3),
+    /** 1.7.0 (B-12304): the registry's submit asks for a purpose, at least one example prompt and a category for any entry offered in chat. */
+    REGISTRY_DISCOVERY_REQUIRED: bool.default(true),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and

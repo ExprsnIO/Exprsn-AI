@@ -162,7 +162,9 @@
   // `live` marks screens backed by the server; the rest still show prototype data (see docs/PLAN.md for their sprint).
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', live: true },
+      { id: 'chat', label: 'Chat', icon: 'chat', perm: 'chat:read', live: true },
+      // 1.7.0, Sprint 41d (B-12301): the catalogue of what you can use in the workspace
+      { id: 'catalog', label: 'Catalogue', icon: 'grid', perm: 'chat:read', live: true }, { id: 'compare', label: 'Compare', icon: 'compare', perm: 'inference:invoke', live: true }, { id: 'runs', label: 'Runs', icon: 'runs', perm: 'agents:run', live: true },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', perm: 'knowledge:read', live: true }, { id: 'memory', label: 'Memory', icon: 'memory', perm: 'memory:write', live: true }, { id: 'workflows', label: 'Workflows', icon: 'workflows', perm: 'agents:run', live: true },
       { id: 'scripts', label: 'Scripts', icon: 'scripts', perm: 'scripts:run', live: true }, { id: 'media', label: 'Media', icon: 'media', perm: 'chat:write', live: true }, { id: 'images', label: 'Images', icon: 'images', perm: 'images:generate', live: true },
       // Sprint 30 (B-3408, B-3407): files and low-code apps
@@ -514,7 +516,7 @@
     // ----- prototype map -----
     map() {
       const groups = [
-        ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
+        ['Conversation', ['signin', 'chat', 'catalog', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
         ['Models and training', ['models', 'profiles', 'pools', 'training', 'import']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
         ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'directories', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];

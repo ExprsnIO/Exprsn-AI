@@ -466,6 +466,16 @@ dialogs.
 
 ## Screens changed in 1.7.0
 
+- **Settings: MCP access, standing approvals; Identity: MCP server, standing approvals** (B-12201, Sprint 41a): the
+  Standing approvals section of MCP access is a table with column headers (what each covers, the client, the class and
+  label as pills with text, until when, the calls covered) whose Revoke buttons name the tool in their accessible name
+  ("Revoke the standing approval for records_create"); revoking confirms in a dialog that says what changes. "Grant a
+  standing approval" opens a dialog of labelled fields with hints (workspace, tool, client, class, period, reason);
+  the tool list is filled for the chosen workspace, a refusal is shown in an `role="alert"` region, and the dialog
+  returns focus on close. The Identity screen's MCP server tab lists the tenant's approvals the same way, with the
+  person in the Revoke button's name. `e2e/tests/mcp-server.spec.ts` runs axe-core (Standard and Enhanced, light and
+  dark) and the in-page checker on the dialog and both panels and checks reflow at 320 and 640 px; the two new design
+  states on Settings and one on Identity are in the `y-accessibility.spec.ts` sweep.
 - **Chat: tools, agents, skills and workflows from the composer (Sprint 40a, B-4008).** The composer is a
   `combobox` with `aria-autocomplete="list"`; typing `/`, `@` or `+` as the first character opens a `listbox`
   picker (`aria-controls` and `aria-activedescendant` set only while it is open, `aria-expanded` otherwise false)
@@ -477,6 +487,37 @@ dialogs.
   rows and its links (the run, the chain tree) as links. An agent's answer is a normal answer with the agent named
   in the card above it. axe-core (WCAG 2.2 AA) passes with a tool turn, an approval card and an agent turn on
   screen (`e2e/tests/chat.spec.ts`), and the chat and runs reflow sweeps pass at 320 and 640 px.
+
+- **Profiles, Chat and Runs: thinking policy, budgets, plan first and reflection (B-11708, Sprint 41c).** Profiles:
+  the Thinking policy panel's scope (Tenant and each workspace) is a group of buttons with `aria-pressed`; who sees
+  thinking, retention, the exports checkbox and the workspace budget are labelled fields with hints, the notices that
+  say whether a workspace inherits are text, and Inherit from tenant confirms in a dialog. The profile's budget, plan
+  first, reflection and "Reflection by" are labelled fields (the last disabled until reflection is on), and the save
+  dialog lists their changes in words. Chat: the plan card is a region with a numbered list of steps (tools and data in
+  text), its state as a pill with text (awaiting, approved, denied, expired), and Approve, Edit and Decline as buttons;
+  Edit opens a dialog with one labelled field per step and returns focus on close; while a turn waits on its plan a
+  `role="status"` line says so. The "checked" badge is a `role="status"` region whose pill and sentence say the outcome
+  (checked, findings, revised) and list each finding with its kind in text, never colour alone; the budget notice and
+  the token-only thinking line are text. Runs: the plan step is a card like any step with its state in words ("draft,
+  waiting"); its inspector lists the plan as a numbered list with Approve plan, Edit and Decline buttons (each
+  decision confirms in a dialog); thinking steps and chain nodes name their level and thinking tokens in text, and a
+  node's plan is a numbered list. `e2e/tests/profiles.spec.ts`, `chat.spec.ts` and `runs.spec.ts` run axe-core with the
+  policy panel, a plan card, an approved plan with a finding on the badge, a run waiting on its plan and the chain view
+  on screen, and the accessibility and reflow sweeps (320 and 640 px) pass for the three screens.
+
+- **Chat, Registry, Settings and Profiles: finding what you can use (B-12301 to B-12304, Sprint 41d).** Chat: the
+  "What you can do" panel on a new chat is a region labelled by its heading, each category a level-3 heading and each
+  entry a button whose text is its call, description and example prompt, with a link to the catalogue; picking one
+  fills the composer and moves focus to it. Suggestion chips sit in a group labelled "Suggested for this message"; each
+  is a button naming the kind and the call (the description as its title), with a Dismiss button named after the
+  entry; they appear only after a pause in typing, never while a picker is open, and dismissing one returns focus to the
+  composer and is confirmed by a toast. Registry: the catalogue card is a heading and a card whose purpose, example,
+  call and category are text; Edit opens a dialog with labelled Purpose, Example prompts and Category fields, and the
+  same fields are on the entry form; a submit refused for missing fields is a problem panel that names them in words.
+  Settings: "New things you can use" is a group of three buttons with the current one marked and a sentence saying
+  what it means. Profiles: "Composer suggestions" is a labelled checkbox with a hint. `e2e/tests/chat.spec.ts` runs
+  axe-core with the panel and with suggestion chips on screen, `registry.spec.ts` with the reviewer's catalogue card,
+  and the accessibility and reflow sweeps (320 and 640 px) pass for Chat and Registry.
 
 ## Screens made live in 1.7.0
 
@@ -491,6 +532,22 @@ dialogs.
   dark mode. The log drawer's table goes through the accessibility pass. `e2e/tests/import.spec.ts` runs axe-core on
   the repositories, review, destination, done and log views, and the accessibility and reflow sweeps cover the screen
   and its states. The entry points on Models, Training, Classifiers and Knowledge are text buttons.
+- **Guardrails: Describe a rule (Sprint 41b, B-9602).** The dialog's description, profile and checkpoint are labelled
+  fields; the draft and its diff are code blocks with line numbers in a live region (`aria-live="polite"`), so the
+  result is announced when it lands; "Save in shadow" stays disabled until a draft validates, and a draft that does not
+  validate is a danger notice with the problems in text. The saved rule's note on the screen names the next steps.
+  `e2e/tests/guardrails.spec.ts` runs axe-core on the open dialog with a draft and on the screen with the published
+  rule, and the Guardrails accessibility and reflow sweeps pass at 320 and 640 px.
+- **Catalogue** (B-12301, Sprint 41d): the page heading "What you can do" and a level-2 heading per category over a
+  grid of cards; each card's name is a button in a level-3 heading that opens the entry's details in the inspector, its
+  kind, side effect and label are text pills, its example prompt and call are text, and "Use in Chat" carries the
+  entry's name in its accessible name; an entry the profile leaves out says "Not on this profile. Offered by ..." in
+  text, with a "Switch to <profile>" button. The profile picker is a labelled select, the kind filter a segmented
+  control, "Show what this profile leaves out" a switch, and the search field is labelled. The inspector repeats the
+  call, category, purpose, version and how to call it as a list of terms, and each example prompt has a Use button
+  named after it. Below 900 px the inspector is hidden and the grid becomes one column, with every control still on the
+  cards. `e2e/tests/catalog.spec.ts` runs axe-core and the in-page checker on the page as a member and as an admin and
+  the reflow checks at 320 and 640 px; the accessibility and reflow sweeps cover the screen and its states.
 
 ## How it was checked
 

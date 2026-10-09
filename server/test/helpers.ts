@@ -31,6 +31,8 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
     JOB_QUEUE: 'db',
     // 1.6.0 (B-8401): AI fills run at once in tests; the debounce has its own test.
     APPS_AI_DEBOUNCE_MS: '0',
+    // 1.7.0 (B-12304): entries submitted by the older suites carry no catalogue fields; the discovery suite turns it on.
+    REGISTRY_DISCOVERY_REQUIRED: 'false',
     // The variables the tests' user stores and upstream IdPs reference.
     SECRET_REF_ENV: 'LDAP_*,HR_*,SYNC_HR_*,UPSTREAM_SECRET_*,NOT_SET_ANYWHERE',
     ...overrides

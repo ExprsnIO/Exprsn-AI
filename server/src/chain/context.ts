@@ -47,6 +47,8 @@ export interface ChainUsage {
   steps?: number;
   wallMs?: number;
   gpuMs?: number;
+  /** 1.7.0 (B-11705): what the node spent thinking (part of `tokens`), shown per node in the chain view. */
+  thinkingTokens?: number;
 }
 
 /** A node as its invocation sees it. */
@@ -144,6 +146,10 @@ interface NodeRow {
   /** Sprint 34 (036_chains): the tool-call checkpoint's action, and the typed error a caller received. */
   decision?: string | null;
   error_type?: string | null;
+  /** 1.7.0 (B-11703, B-11705): the approved plan (JSON), the thinking level and what the node spent thinking. */
+  plan?: string | null;
+  think?: string | null;
+  thinking_tokens?: number;
   tokens: number;
   steps: number;
   wall_ms: number;
@@ -154,7 +160,17 @@ interface NodeRow {
 
 const num = (v: unknown) => Number(v ?? 0);
 const chainFrom = (r: Record<string, unknown>): ChainRow => ({ ...(r as unknown as ChainRow), budget_tokens: num(r.budget_tokens), budget_steps: num(r.budget_steps), budget_wall_ms: num(r.budget_wall_ms), budget_gpu_ms: num(r.budget_gpu_ms), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms), created_at: num(r.created_at), updated_at: num(r.updated_at) });
-const nodeFrom = (r: Record<string, unknown>): NodeRow => ({ ...(r as unknown as NodeRow), depth: num(r.depth), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms), created_at: num(r.created_at), finished_at: r.finished_at == null ? null : num(r.finished_at) });
+/** A node's approved plan, parsed; null when none or unreadable. */
+const planOf = (v: string | null | undefined): { steps: { title: string; tools: string[] }[]; approvedBy: string | null } | null => {
+  if (!v) return null;
+  try {
+    return JSON.parse(v) as { steps: { title: string; tools: string[] }[]; approvedBy: string | null };
+  } catch {
+    return null;
+  }
+};
+
+const nodeFrom = (r: Record<string, unknown>): NodeRow => ({ ...(r as unknown as NodeRow), depth: num(r.depth), tokens: num(r.tokens), steps: num(r.steps), wall_ms: num(r.wall_ms), gpu_ms: num(r.gpu_ms), thinking_tokens: num(r.thinking_tokens ?? 0), created_at: num(r.created_at), finished_at: r.finished_at == null ? null : num(r.finished_at) });
 
 const KIND_NAMES: Record<ChainKind, string> = { 'chat-turn': 'chat turns', 'agent-run': 'agent runs', 'workflow-run': 'workflow runs', 'tool-call': 'tool calls', 'skill-load': 'skill loads', 'plugin-action': 'plugin actions', 'app-trigger': 'app triggers' };
 const CAP_NAMES: Partial<Record<ChainKind, string>> = { 'workflow-run': 'WORKFLOW_MAX_DEPTH', 'agent-run': 'AGENT_MAX_DEPTH' };
@@ -287,9 +303,10 @@ export class ChainService {
     const inc = { tokens: Math.max(0, Math.round(u.tokens ?? 0)), steps: Math.max(0, Math.round(u.steps ?? 0)), wall_ms: Math.max(0, Math.round(u.wallMs ?? 0)), gpu_ms: Math.max(0, Math.round(u.gpuMs ?? 0)) };
     const set: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(inc)) if (v) set[k] = this.db.raw('?? + ?', [k, v]);
-    if (Object.keys(set).length) {
-      await this.db('chain_nodes').where({ id: ref.node }).update(set);
-      await this.db('chains').where({ id: ref.chain }).update({ ...set, updated_at: Date.now() });
+    const thinking = Math.max(0, Math.round(u.thinkingTokens ?? 0));
+    if (Object.keys(set).length || thinking) {
+      await this.db('chain_nodes').where({ id: ref.node }).update({ ...set, ...(thinking ? { thinking_tokens: this.db.raw('?? + ?', ['thinking_tokens', thinking]) } : {}) });
+      if (Object.keys(set).length) await this.db('chains').where({ id: ref.chain }).update({ ...set, updated_at: Date.now() });
     }
     return { exceeded: await this.check(ref) };
   }
@@ -341,8 +358,13 @@ export class ChainService {
   }
 
   /** Notes the `tool-call` guardrail checkpoint's action on a node (the chain view shows it, B-4107). */
-  async note(ref: ChainRef, n: { decision?: string | null }): Promise<void> {
-    if (n.decision !== undefined) await this.db('chain_nodes').where({ id: ref.node }).update({ decision: n.decision?.slice(0, 20) ?? null });
+  async note(ref: ChainRef, n: { decision?: string | null; plan?: { steps: { title: string; tools: string[] }[]; approvedBy: string | null } | null; think?: string | null }): Promise<void> {
+    const upd: Record<string, unknown> = {};
+    if (n.decision !== undefined) upd.decision = n.decision?.slice(0, 20) ?? null;
+    // 1.7.0 (B-11703, B-11705): the approved plan and the thinking level the node ran at.
+    if (n.plan !== undefined) upd.plan = n.plan ? JSON.stringify({ steps: n.plan.steps.slice(0, 50).map((s) => ({ title: s.title.slice(0, 200), tools: s.tools.slice(0, 8) })), approvedBy: n.plan.approvedBy }) : null;
+    if (n.think !== undefined) upd.think = n.think?.slice(0, 10) ?? null;
+    if (Object.keys(upd).length) await this.db('chain_nodes').where({ id: ref.node }).update(upd);
   }
 
   /** The nodes from the root down to `node` (the path a held call is shown with, B-4106). */
@@ -379,7 +401,7 @@ export class ChainService {
       used: { tokens: c.tokens, steps: c.steps, wallMs: c.wall_ms, gpuMs: c.gpu_ms },
       createdAt: c.created_at,
       updatedAt: c.updated_at,
-      nodes: nodes.map((n) => ({ id: n.id, parent: n.parent_id, depth: n.depth, kind: n.kind, ref: n.ref, callee: n.callee, label: n.label, state: n.state, error: n.error, errorType: n.error_type ?? null, decision: n.decision ?? null, tokens: n.tokens, steps: n.steps, wallMs: n.wall_ms, gpuMs: n.gpu_ms, createdAt: n.created_at, finishedAt: n.finished_at }))
+      nodes: nodes.map((n) => ({ id: n.id, parent: n.parent_id, depth: n.depth, kind: n.kind, ref: n.ref, callee: n.callee, label: n.label, state: n.state, error: n.error, errorType: n.error_type ?? null, decision: n.decision ?? null, tokens: n.tokens, steps: n.steps, wallMs: n.wall_ms, gpuMs: n.gpu_ms, thinkingTokens: n.thinking_tokens ?? 0, think: n.think ?? null, plan: planOf(n.plan), createdAt: n.created_at, finishedAt: n.finished_at }))
     };
   }
 }

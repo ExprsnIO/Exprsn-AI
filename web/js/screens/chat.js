@@ -127,7 +127,8 @@
     live.handlers = {
       'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
       'attachment.state': guard(onAttachment), connect: guard(onReconnect), 'shared.revoked': guard(onSharedRevoked),
-      'chat.invocation': guard(onInvocation), 'run.step': guard(onRunEvent), 'run.state': guard(onRunEvent)
+      'chat.invocation': guard(onInvocation), 'run.step': guard(onRunEvent), 'run.state': guard(onRunEvent),
+      'chat.checked': guard(onChecked)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
   }
@@ -141,7 +142,9 @@
     if (d.state === 'context' && d.citations) { st.citeFor = st.citeFor || {}; st.citeFor[d.messageId] = true; }
     const m = byId(st, d.messageId);
     if (m && d.state === 'held') m.heldLive = true;
-    if (m && d.state !== 'queued' && m.state === 'queued') m.state = 'streaming';
+    // 1.7.0 (B-11702): the budget notice stays with the message after the status moves on.
+    if (d.state === 'thinking-budget') { st.budgetNote = st.budgetNote || {}; st.budgetNote[d.messageId] = d; }
+    if (m && d.state !== 'queued' && d.state !== 'thinking-budget' && (m.state === 'queued' || m.state === 'planning')) m.state = 'streaming';
     if (m && d.profile) m.profile = d.profile;
     if (m && d.model) m.model = d.model;
     schedule();
@@ -153,7 +156,7 @@
     if (c.thinking) m.thinking = (m.thinking || '') + c.thinking;
     if (c.tool) m.tools.push(c.tool);
     m.seq = c.seq;
-    if (m.state === 'queued') m.state = 'streaming';
+    if (m.state === 'queued' || m.state === 'planning') m.state = 'streaming';
     return true;
   }
   function onChunk(st, d) {
@@ -257,6 +260,7 @@
     set('side', sideHtml(st));
     set('cold', coldHtml(st));
     set('skills', skillChipsHtml(st));
+    set('suggest', suggestHtml(st));
     if (scroller && near) scroller.scrollTop = scroller.scrollHeight;
   }
   function rerender(focusComposer) {
@@ -299,6 +303,8 @@
       if (s.state === 'loading') return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
       return '<div class="ch-status">' + UI.icon('clock', 13) + ' Queued' + (s.position ? ', position ' + num(s.position) : '') + ' for ' + esc(s.profile || m.profile || '') + '</div>';
     }
+    // 1.7.0 (B-11703): a plan-first turn waits on its plan card before anything runs.
+    if (m.state === 'planning') return '<div class="ch-status" role="status">' + UI.icon('clock', 13) + ' Waiting for the plan to be approved. Nothing runs until then.</div>';
     if (m.state !== 'streaming') return '';
     if (s.state === 'loading' && !m.content && !m.thinking) return UI.notice('<b>Model cold start.</b> Loading ' + esc(s.model || m.model || '') + (s.instance ? ' on ' + esc(s.instance) : '') + '. This may take a moment; the answer starts as soon as it is loaded.', 'info');
     if (m.thinking && !m.content) return '';
@@ -339,6 +345,11 @@
       h += '<button type="button" class="ch-thinkbar" data-think="' + esc(m.id) + '" aria-expanded="' + (open ? 'true' : 'false') + '"><span>' + UI.icon('brain', 13) + ' ' + (streaming && !m.content ? 'Thinking at level ' + esc(m.think || '') + '…' : 'Thinking' + (m.think ? ' at level ' + esc(m.think) : '') + (u && u.thinkingTokens ? ', ' + num(u.thinkingTokens) + ' tokens' : '')) + '</span><span>' + (open ? 'Hide' : 'Show') + '</span></button>'
         + (open ? '<div class="ch-trace">' + esc(m.thinking).replace(/\n/g, '<br>') + '</div>' : '');
     }
+    // 1.7.0 (B-11701): the policy kept the thinking from this reader; the token count stays.
+    if (!m.thinking && !streaming && m.usage && m.usage.thinkingTokens > 0 && m.state === 'complete') h += '<div class="ch-thinkbar ch-thinkkept"><span>' + UI.icon('brain', 13) + ' Thought' + (m.think ? ' at level ' + esc(m.think) : '') + ', ' + num(m.usage.thinkingTokens) + ' tokens. The workspace\'s thinking policy keeps the trace from you.</span></div>';
+    // 1.7.0 (B-11702): the budget notice: near the limit, or the level dropped to low at it.
+    const bn = (st.budgetNote || {})[m.id];
+    if (bn) h += UI.notice('<b>Thinking budget ' + (bn.dropped ? 'spent.' : 'near its limit.') + '</b> ' + num(bn.used) + (bn.max ? ' of ' + num(bn.max) : '') + ' thinking tokens today for ' + (bn.limit === 'workspace' ? 'this workspace' : 'the profile') + '. ' + (bn.dropped ? 'This turn thought at ' + esc(bn.level) + ' instead; turns are not refused.' : 'At the limit, turns think at low rather than being refused.'), 'warn');
     h += toolsHtml(m);
     // A question held for review (Sprint 16): its answer waits, and says so; a rejection says it was not sent.
     if (m.state === 'awaiting') h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Waiting for review.</b> <span class="muted">A guardrail asked a reviewer to check your question before it goes to the model. The answer starts here once it is approved.</span></div>';
@@ -346,7 +357,10 @@
     if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
     if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
+    if (!streaming && m.checked) h += checkedHtml(m);
+    if (!streaming && m.plan && m.plan.steps && m.plan.steps.length) h += '<div class="ch-planran">' + UI.icon('check', 12) + ' Ran under the approved plan: ' + m.plan.steps.map((s) => esc(s.title)).join('; ') + '.</div>';
     if (!streaming) h += artifactChips(st, m.id);
+    h += planCardsHtml(st, m);
     if (!streaming) h += proposedCardsHtml(st, m);
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
@@ -374,7 +388,7 @@
     if (st.convError) return UI.problem('This conversation could not be opened', st.convError.message, st.convError.problem && st.convError.problem.trace_id);
     const conv = st.conv;
     if (!conv || !conv.messages.length) {
-      return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.');
+      return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.') + (st.convId ? '' : discoverHtml(st));
     }
     return pathOf(conv).map((m) => (m.role === 'user' ? userHtml(st, conv, m) : aiHtml(st, conv, m))).join('') + pendingCardsHtml(st);
   }
@@ -448,7 +462,12 @@
   /** A card's own events: a decision, a run ending, a reviewer's call. Cards and the thread are read again. */
   function onInvocation(st, d) {
     if (!st.conv || d.conversationId !== st.conv.id) return;
-    Promise.all([loadCards(st), d.messageId ? loadConv(false) : Promise.resolve()]).then(() => { if (d.state === 'done' && d.kind === 'tool') App.toast(esc(d.name) + ' ran; its result is in the conversation.', 'ok'); schedule(); });
+    Promise.all([loadCards(st), d.messageId || d.kind === 'plan' ? loadConv(false) : Promise.resolve()]).then(() => { if (d.state === 'done' && d.kind === 'tool') App.toast(esc(d.name) + ' ran; its result is in the conversation.', 'ok'); schedule(); });
+  }
+  /** 1.7.0 (B-11704): the second pass finished: the message carries its "checked" badge or revised answer. */
+  function onChecked(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    loadConv(false).then(schedule);
   }
   function onRunEvent(st, d) {
     if (!st.conv || !d || !d.runId) return;
@@ -487,6 +506,31 @@
     } else if (m.state === 'failed') h += UI.notice('<b>' + esc(kind) + ' run failed.</b> ' + esc(m.error || ''), 'danger');
     else if (m.state === 'stopped') h += '<div class="fg2" style="font-size:13px">Cancelled from the chat' + (m.error ? ': ' + esc(m.error) : '.') + '</div>';
     return h + '</div>';
+  }
+  /** 1.7.0 (B-11703): the plan card under the turn that waits on it: steps, tools, data; approve as drafted or edited, or decline. */
+  function planCardsHtml(st, m) {
+    return cardsOf(st).filter((c) => c.answerId === m.id && c.kind === 'plan').map(planCardHtml).join('');
+  }
+  function planCardHtml(c) {
+    const plan = c.plan || { steps: [], tools: [], offered: [] };
+    const state = c.state === 'done' ? 'approved' : c.state;
+    let h = '<div class="ch-card ch-plan ' + esc(state) + '" data-card="' + esc(c.id) + '"><div class="hstack gap6 wrap">' + UI.icon('brain', 13) + '<b>Plan</b>' + UI.pill(state, state === 'approved' ? 'ok' : CARD_TONE[state] || '') + '<span class="muted" style="font-size:12px">proposed by the model before any tool runs</span></div>'
+      + '<ol>' + plan.steps.map((s) => '<li>' + esc(s.title) + ((s.tools || []).length ? ' <span class="mono fg2">' + esc(s.tools.join(', ')) + '</span>' : '') + ((s.data || []).length ? '<div class="muted" style="font-size:12px">needs ' + esc(s.data.join(', ')) + '</div>' : '') + '</li>').join('') + '</ol>';
+    if (state === 'awaiting') h += '<div class="fg2" style="font-size:12px">Approved, the answer runs under this plan and only the tools it names are offered; write tools keep their own cards. Declined, nothing runs.' + (c.expiresAt ? ' Expires ' + esc(ago(c.expiresAt).replace(' ago', '')) + '.' : '') + '</div>'
+      + (App.can('chat:write') ? '<div class="hstack gap6 wrap">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-planapprove="' + esc(c.id) + '"' }) + UI.btn('Edit', { size: 'sm', attrs: 'data-planedit="' + esc(c.id) + '"' }) + UI.btn('Decline', { kind: 'ghost', size: 'sm', attrs: 'data-plandecline="' + esc(c.id) + '"' }) + '</div>' : '');
+    else if (state === 'approved') h += '<div class="fg2" style="font-size:12px">' + UI.icon('check', 12) + ' Approved' + (plan.edited ? ' as edited' : ' as drafted') + '. The answer ran under it; the plan is on the message and in the chain.</div>';
+    else if (state === 'denied') h += '<div class="fg2" style="font-size:12px">' + UI.icon('x', 12) + ' Declined. Nothing ran; the model is told on the next turn.</div>';
+    else if (state === 'expired') h += '<div class="fg2" style="font-size:12px">The plan expired before it was decided. Nothing ran.</div>';
+    return h + '</div>';
+  }
+  /** 1.7.0 (B-11704): the "checked" badge: what the second pass found, or the revised answer it produced. */
+  function checkedHtml(m) {
+    const c = m.checked; const by = c.by || c.profile;
+    const tone = c.status === 'ok' ? 'ok' : 'warn';
+    const text = c.status === 'ok' ? 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ': the answer matches the question, its citations and tool results. No findings.'
+      : c.status === 'revised' ? 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ' revised the answer' + ((c.findings || []).length ? ' after ' + c.findings.length + ' finding' + (c.findings.length === 1 ? '' : 's') : '') + '; the revised text was screened like any answer.'
+        : 'Second pass' + (by ? ' by <b>' + esc(by) + '</b>' : '') + ' found ' + (c.findings || []).length + ' problem' + ((c.findings || []).length === 1 ? '' : 's') + '.';
+    return '<div class="ch-checked ' + tone + '" role="status">' + UI.pill(c.status === 'ok' ? 'checked' : c.status, tone) + '<span>' + text + '</span>' + ((c.findings || []).length ? '<ul>' + c.findings.map((f) => '<li><span class="muted">' + esc(f.kind) + ':</span> ' + esc(f.text) + '</li>').join('') + '</ul>' : '') + (c.revised ? '<div class="ch-revised"><div class="eyebrow">Revised answer</div><div class="serif">' + esc(c.revised).replace(/\n/g, '<br>') + '</div></div>' : '') + '</div>';
   }
   /** B-4003: a card the model proposed during this answer, under it, with the owner's decision. */
   function proposedCardsHtml(st, m) {
@@ -568,6 +612,13 @@
         };
         d.querySelector('[data-go]').addEventListener('click', go);
         d.querySelector('[data-argform]').addEventListener('submit', (e) => { e.preventDefault(); go(); });
+        // 1.7.0 (B-12301): a call from the catalogue or a suggestion brings its text: a tool's description of the
+        // call, or a workflow's first text field.
+        if (it.prefill) {
+          const tx = d.querySelector('[data-text]');
+          const str = Array.prototype.filter.call(d.querySelectorAll('[data-arg]'), (el) => (el.dataset.type || 'string') === 'string' && el.tagName !== 'SELECT')[0];
+          if (isTool && tx) tx.value = it.prefill; else if (str) str.value = it.prefill;
+        }
         const first = d.querySelector('[data-arg], [data-text]'); if (first) first.focus();
       }
     });
@@ -705,7 +756,7 @@
   async function openConv(id) {
     const st = S();
     if (st.convId === id && st.conv) return;
-    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false; st.bound = null;
+    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false; st.bound = null; st.call = null; st.sugg = null; st.dismissedNew = [];
     syncUrl(id);
     loadBindings(id);
     rerender();
@@ -721,13 +772,108 @@
     App.fail(err, what);
   }
 
+  // ---------- 1.7.0, Sprint 41d (B-12301, B-12303): what you can do, and composer suggestions ----------
+  /** The catalogue for the picked profile, for the panel on a new chat (GET /api/catalog, the workspace form). */
+  function loadCat(st) {
+    const prof = st.profile || null;
+    if (!App.can('chat:read') || st.catLoading === prof) return;
+    st.catLoading = prof;
+    App.get('/api/catalog' + (prof ? '?profile=' + enc(prof) : '')).then((data) => { st.cat = { profile: prof, data }; }).catch((err) => { st.cat = { profile: prof, error: err }; }).finally(() => { st.catLoading = undefined; schedule(); });
+  }
+  function discoverHtml(st) {
+    const c = st.cat;
+    if (!c || c.profile !== (st.profile || null)) { loadCat(st); return ''; }
+    if (c.error) return '';
+    const entries = (c.data.entries || []).filter((e) => e.available);
+    const ws = c.data.workspace ? c.data.workspace.name : 'this workspace';
+    if (!entries.length) return '<section class="ch-discover panel" aria-labelledby="ch-discover-h"><h2 id="ch-discover-h" class="eyebrow">What you can do</h2><div class="muted" style="font-size:13px">Nothing is published to ' + esc(ws) + ' for you yet. New workflows, agents, tools and skills show in the <a href="#/catalog" data-gocat>catalogue</a>.</div></section>';
+    const cats = []; entries.forEach((e) => { if (cats.indexOf(e.category) < 0) cats.push(e.category); });
+    return '<section class="ch-discover panel" aria-labelledby="ch-discover-h"><div class="hstack"><h2 id="ch-discover-h" class="eyebrow grow">What you can do</h2><a href="#/catalog" data-gocat>See the whole catalogue</a></div>'
+      + '<div class="fg2" style="font-size:13px">Published to ' + esc(ws) + ' for you' + (c.data.profile ? ', through ' + esc(c.data.profile) : '') + '. Pick one to fill the composer.</div>'
+      + cats.slice(0, 4).map((cat) => '<div class="ch-dcat"><h3 class="ch-dcatname">' + esc(cat) + '</h3>' + entries.filter((e) => e.category === cat).slice(0, 3).map((e) => '<button type="button" class="ch-ditem" data-discover="' + esc(e.key) + '"><span class="mono">' + esc(e.call) + '</span>' + (e.description ? '<span class="desc">' + esc(e.description) + '</span>' : '') + (e.example ? '<span class="ex">"' + esc(e.example) + '"</span>' : '') + '</button>').join('') + '</div>').join('')
+      + '</section>';
+  }
+  /** Puts an entry's call (and an example prompt) in the composer; Enter then calls it (`sendCall`). */
+  function fillCall(st, f) {
+    st.call = { kind: f.kind, name: f.name, call: f.call, id: f.id || null };
+    st.draft = f.compose; st.sugg = null;
+    const ta = document.getElementById('ch-composer'); if (ta) { ta.value = f.compose; ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) { /* not focusable */ } }
+  }
+  function suggestHtml(st) {
+    const sg = st.sugg; if (!sg || !(sg.list || []).length || st.picker) return '';
+    return '<div class="ch-suggest" role="group" aria-label="Suggested for this message"><span class="muted" style="font-size:12px">Suggested:</span>' + sg.list.map((x) => '<span class="ch-schip"><button type="button" class="chip" data-usesug="' + esc(x.key) + '"' + (x.description ? ' title="' + esc(x.description) + '"' : '') + '>' + esc(x.kind) + ' <span class="mono">' + esc(x.call) + '</span></button>' + UI.iconbtn('x', 'Dismiss the suggestion ' + x.name, { cls: 'sm ghost', attrs: 'data-dismisssug="' + esc(x.key) + '"' }) + '</span>').join('') + '</div>';
+  }
+  function paintSuggest(st) { const el = document.querySelector('[data-region="suggest"]'); if (el && visible()) el.innerHTML = suggestHtml(st); }
+  /** B-12303: POST /api/catalog/suggestions after a pause in typing; the server ranks by the embedding profile. */
+  async function suggest(st, draft) {
+    const d = draft.trim();
+    if (S() !== st || !visible() || (st.sugg && st.sugg.draft === d)) return;
+    const seq = (live.sugSeq = (live.sugSeq || 0) + 1);
+    try {
+      const r = await App.post('/api/catalog/suggestions', { draft: d, profile: st.profile || null, conversationId: st.convId || null, dismissed: st.convId ? [] : st.dismissedNew || [] });
+      if (seq !== live.sugSeq || S() !== st) return;
+      st.sugg = { draft: d, list: r.suggestions || [], off: r.off || null };
+    } catch (err) { st.sugg = null; }
+    paintSuggest(st);
+  }
+  /** A new chat gets a conversation before a call that needs one; suggestions dismissed before it existed are kept. */
+  async function keepDismissals(st) {
+    const keys = st.dismissedNew || []; st.dismissedNew = [];
+    for (const key of keys) await App.post(cUrl(st.convId) + '/suggestions/dismiss', { key }).catch(() => undefined);
+  }
+  async function ensureConv(st) {
+    if (st.convId) return st.convId;
+    const c = await App.post('/api/conversations', {});
+    const kbIds = st.newKbs || [];
+    if (kbIds.length && App.can('context:write')) await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds }).catch(() => undefined);
+    st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(c.id);
+    await keepDismissals(st);
+    await Promise.all([loadConv(false), loadList()]);
+    return c.id;
+  }
+  /** Enter on a call filled in from the catalogue, the panel or a suggestion: `@agent: task`, `+skill text`, `/workflow text`, `/tool text`. */
+  async function sendCall(st, c, text) {
+    const rest = text.slice(c.call.length).replace(/^:\s*/, '').trim();
+    const ta = document.getElementById('ch-composer');
+    try {
+      if (c.kind === 'agent') {
+        if (!App.can('agents:run')) { App.toast('Your roles do not let you start agents.', 'warn'); return; }
+        if (!rest) { st.call = c; App.toast('Say what ' + esc(c.name) + ' should do after the colon.'); return; }
+        await ensureConv(st); await startAgent(st, c.name, rest); return;
+      }
+      if (c.kind === 'skill') {
+        await ensureConv(st); await addSkill(st, c.name, 'sticky');
+        st.draft = rest; if (ta) ta.value = rest;
+        if (rest) await send();
+        return;
+      }
+      if (c.kind === 'tool' && !(st.conv && st.conv.profileId)) {
+        // A new conversation has no profile until its first message: the question goes to the model, which is offered
+        // the tool through the profile; "/" calls it directly once the conversation exists.
+        st.draft = rest || text; if (ta) ta.value = st.draft;
+        App.toast(esc(c.name) + ' is on the profile: the model calls it when the question needs it. Type / in the conversation to call it yourself.');
+        await send(); return;
+      }
+      await ensureConv(st); await loadCaps(st);
+      const caps = st.caps && st.caps.caps;
+      const item = c.kind === 'workflow' ? ((caps && caps.workflows) || []).find((w) => w.name === c.name) : ((caps && caps.tools) || []).find((t) => t.name === c.name);
+      if (!item) { App.toast(esc(c.name) + ' cannot be called in this conversation.', 'warn'); return; }
+      st.draft = ''; if (ta) ta.value = '';
+      pickItem(live.ctx, st, c.kind === 'workflow' ? { kind: 'workflow', name: item.name, id: item.id, desc: item.description || '', schema: item.inputSchema, prefill: rest } : { kind: 'tool', name: item.name, desc: item.description || '', side: item.sideEffect, confirm: item.confirm, schema: item.inputSchema, prefill: rest });
+    } catch (err) { handleError(err, 'Could not call ' + c.name); }
+  }
+
   async function send() {
     const st = S(); const ta = document.getElementById('ch-composer');
     const text = ((ta && ta.value) || '').trim();
     if (!text) { App.toast('Type a message first.'); return; }
-    // 1.7.0 (B-4004): "@Agent: what to do" in an open conversation starts a run bound to it.
-    const at = st.convId ? /^@([^:\n]{1,120}):\s*([\s\S]+)$/.exec(text) : null;
-    if (at && App.can('agents:run')) { startAgent(st, at[1].trim(), at[2].trim()); return; }
+    st.sugg = null; paintSuggest(st);
+    // 1.7.0 (B-12301): a call put in the composer from the catalogue, the panel or a suggestion.
+    if (st.call && text.indexOf(st.call.call) === 0) { const c = st.call; st.call = null; await sendCall(st, c, text); return; }
+    st.call = null;
+    // 1.7.0 (B-4004): "@Agent: what to do" starts a run bound to the conversation (a new chat gets one first).
+    const at = /^@([^:\n]{1,120}):\s*([\s\S]+)$/.exec(text);
+    if (at && App.can('agents:run') && (st.convId || App.can('chat:write'))) { try { await ensureConv(st); await startAgent(st, at[1].trim(), at[2].trim()); } catch (err) { handleError(err, 'Could not start the agent'); } return; }
     const p = selProfile(st); if (!p) { App.toast('No profile is available to answer.', 'warn'); return; }
     const block = blocker(st); if (block) { App.toast(esc(block), 'warn'); return; }
     if (st.sending) return;
@@ -743,14 +889,15 @@
           await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds });
           sent = await App.post(cUrl(c.id) + '/messages', body);
         } catch (err) { await App.del(cUrl(c.id)).catch(() => undefined); throw err; }
-        st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId);
+        st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId); keepDismissals(st);
       } else if (!st.convId) {
         const r = await App.post('/api/chat', body); sent = r;
-        st.convId = r.conversationId; st.bound = []; syncUrl(st.convId);
+        st.convId = r.conversationId; st.bound = []; syncUrl(st.convId); keepDismissals(st);
       } else {
         sent = await App.post(cUrl(st.convId) + '/messages', body);
       }
       if (sent && sent.state === 'awaiting') App.toast('<b>Your question is waiting for review.</b> ' + esc(sent.reason || '') + ' The answer starts when a reviewer approves it.', 'warn', 8000);
+      if (sent && sent.state === 'planning') App.toast('<b>The model is drafting a plan.</b> It shows as a card; nothing runs until you approve it.', '', 6000);
       st.draft = ''; if (ta) ta.value = '';
       st.pending = []; st.notice = null;
       await Promise.all([loadConv(false), loadList()]);
@@ -1110,6 +1257,13 @@
       const wantId = ctx.params.id || ctx.params.convo; // other screens link with ?convo=
       if (wantId && wantId !== st.paramId) { st.paramId = wantId; st.convId = wantId; setConv(st, null); st.loaded = false; }
       if (st.pending === undefined) st.pending = [];
+      // 1.7.0 (B-12301): "Use in Chat" from the catalogue: a new conversation with the composer filled in.
+      if (st.fill) {
+        const f = st.fill; st.fill = null;
+        st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; st.paramId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; st.dismissedNew = []; st.sugg = null;
+        if (f.profile) { const fp = profileOf(st, f.profile); if (fp) { st.profile = fp.name; st.think = fp.thinkDefault; } else if (!st.loaded) st.profile = f.profile; }
+        st.call = { kind: f.kind, name: f.name, call: f.call, id: f.id || null }; st.draft = f.compose; st.focus = true; st.caret = null;
+      }
       if (!st.loaded && !st.loadError) load();
       if (ctx.params.shared && ctx.params.shared !== st.sharedToken) { st.sharedToken = ctx.params.shared; st.sharedView = null; st.sharedError = null; openLink(ctx.params.shared); }
       if (st.sharedList === undefined && App.can('chat:read')) { st.sharedList = []; loadSharedList(); }
@@ -1125,6 +1279,8 @@
         + '.ch-user{display:flex;flex-direction:column;align-items:flex-end;gap:4px}.ch-bubble{max-width:560px;padding:10px 14px;background:var(--bubble);border-radius:12px 12px 2px 12px;font-size:14px;overflow-wrap:anywhere}'
         + '.ch-uact{display:flex;align-items:center;gap:4px;opacity:.55}.ch-user:hover .ch-uact,.ch-uact:focus-within{opacity:1}'
         + '.ch-ai{display:flex;flex-direction:column;gap:10px;max-width:680px}'
+        + '.ch-plan ol{margin:4px 0 0;padding-left:20px;font-size:13px;line-height:1.5}.ch-plan li{margin:2px 0}.ch-planran{font-size:12px;color:var(--fg2);display:flex;gap:6px;align-items:baseline}'
+        + '.ch-checked{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--fg2);padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}.ch-checked.ok{border-color:var(--ok-fg)}.ch-checked.warn{border-color:var(--warn-fg)}.ch-checked > span{flex:1 1 240px}.ch-checked ul{margin:0;padding-left:18px;flex-basis:100%}.ch-revised{flex-basis:100%;font-size:14px;color:var(--fg);overflow-wrap:anywhere}.ch-thinkkept{cursor:default}'
         + '.ch-thinkbar{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--fg2);cursor:pointer;font-family:inherit;text-align:left}.ch-thinkbar span{display:inline-flex;align-items:center;gap:6px}'
         + '.ch-trace{padding:10px 12px;border-left:2px solid var(--line);font-size:13px;color:var(--fg2);font-style:italic;overflow-wrap:anywhere;max-height:260px;overflow:auto}'
         + '.ch-answer{font-size:16px;line-height:1.55;overflow-wrap:anywhere}.ch-answer p{margin:0 0 10px}.ch-answer p:last-of-type{margin-bottom:0}'
@@ -1157,6 +1313,9 @@
         + '.ch-dd .tags{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto}.ch-dd .tags .pill,.ch-dd .tags .label{flex-shrink:0}'
         + '.ch-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:4px 0}.ch-card.awaiting{border-color:var(--warn-fg);background:var(--warn-bg)}.ch-card.held{border-color:var(--info-fg)}.ch-card.denied,.ch-card.failed{border-color:var(--danger-fg)}.ch-card .ch-args{font-size:12px;overflow-wrap:anywhere}.ch-approval{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-tint)}'
         + '.ch-steps{display:flex;flex-direction:column;gap:4px;font-size:13px}.ch-step{display:flex;gap:8px;align-items:center}.ch-step .num{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;display:inline-flex;align-items:center;justify-content:center}.ch-step.waiting{color:var(--warn-fg)}.ch-step.failed,.ch-step.denied{color:var(--danger-fg)}'
+        + '.ch-discover{display:flex;flex-direction:column;gap:10px;margin-top:12px}.ch-discover h2{margin:0}.ch-dcat{display:flex;flex-direction:column;gap:4px}.ch-dcatname{margin:0;font-size:12px;font-weight:600;color:var(--muted)}'
+        + '.ch-ditem{display:flex;flex-direction:column;gap:2px;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:13px;text-align:left;cursor:pointer}.ch-ditem:hover{background:var(--accent-tint)}.ch-ditem .mono{overflow-wrap:anywhere}.ch-ditem .desc{font-size:12px;color:var(--fg2);overflow-wrap:anywhere}.ch-ditem .ex{font-size:12px;font-style:italic;color:var(--muted);overflow-wrap:anywhere}'
+        + '.ch-suggest{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ch-schip{display:inline-flex;align-items:center;gap:2px;max-width:100%}.ch-schip .chip{max-width:100%;overflow-wrap:anywhere}'
         + '.ch-skills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ch-skills:empty{display:none}.ch-skills .ch-x{margin-left:4px;opacity:.7}'
         + '.ch-picker{position:absolute;left:0;bottom:calc(100% + 4px);top:auto;min-width:360px;max-width:min(560px,100%);z-index:30;max-height:50vh;overflow:auto}.ch-picker .dh{display:flex;justify-content:space-between;gap:8px}.ch-picker button{display:block;width:100%;text-align:left}.ch-picker button .desc{display:block;font-size:11px;color:var(--muted);white-space:normal}.ch-picker button .side{float:right;margin-left:8px}'
         + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
@@ -1183,6 +1342,7 @@
         + '<div data-region="cold">' + coldHtml(st) + '</div>'
         + '<div data-region="atts">' + attsHtml(st) + '</div>'
         + '<div class="ch-skills" data-region="skills">' + skillChipsHtml(st) + '</div>'
+        + '<div data-region="suggest">' + suggestHtml(st) + '</div>'
         + '<div class="relative" data-region="picker">' + pickerHtml(st) + '</div>'
         + '<label class="sr" for="ch-composer">Message</label><textarea id="ch-composer" placeholder="' + (canSend ? (st.convId ? 'Ask something. Type / for a tool or workflow, @ for an agent, + for a skill.' : 'Ask something. Attach a text file with the paper clip.') : 'Read only') + '"' + (canSend ? '' : ' disabled') + ' aria-describedby="ch-composer-hint" role="combobox" aria-autocomplete="list" aria-expanded="false"></textarea>'
         + '<span id="ch-composer-hint" class="sr">In an open conversation, slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
@@ -1208,7 +1368,32 @@
         else if (st.picker && open) { st.picker.q = v.slice(1); st.picker.i = 0; }
         else if (st.picker) st.picker = null;
         paintPicker(st);
+        // 1.7.0 (B-12303): suggestions after a pause in typing, never while a picker is open or a call is filled in.
+        clearTimeout(live.sugTimer);
+        if (st.picker || !App.can('chat:write') || v.trim().length < 3 || /^[/@+]/.test(v.trim())) { if (st.sugg) { st.sugg = null; paintSuggest(st); } }
+        else live.sugTimer = setTimeout(() => suggest(st, v), 400);
       });
+      ctx.on('click', '[data-usesug]', (e, t) => {
+        const x = ((st.sugg && st.sugg.list) || []).find((y) => y.key === t.dataset.usesug); if (!x) return;
+        const ta = ctx.$('#ch-composer'); const rest = ((ta && ta.value) || '').trim();
+        fillCall(st, { kind: x.kind, name: x.name, call: x.call, compose: x.kind === 'agent' ? '@' + x.name + ': ' + rest : x.call + ' ' + rest });
+        paintSuggest(st);
+        App.toast(x.kind === 'agent' ? 'Enter starts a run of ' + esc(x.name) + ' with your text.' : x.kind === 'skill' ? 'Enter adds ' + esc(x.name) + ' and sends your text.' : 'Enter opens ' + esc(x.name) + ' with your text.');
+      });
+      ctx.on('click', '[data-dismisssug]', async (e, t) => {
+        const key = t.dataset.dismisssug;
+        if (st.convId) { try { await App.post(cUrl(st.convId) + '/suggestions/dismiss', { key }); } catch (err) { handleError(err, 'Could not dismiss the suggestion'); return; } }
+        else st.dismissedNew = (st.dismissedNew || []).concat([key]);
+        if (st.sugg) st.sugg.list = st.sugg.list.filter((x) => x.key !== key);
+        paintSuggest(st);
+        const ta = document.getElementById('ch-composer'); if (ta) ta.focus();
+        App.toast('Dismissed for the rest of this conversation.');
+      });
+      ctx.on('click', '[data-discover]', (e, t) => {
+        const x = ((st.cat && st.cat.data && st.cat.data.entries) || []).find((y) => y.key === t.dataset.discover); if (!x) return;
+        fillCall(st, { kind: x.kind, name: x.name, call: x.call, id: x.id, compose: x.compose });
+      });
+      ctx.on('click', '[data-gocat]', (e) => { e.preventDefault(); ctx.navigate('catalog'); });
       ctx.on('keydown', '#ch-composer', (e) => {
         if (st.picker) {
           const items = pickerItems(st);
@@ -1225,6 +1410,18 @@
         const id = t.dataset.approve || t.dataset.deny; const decision = t.dataset.approve ? 'approve' : 'deny';
         try { const r = await App.post(cUrl(st.convId) + '/invocations/' + enc(id) + '/decide', { decision }); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'deny' ? 'Denied. Nothing ran; the model is told on the next turn.' : r.state === 'held' ? 'Your approval is recorded; the guardrail\'s approver decides next in the Flags queue.' : r.state === 'done' ? esc(r.name) + ' ran as you; its result is in the conversation.' : esc(r.name) + ' is ' + esc(r.state) + '.', decision === 'deny' ? '' : 'ok'); } catch (err) { handleError(err, 'Could not decide the card'); }
       });
+      // 1.7.0 (B-11703): the plan card's decisions. Edit sends the steps back with the approval.
+      const decidePlan = async (id, decision, steps) => {
+        try { await App.post(cUrl(st.convId) + '/invocations/' + enc(id) + '/decide', Object.assign({ decision }, steps ? { steps } : {})); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'deny' ? 'Plan declined. Nothing ran; the model is told on the next turn.' : steps ? 'Plan approved as edited. The answer runs under it.' : 'Plan approved. The answer runs under it; only the tools it names are offered.', decision === 'deny' ? '' : 'ok'); } catch (err) { handleError(err, 'Could not decide on the plan'); }
+      };
+      ctx.on('click', '[data-planapprove]', (e, t) => decidePlan(t.dataset.planapprove, 'approve'));
+      ctx.on('click', '[data-plandecline]', (e, t) => decidePlan(t.dataset.plandecline, 'deny'));
+      ctx.on('click', '[data-planedit]', (e, t) => {
+        const c = cardById(st, t.dataset.planedit); const plan = (c && c.plan) || { steps: [], offered: [] };
+        ctx.modal({ title: 'Edit the plan', body: '<div class="vstack gap8">' + plan.steps.map((s, i) => UI.field('Step ' + (i + 1), UI.input(s.title, { attrs: 'data-ps="' + i + '" maxlength="200"' }), (s.tools || []).length ? 'tools: ' + esc(s.tools.join(', ')) : 'no tools')).join('') + '<div class="fg2" style="font-size:12px">Clear a step\'s title to drop it. A step keeps the tools it was drafted with; the plan can only name tools this conversation can call' + ((plan.offered || []).length ? ': ' + esc(plan.offered.join(', ')) : '') + '.</div></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Approve as edited', { kind: 'primary', attrs: 'data-ok' }),
+          onMount(mEl) { mEl.querySelector('[data-ok]').addEventListener('click', () => { const steps = plan.steps.map((s, i) => ({ title: mEl.querySelector('[data-ps="' + i + '"]').value.trim(), tools: s.tools || [], data: s.data || [] })).filter((s) => s.title); App.closeOverlay(); if (!steps.length) { App.toast('A plan needs at least one step.', 'warn'); return; } decidePlan(c.id, 'approve', steps); }); } });
+      });
       ctx.on('click', '[data-cancelrun]', async (e, t) => { try { await App.post(cUrl(st.convId) + '/invocations/' + enc(t.dataset.cancelrun) + '/cancel', {}); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast('Cancelled from the chat; the Runs screen shows what it reached.'); } catch (err) { handleError(err, 'Could not cancel'); } });
       ctx.on('click', '[data-wfapprove], [data-wfreject]', async (e, t) => {
         const id = t.dataset.wfapprove || t.dataset.wfreject; const decision = t.dataset.wfapprove ? 'approve' : 'reject';
@@ -1233,7 +1430,7 @@
       ctx.on('click', '[data-gorun]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { run: t.dataset.gorun }); });
       ctx.on('click', '[data-gochain]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { chain: t.dataset.gochain }); });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
+      ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; st.cat = null; st.call = null; st.sugg = null; st.dismissedNew = []; rerender(true); });
       ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; st.sharedView = null; st.sharedError = null; openConv(t.dataset.convo); });
       ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
@@ -1341,7 +1538,7 @@
         setTimeout(() => document.addEventListener('click', outside, true), 0);
         d.addEventListener('click', (ev) => {
           const b = ev.target.closest('button'); if (!b) return;
-          if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; }
+          if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; st.sugg = null; }
           if (b.dataset.level) st.think = b.dataset.level;
           document.removeEventListener('click', outside, true);
           d.remove();

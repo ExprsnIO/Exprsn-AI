@@ -268,7 +268,8 @@
         + '<div class="gr-list">' + CHECKPOINTS.map((c) => { const n = rules.filter((r) => r.checkpoint === c.id).length; return UI.listItem(esc(c.label), n + ' rule' + (n === 1 ? '' : 's'), { active: c.id === st.cp, attrs: 'data-cp="' + c.id + '"' }); }).join('') + '</div>'
         + '<div class="divider"></div>' + UI.btn('Add rule', { icon: 'plus', size: 'sm', cls: 'block', attrs: 'data-addrule' + (locked ? ' disabled' : '') }) + '</div>'
         + '<div class="page">'
-        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('View diff', { attrs: 'data-diff', disabled: !d.draft && (d.publishedVersion || 0) < 2 }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || rule.stage === 'enforce' || locked }))
+        + UI.pagehead('Guardrails', 'Guard model runs on the full answer by default, and sentence by sentence for confidential and above or turns that can call tools', UI.btn('Describe a rule', { attrs: 'data-describe' + (locked ? ' disabled' : '') }) + UI.btn('View diff', { attrs: 'data-diff', disabled: !d.draft && (d.publishedVersion || 0) < 2 }) + UI.btn('Promote to enforce', { kind: 'primary', attrs: 'data-promote', disabled: !rule || rule.stage === 'enforce' || locked }))
+        + (st.draftNote && rule && st.draftNote.key === key ? UI.notice('<b>Drafted from a description</b> ("' + esc(st.draftNote.text) + '") and saved to ' + esc(d.name) + ' v' + esc(st.draftNote.version) + ' in shadow. It records what it would ' + esc(rule.action === 'require-approval' ? 'hold' : rule.action) + ' and changes nothing. Replay it over recent traffic below, then promote it; the version publishes under the usual dual control.', 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-draftok' })) : '')
         + guardDown
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('OK', { kind: 'ghost', size: 'sm', attrs: 'data-demook' })) : '')
         + reviewbar
@@ -393,6 +394,52 @@
         e.preventDefault();
         ctx.modal({ title: 'Request a change to the platform baseline', body: UI.field('Rule', UI.input(rule.name, { readonly: true })) + UI.field('Proposed change', UI.textarea('', { placeholder: 'What should change, and why. The owning admins see this with your tenant.', rows: 3, attrs: 'data-change' })) + UI.notice('Platform guardrail admins own this rule. Tenant rule sets can only add stricter rules on top of it.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Send request', { kind: 'primary', attrs: 'data-sendreq' }),
           onMount(mo) { mo.querySelector('[data-sendreq]').addEventListener('click', () => { const change = mo.querySelector('[data-change]').value.trim(); if (!change) { toast('Describe the change first.', 'warn'); return; } App.post('/api/admin/guardrails/requests', { setId: d.id, ruleId: rule.id, change: change }).then((r) => { App.closeOverlay(); toast('Request sent to ' + r.notified + ' platform guardrail admin' + (r.notified === 1 ? '' : 's') + '.', 'ok'); }).catch((err) => App.fail(err)); }); } });
+      });
+      ctx.on('click', '[data-draftok]', () => { st.draftNote = null; ctx.rerender(); });
+      // 1.7.0 (B-9602): a rule drafted from a description, shown as YAML and a diff, saved in shadow only.
+      ctx.on('click', '[data-describe]', () => {
+        const openDescribe = (profiles) => ctx.modal({ cls: 'wide', title: 'Describe a rule for ' + esc(d.name),
+          body: '<div class="formgrid" style="--cols:2">' + UI.field('Describe what the rule should do', UI.textarea('', { rows: 3, placeholder: 'for example: hold answers that quote a card number', attrs: 'data-desc aria-label="Description"' }), 'The description passes the user-input guardrail, then the profile\'s model drafts one rule in the GuardrailRule schema. The call is metered to you.')
+            + UI.field('Profile', profiles.length ? UI.select(profiles.map((x) => ({ value: x, label: x })), profiles[0], 'data-dprofile aria-label="Profile"') : UI.notice('No published profile you may use. A profile admin publishes one first.', 'warn'))
+            + UI.field('Checkpoint', UI.select(CHECKPOINTS.map((c) => ({ value: c.id, label: c.label })), st.cp, 'data-dcp aria-label="Checkpoint"')) + '</div>' + '<div data-result aria-live="polite"></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Draft', { kind: 'primary', attrs: 'data-draft' + (profiles.length ? '' : ' disabled') }) + UI.btn('Save in shadow', { kind: 'primary', attrs: 'data-savedraft disabled' }),
+          onMount(mo) {
+            const body = () => ({ prompt: mo.querySelector('[data-desc]').value.trim(), profile: mo.querySelector('[data-dprofile]').value, checkpoint: mo.querySelector('[data-dcp]').value });
+            const result = mo.querySelector('[data-result]');
+            const draftBtn = mo.querySelector('[data-draft]'); const saveBtn = mo.querySelector('[data-savedraft]');
+            let last = null;
+            draftBtn.addEventListener('click', () => {
+              const b = body();
+              if (b.prompt.length < 3) { toast('Describe the rule first.', 'warn'); return; }
+              draftBtn.disabled = true; saveBtn.disabled = true; result.innerHTML = UI.notice('Drafting with ' + esc(b.profile) + '…', 'info');
+              App.post('/api/admin/guardrails/sets/' + enc(d.id) + '/describe', b)
+                .then((r) => {
+                  last = r;
+                  if (r.valid) {
+                    result.innerHTML = '<div class="eyebrow" style="margin-top:10px">Draft</div>' + UI.code(r.yaml, 'yaml')
+                      + '<div class="eyebrow">Diff against ' + esc(d.name) + ' v' + esc(String((d.draft || d.published || { version: 0 }).version)) + '</div>' + UI.code(r.diff.text, 'diff')
+                      + UI.notice('Validated against the GuardrailRule schema; the pattern compiles under RE2. Saved in <b>shadow</b>: it records findings and blocks nothing until it is promoted and the version is published.', 'info');
+                    saveBtn.disabled = false;
+                  } else {
+                    result.innerHTML = UI.notice('<b>The draft does not validate.</b> ' + esc(r.problems.join('; ')) + ' Rephrase the description, or add the rule by hand.', 'danger') + '<div class="eyebrow">What the model answered</div>' + UI.code(JSON.stringify(r.raw, null, 2), 'json');
+                  }
+                })
+                .catch((err) => { result.innerHTML = UI.notice('<b>' + esc((err.problem && err.problem.title) || 'Draft failed') + '.</b> ' + esc((err.problem && err.problem.detail) || err.message || ''), 'danger'); })
+                .finally(() => { draftBtn.disabled = false; });
+            });
+            saveBtn.addEventListener('click', () => {
+              if (!last || !last.valid) return;
+              const b = body(); saveBtn.disabled = true;
+              App.post('/api/admin/guardrails/sets/' + enc(d.id) + '/describe', Object.assign(b, { save: true }))
+                .then((r) => {
+                  App.closeOverlay();
+                  st.cp = r.rule.checkpoint; st.rule = r.rule.id; st.draftNote = { key: d.id + '/' + r.rule.id, text: b.prompt, version: r.saved.version };
+                  afterSave(esc(r.rule.name) + ' saved to ' + esc(d.name) + ' v' + r.saved.version + ' in shadow. Audit entry written.');
+                })
+                .catch((err) => { saveBtn.disabled = false; App.fail(err, 'Not saved'); });
+            });
+          } });
+        App.get('/api/chat/profiles').then((ps) => openDescribe(ps.map((x) => x.name))).catch(() => openDescribe([]));
       });
       ctx.on('click', '[data-addrule]', () => ctx.modal({ title: 'Add rule to ' + esc(cpLabel), body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example flag-customer-ids-on-transfer', attrs: 'data-n' })) + UI.field('Type', UI.select(TYPES.map((x) => x[0]), 'PII', 'data-t')) + UI.field('Action', UI.select(ACTIONS, 'flag', 'data-a')) + UI.field('Severity', UI.select(['low', 'medium', 'high'], 'medium', 'data-s')) + '</div>' + UI.notice('New rules start in shadow mode in the draft. They enforce only after a test run and a replay.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }),
         onMount(mo) {

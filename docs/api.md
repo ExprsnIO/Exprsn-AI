@@ -5594,3 +5594,210 @@ its labels from the model's `config.json` (`id2label`) and its files named by th
 revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
 classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
 eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.
+
+## Sprint 41a (1.7.0): standing approvals for MCP write calls (B-12201)
+
+Migration `043_mcp_standing_approvals`. Setting `MCP_STANDING_APPROVAL_MAX_DAYS` (30): the longest period an approval
+may run.
+
+A standing approval stands in for the per-call approval of Sprint 37b: while one covers a call, the MCP server runs
+the call at once instead of holding it. It covers calls made as the person who granted it, in one workspace's MCP
+server, for one published write tool (`tool`) or every one (`null`), from one client (`client`, the OAuth client id
+the client signed in with) or any (`null`), up to a side-effect class (`write`, or `destructive` which includes
+write), at the clearance the person held in that workspace when they granted it (a call above it is not covered),
+until `expiresAt`. A call the tool-call guardrail holds is never covered: it waits in the Flags queue as before, and
+its message names the guardrail. Read tools never wait and cannot be named.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/mcp-server` | Also carries `approvals` (below) and `standingMaxDays` |
+| `GET /api/me/mcp-approvals` | `{approvals: [{id, workspaceId, workspace, client, tool, sideEffect, label, reason, state: active \| revoked \| expired, uses, lastUsedAt, expiresAt, createdAt, revokedAt}], maxDays}`, the caller's own, newest first; revoked and expired ones stay for 30 days |
+| `GET /api/me/mcp-approvals/tools?workspaceId=` | The write and destructive tools the caller may call in that workspace's published server: `{tools: [{name, title, group, sideEffect}]}` |
+| `POST /api/me/mcp-approvals` `{workspaceId, tool?, clientId?, sideEffect: write \| destructive, days, reason?}` | Browser session only (a client's token can never grant itself one). 404 for an unpublished server or an unknown tool, 409 for a read tool, a destructive tool under `write`, or `days` outside 1 to the longest. `201 {id, workspaceId, client, tool, sideEffect, label, state, expiresAt, createdAt}`; audited `mcp.server.standing.granted` |
+| `DELETE /api/me/mcp-approvals/:id` | Browser session only; revokes the caller's own (404 for another's, 409 when not active); the next covered call waits again. Audited `mcp.server.standing.revoked` (`by: owner`) |
+| `GET /api/admin/mcp-server` | Also carries `standingApprovals` (every one of the tenant, with `userId` and `username`) and `standingMaxDays` (`identity:manage`) |
+| `DELETE /api/admin/mcp-server/approvals/:id` | An identity admin revokes any of the tenant's (browser session). Audited `mcp.server.standing.revoked` (`by: admin`) |
+
+A covered call's `mcp.server.call` audit event carries `detail.standing` (the approval's id); the approval's `uses`
+and `lastUsedAt` follow. The chat sweep (every 15 minutes) marks approvals past their period `expired`, audited
+`mcp.server.standing.expired` once each; a call meanwhile is not covered either way.
+
+## Sprint 41b (1.7.0): the guardrail rule builder (B-9601, B-9602)
+
+No migration, settings or new permissions. Audit `guardrails.rule.drafted` on every draft and `guardrails.rule.added`
+with `source: description` when one is saved.
+
+### A rule drafted from a description (B-9601; `guardrails:manage` and `inference:invoke`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/guardrails/sets/:id/describe` `{prompt, profile, checkpoint?, save?, label?}` | The description (3 to 4,000 characters) passes the `user-input` checkpoint as the admin (`422 Description refused` when a rule blocks or holds it); the published profile's model answers one rule through the gateway (metered to the admin, `503` when the model is unavailable, `403` naming `inference:invoke` when the admin's roles do not grant it); the answer is normalised (a free id in the set, the mechanism's kind as the type, "hold" and "approval" as `require-approval`, "mask" as `redact`, "refuse" as `block`), the console's `checkpoint` wins over the model's, and the rule is validated with the GuardrailRule schema and the RE2 compiler. `{rule, raw, yaml, valid, problems, diff, checkpoint, saved}`: `rule` (always `stage: shadow`, `onError: closed`, `enabled`) and `yaml` when it validates, `raw` the normalised answer, `problems` the schema or pattern findings, `diff` the set's working rules against the working rules plus the draft (`added`, `changed`, `removed`, `text`). Nothing is stored. With `save: true` a valid draft is appended to the set's open draft (created from the published rules when there is none; `409` when a version waits for review) and `saved` is `{version, status}`; a draft that does not validate is `422 Draft not usable` and nothing changes. The platform baseline refuses tenant admins as every write does (`403 Baseline locked`). |
+
+From the draft on, the rule follows the existing flow: `POST …/replay` runs the draft version over recorded traffic,
+`POST …/promote` moves it to `enforce` when reviewers' false positives are within the limit, and the version publishes
+through `…/draft/submit` and `…/draft/approve` (a second guardrail admin) or `…/draft/publish` for a tenant set.
+
+## Sprint 41c (1.7.0): thinking policy, budgets, plans and reflection (B-11701 to B-11706, B-11708)
+
+Migration `043c_thinking` (expand only): `thinking_policies`; `profiles.thinking_budget`, `plan_first`, `reflect`,
+`reflect_profile`; `messages.plan`, `checked` (both sealed JSON), `thinking_purge_at`; `agent_runs.plan` (sealed),
+`plan_state`; `chain_nodes.plan`, `think`, `thinking_tokens`; `usage_records.thinking_dropped`. Settings
+`THINKING_BUDGET_NOTICE_PERCENT` (80), `THINKING_PLAN_MAX_STEPS` (12), `THINKING_REFLECTION_MAX_CHARS` (12000).
+
+### The thinking policy (B-11701; `profiles:manage`)
+
+A policy per tenant and, optionally, per workspace (the workspace's own row wins; without one it inherits the
+tenant's; without either the defaults apply: the author sees thinking, it is kept as long as the answer, exports carry
+it, no budget). `visibility` is `author` (the conversation's owner), `reviewers` (holders of `flags:review`) or
+`nobody`; thinking is never shown above the viewer's clearance either way.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/thinking/policy?workspace=` | `{tenant, workspace, effective}`: the tenant's policy, the workspace's own row (`null` when it inherits) and the one in force, each `{scope: default \| tenant \| workspace, visibility, retentionDays, exports, budgetTokensPerDay}`. `workspace` defaults to the caller's |
+| `PUT /api/admin/thinking/policy` `{workspace: id \| null, visibility?, retentionDays?: 0..3650 \| null, exports?, budgetTokensPerDay?: 100.. \| null, reset?}` | Sets the tenant's policy (`workspace: null`) or a workspace's; fields left out keep their value; `reset: true` removes a workspace's row so it inherits. Returns the policy in force. Audited `thinking.policy.updated` |
+
+Under `nobody` the author's stream carries no `thinking` chunks and the stored message holds only
+`usage.thinkingTokens`. Under `reviewers` the thinking is stored but `GET /api/conversations/:id` returns
+`thinking: null` to a reader without `flags:review`; the same applies to a run's steps (`GET /api/runs/:id`,
+`steps[].detail.thinking`). `retentionDays` sets `thinking_purge_at` when an answer completes; the chat sweep (every
+15 minutes) drops the thinking past it, keeps the token count, and audits `thinking.purged` with the count. A
+conversation export (`POST /api/conversations/:id/exports`) carries `thinking` per message only when `exports` is on
+and the exporter may see it.
+
+### Budgets (B-11702)
+
+`profiles.thinkingBudget` (`POST|PATCH /api/admin/profiles`, 100 to 10^9 or `null`) and the policy's
+`budgetTokensPerDay` for a workspace are thinking tokens per UTC day, summed from `usage_records.thinking_tokens`. At
+`THINKING_BUDGET_NOTICE_PERCENT` of either the turn emits `chat.status` `{state: thinking-budget, dropped: false,
+level, limit: profile | workspace, used, max}`; once spent, the turn thinks at `low` instead (never refused; `off`
+stays off) with `dropped: true`, and the usage record has `thinking_dropped`. The quota view
+(`GET /api/admin/quotas`, and a tenant's on the Tenants screen) shows `thinkingTokensToday` and `thinkingDropsToday`. `/v1`
+`reasoning_effort` maps onto a level within the profile's ceiling and is dropped the same way; chat, `/v1` and agent
+steps meter their thinking tokens so all three count against the budgets.
+
+### Plan first (B-11703)
+
+A profile with `planFirst: true`: `POST /api/chat` (and a reply) answers `202 {..., state: planning, reason}`; the
+model drafts `{steps: [{title, tools, data}]}` from the conversation and the tools on offer (at most
+`THINKING_PLAN_MAX_STEPS`), and the plan is a card: `GET /api/conversations/:id/invocations` lists it with `kind:
+plan`, `state: awaiting`, `answerId` and `plan: {steps, tools, offered, edited}`, audited `chat.plan.proposed`.
+`POST /api/conversations/:id/invocations/:iid/decide` `{decision: approve | deny, steps?}` decides it: approved (as
+drafted, or as `steps` edited, whose tools must be among `offered`, else 400), the answer runs under the plan, with
+only the tools it names offered and write or destructive tools keeping their own cards (B-4003); the message carries
+`plan`. Declined, or expired after `CHAT_CARD_TTL_SECONDS`, the answer ends `stopped` with the reason and nothing ran.
+Audited `chat.plan.approved` (with `edited`) and `chat.plan.declined`. A draft the parser cannot read is logged, the
+turn emits `chat.status` `plan-skipped` and the answer runs without a plan.
+
+An agent with `definition.planFirst: true` drafts its plan as its first step (`lane: think`, `title: Plan`, `state:
+waiting`, `meta.plan: true`) and waits; `GET /api/runs/:id` carries `plan: {steps, tools, state: awaiting | approved |
+declined}`. `POST /api/runs/:id/plan` `{decision: approve | decline, steps?}` (the run's owner, or `agents:manage`):
+approved, the plan is the run's step list and a call to a tool outside it pauses as a step with `meta.deviation: true`
+until it is approved like any held call; declined, the run ends `cancelled`. Audited `agent.plan.drafted`,
+`agent.plan.approved`, `agent.plan.declined`. The approved plan is on the run's chain node (`plan: {steps: [{title,
+tools}], approvedBy}`).
+
+### Reflection (B-11704)
+
+A profile with `reflect: true` (and optionally `reflectProfile`, another profile by name) gets a second pass on every
+finished answer against its question, the passages it cited and its tool results (each cut to
+`THINKING_REFLECTION_MAX_CHARS`), with thinking off. The message gains `checked: {status: ok | findings | revised,
+findings: [{kind: unsupported | missing | contradiction | other, text}], revised, profile, model, at}`; a revised
+answer passes the `model-output` checkpoint (blocked or held: dropped; redacted: kept redacted) and rides in the badge
+beside the original answer. An unreadable verdict is a finding, never a pass. The pass is metered to the conversation
+under the reflecting profile; the stream emits `chat.status` `checking` then `chat.checked {conversationId,
+messageId, status, findings, revised}`; audited `chat.reflection.checked`.
+
+### Thinking on steps (B-11705)
+
+An agent's `definition.think` (`off | low | medium | high`) sets its level within its profile's ceiling (the
+registry's check "Thinking within the profile ceiling" names the ceiling); a workflow model step's `config.think`
+above its profile's ceiling is refused at publish (422, naming the ceiling). Thinking steps carry `meta.think` and
+`meta.thinkingTokens`; the chain view's nodes (`GET /api/chains/:id`) carry `think`, `thinkingTokens` and `plan`.
+
+### Evaluations (B-11706)
+
+Eval set cases take three more checks: `{kind: thinking-rubric, rubric, minScore}` (the set's `judgeProfile` scores
+the thinking; an answer without thinking fails), `{kind: plan-tools, must, mustNot}` (the model drafts a plan for the
+case's prompt; a named forbidden tool or a missing required one fails) and `{kind: reflection, maxFindings}` (a
+reflection pass on the answer). Results carry `thinking`, `plan` and `reflection`, sealed with the outputs; a gated set
+counts them like any check.
+
+### Console (B-11708)
+
+Profiles: the Thinking policy panel and the profile's budget, plan first and reflection fields. Chat: the plan card,
+the "checked" badge, the budget notice and the token-only thinking line. Runs: the plan step with its decisions, the
+level per step, and in the chain view each node's level, thinking tokens and plan.
+
+## Sprint 41d (1.7.0): finding what you can use (B-12301 to B-12304)
+
+Migration `043d_discovery` (expand only): `registry_entries.purpose`, `examples` (JSON), `category`; the same three on
+`workflows`; `profiles.suggestions` (on by default); `catalog_notices` (one row per person and entry, unique),
+`catalog_preferences`, `catalog_vectors` (an entry version's embedding per model, with the hash of its text) and
+`catalog_dismissals`. Settings `DISCOVERY_EMBED_PROFILE` (`embed`), `DISCOVERY_SUGGEST_MIN_SCORE` (0.3) and
+`REGISTRY_DISCOVERY_REQUIRED` (true). New permissions: none; every list is the caller's own capabilities.
+
+### The catalogue (B-12301; `chat:read`)
+
+The workspace form of a conversation's capabilities (`GET /api/conversations/:id/capabilities`, Sprint 40a): the same
+decision through the same dispatcher (the profile's tool list), the runnable agents, the profile's skill allow-list and
+the workspace's published workflows, with no conversation and at the lowest label a new conversation holds.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/catalog?profile=` | `{workspace: {id, name}, profile, profiles: [{name, displayName}], clearance, entries, categories: [{name, count}], counts: {available, notOnProfile}}` for the caller's current workspace through `profile` (a profile they may pick for chat; the first one when left out; 404 for one they may not). Each entry: `{key: <kind>:<name>, kind: workflow \| agent \| tool \| skill, id, name, version, description, purpose, examples, example, category, label, sideEffect, call, trigger: / \| @ \| +, compose, available, reason, profiles, missing}`. `call` is how to call it from the composer (`/name`, `@name`, `+name`), `compose` what the composer is filled with (the call and the first example). `available: false` with `reason: "not on this profile"` and `profiles` (the ones the caller may pick that offer it) is a tool on another profile's list or a skill outside this profile's allow-list. An entry whose label is above the caller's clearance is never returned, callable or not. Entries are sorted by category (an entry without one is under `Other`, last), then callable first, then name. Embedding-only profiles are not chat profiles and are not listed (also in `GET /api/chat/profiles`) |
+
+### Publish notices (B-12302)
+
+A registry entry approved (`POST /api/admin/registry/:id/review` with `approve`) or offered to more workspaces
+(`POST /api/admin/registry/:id/publish`), and a workflow published (`POST /api/workflows/:id/publish`), notify the
+members of the workspaces it reaches (every active user of the tenant for a tenant-wide entry, the workflow's
+workspace for a workflow) whose clearance reaches its label, except who published it (and a registry entry's owner,
+who has the review's own notice), once per person and entry: a later version or another workspace never notifies the
+same person again. A tool is announced only once a published profile lists it. The notification is `kind: catalog`,
+labelled with the entry's label, titled `<Kind> <name> is now available to you`, with the description as its body and
+the route `catalog?entry=<kind>%3A<name>`. Audited `catalog.notices.sent` (`{notified, digest, skipped}`).
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/catalog-notices` | `{notices: each \| digest \| off, lastDigestAt, pending}` (authenticated; `each` when never set) |
+| `PUT /api/me/catalog-notices` `{notices}` | Sets the caller's choice. Leaving `digest` for `each` delivers what the digest held at once (one notification); for `off` drops it. Audited `catalog.preferences.updated` |
+
+The `catalog.digest` job (scheduled hourly per tenant) sends each person on `digest` whose last digest (or choice) is a
+week old one notification for everything that waited, titled `This week: <n> new things you can use` (or the entry,
+for one), at the highest label among them, routed to the catalogue (or the entry). Audited `catalog.digest.sent`.
+
+### Composer suggestions (B-12303; `chat:write`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/catalog/suggestions` `{draft, profile?, conversationId?, dismissed?}` | Up to three entries the conversation (or, without one, the workspace through `profile`) may call whose name, description, purpose and examples are closest to the draft (up to 4,000 characters; nothing for fewer than 3), by cosine similarity of embeddings from the profile `DISCOVERY_EMBED_PROFILE` (its model must embed; no chat model is called), at or above `DISCOVERY_SUGGEST_MIN_SCORE`. `{suggestions: [{key, kind, name, description, example, call, compose, category, sideEffect, label, score}], off: null \| profile \| embedding, detail, dismissed}`: `off: profile` when the profile has suggestions off, `embedding` when there is no usable embedding profile or the conversation's label is above it. Entries the conversation dismissed, and the `dismissed` keys (for a new chat), are left out. Entry vectors are cached per entry version and model (`catalog_vectors`; a workflow's version is its published version) and recomputed when the text changes; the draft's embedding is metered to the caller and not stored |
+| `POST /api/conversations/:id/suggestions/dismiss` `{key}` | The conversation's owner keeps an entry away from its suggestions for the rest of the conversation. `{dismissed}`; audited `chat.suggestion.dismissed` |
+
+A profile's `suggestions` (`POST|PATCH /api/admin/profiles`, boolean, on by default) turns them off for it.
+
+### Entry quality for discovery (B-12304)
+
+`POST /api/admin/registry` and `PATCH /api/admin/registry/:id` take `purpose` (up to 500 characters), `examples` (up
+to five prompts of up to 300 characters) and `category` (up to 60 characters); every entry view carries them. They are
+not part of the schema hash. `POST /api/admin/registry/:id/submit` refuses an entry offered in chat (an agent, a skill,
+or a tool a published profile lists) without them when `REGISTRY_DISCOVERY_REQUIRED` is on: `422 Missing for the
+catalogue`, `detail` naming them (`Missing: example prompt.`), `missing: [purpose | examples | category]` and
+`errors: [{path, message}]`; audited `registry.submit.refused`. `GET /api/admin/registry/:id` carries `catalogCard`
+(the entry's catalogue card as the catalogue will show it, for the reviewer), `offeredInChat` and `discoveryRequired`.
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/admin/registry/:id/discovery` `{purpose?, examples?, category?}` | Sets the card's fields in any state but retired (the entry's kind permission; platform entries are read-only), so a published entry gains them without a new version and its approval holds. Audited `registry.discovery.updated` |
+| `PUT /api/workflows/:id/discovery` `{purpose?, examples?, category?}` | The same for a workflow (`workflows:manage`); `GET /api/workflows` and `GET /api/workflows/:id` carry them. Audited `workflow.discovery.updated` |
+
+Entries published before these fields existed keep working and are listed with what they have.
+
+### Console
+
+A Catalogue screen (`#/catalog`, `chat:read`): the entries by category with each one's call, example and "Use in Chat",
+the "not on this profile" entries with the profiles that offer them, and an entry opened from a notice's link. Chat: the
+"What you can do" panel on a new chat, a call filled in from the catalogue, the panel or a suggestion (Enter starts the
+agent, adds the skill, or opens the workflow's or tool's form with the text in it), and the suggestion chips after a
+pause in typing. Registry: the catalogue card in the inspector with Edit, the fields on the entry form, and the submit
+refusal naming what is missing. Settings: "New things you can use" (as they happen, weekly digest, off). Profiles: the
+composer suggestions checkbox.

@@ -12,6 +12,7 @@ import { splitThink, thinkingMode, thinkingRequest } from '../gateway/thinking.j
 import { compilePattern } from '../guardrails/regex.js';
 import { schemaProblems, validateAgainst, type JsonSchema } from '../registry/schema.js';
 import type { Services } from '../services.js';
+import { parsePlan, parseReflection } from '../thinking/service.js';
 
 /*
  * Evaluations (B-1303). An eval set belongs to a profile: cases (a prompt and the properties its answer must have:
@@ -34,7 +35,12 @@ const check = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('not-contains'), value: z.string().min(1).max(2000), caseSensitive: z.boolean().default(false) }),
   z.object({ kind: z.literal('regex'), pattern: z.string().min(1).max(2000) }),
   z.object({ kind: z.literal('json-schema'), schema: z.record(z.string(), z.unknown()) }),
-  z.object({ kind: z.literal('judge'), rubric: z.string().min(1).max(4000), minScore: z.number().min(0).max(1).default(0.5) })
+  z.object({ kind: z.literal('judge'), rubric: z.string().min(1).max(4000), minScore: z.number().min(0).max(1).default(0.5) }),
+  // 1.7.0 (B-11706): a rubric for the thinking (judged by the judge profile), the tools a plan must and must not name,
+  // and a reflection pass that must find at most `maxFindings` problems with the answer.
+  z.object({ kind: z.literal('thinking-rubric'), rubric: z.string().min(1).max(4000), minScore: z.number().min(0).max(1).default(0.5) }),
+  z.object({ kind: z.literal('plan-tools'), must: z.array(z.string().trim().min(1).max(120)).max(16).default([]), mustNot: z.array(z.string().trim().min(1).max(120)).max(16).default([]) }),
+  z.object({ kind: z.literal('reflection'), maxFindings: z.number().int().min(0).max(20).default(0) })
 ]);
 export type EvalCheck = z.infer<typeof check>;
 
@@ -120,6 +126,10 @@ export interface CaseResult {
   checks: { kind: EvalCheck['kind']; passed: boolean; detail: string | null }[];
   output: string;
   judge: { score: number; reason: string } | null;
+  /** 1.7.0 (B-11706): the thinking the answer came with, the plan the model drafted and the reflection's findings, when a check asked for them. */
+  thinking?: string | null;
+  plan?: { steps: { title: string; tools: string[] }[]; tools: string[] } | null;
+  reflection?: { status: string; findings: { kind: string; text: string }[] } | null;
   ms: number;
 }
 
@@ -192,7 +202,7 @@ export class EvalService {
       }
       out.push({ ...c, id });
     });
-    const judged = out.some((c) => c.checks.some((k) => k.kind === 'judge'));
+    const judged = out.some((c) => c.checks.some((k) => k.kind === 'judge' || k.kind === 'thinking-rubric'));
     if (judged && !input.judgeProfile) throw badRequest('A case has a rubric; choose a judge profile.');
     if (input.judgeProfile) {
       let judge;
@@ -336,16 +346,37 @@ export class EvalService {
     try {
       for (const [i, c] of cases.entries()) {
         const started = Date.now();
-        const output = await this.answer(who, profile, model, x.label, c.prompt, signal);
+        const answered = await this.answerWith(who, profile, model, x.label, c.prompt, signal);
+        const output = answered.content;
         const checks: CaseResult['checks'] = [];
         let judge: CaseResult['judge'] = null;
+        let plan: CaseResult['plan'] = null;
+        let reflection: CaseResult['reflection'] = null;
         for (const k of c.checks) {
           if (k.kind === 'judge') {
             judge = await this.judge(who, x, k.rubric, c.prompt, output, signal);
             checks.push({ kind: k.kind, passed: judge.score >= k.minScore, detail: `score ${judge.score.toFixed(2)} (needs ${k.minScore}): ${judge.reason}` });
+          } else if (k.kind === 'thinking-rubric') {
+            // 1.7.0 (B-11706): the rubric judges the thinking, not the answer; an answer without thinking fails it.
+            if (!answered.thinking) checks.push({ kind: k.kind, passed: false, detail: 'The answer came with no thinking.' });
+            else {
+              const j = await this.judge(who, x, k.rubric, c.prompt, answered.thinking, signal);
+              checks.push({ kind: k.kind, passed: j.score >= k.minScore, detail: `thinking score ${j.score.toFixed(2)} (needs ${k.minScore}): ${j.reason}` });
+            }
+          } else if (k.kind === 'plan-tools') {
+            plan = plan ?? (await this.plan(who, profile, model, x.label, c.prompt, signal));
+            const named = new Set(plan?.tools ?? []);
+            const missing = k.must.filter((t) => !named.has(t));
+            const forbidden = k.mustNot.filter((t) => named.has(t));
+            const ok = !!plan && !missing.length && !forbidden.length;
+            checks.push({ kind: k.kind, passed: ok, detail: !plan ? 'The model gave no readable plan.' : ok ? `The plan names ${plan.tools.length ? plan.tools.join(', ') : 'no tools'}.` : [missing.length ? `missing ${missing.join(', ')}` : '', forbidden.length ? `calls ${forbidden.join(', ')}, which the case forbids` : ''].filter(Boolean).join('; ') + '.' });
+          } else if (k.kind === 'reflection') {
+            reflection = reflection ?? (await this.reflect(who, profile, model, x.label, c.prompt, output, signal));
+            const n = reflection.findings.length;
+            checks.push({ kind: k.kind, passed: n <= k.maxFindings, detail: n ? `${n} finding${n === 1 ? '' : 's'} (at most ${k.maxFindings}): ${reflection.findings.map((f) => f.text).join(' ').slice(0, 600)}` : 'The reflection pass found nothing to correct.' });
           } else checks.push({ kind: k.kind, ...this.check(k, output) });
         }
-        results.push({ caseId: c.id, name: c.name ?? null, passed: checks.every((k) => k.passed), checks, output: output.slice(0, OUTPUT_KEEP), judge, ms: Date.now() - started });
+        results.push({ caseId: c.id, name: c.name ?? null, passed: checks.every((k) => k.passed), checks, output: output.slice(0, OUTPUT_KEEP), judge, ...(answered.thinking ? { thinking: answered.thinking.slice(0, OUTPUT_KEEP) } : {}), ...(plan ? { plan } : {}), ...(reflection ? { reflection } : {}), ms: Date.now() - started });
         await progress(Math.round(((i + 1) / cases.length) * 100), `${i + 1} of ${cases.length} cases`);
       }
     } catch (err) {
@@ -359,9 +390,15 @@ export class EvalService {
 
   /** One answer from a profile through the gateway (draft profiles too), metered and passed through `model-output`. */
   private async generate(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, messages: ChatMessage[], signal: AbortSignal): Promise<string> {
+    return (await this.generateWith(who, profile, model, label, messages, signal)).content;
+  }
+
+  /** As `generate`, with the thinking the model produced (1.7.0, B-11706: thinking rubrics judge it). */
+  private async generateWith(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, messages: ChatMessage[], signal: AbortSignal): Promise<{ content: string; thinking: string }> {
     const s = this.s();
     const lease = await s.gateway.acquire(profile, model, label, { signal });
     let content = '';
+    let thinking = '';
     let promptTokens = 0;
     let outputTokens = 0;
     let gpuMs = 0;
@@ -378,18 +415,23 @@ export class EvalService {
           if (first == null) first = Date.now() - t0;
           content += chunk.message.content;
         }
+        if (chunk.message?.thinking) thinking += chunk.message.thinking;
         if (chunk.done) {
           promptTokens += chunk.prompt_eval_count ?? 0;
           outputTokens += chunk.eval_count ?? 0;
           gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
         }
       }
-      if (thinkingMode(model) === 'template' && level !== 'off') content = splitThink(content).content;
+      if (thinkingMode(model) === 'template' && level !== 'off') {
+        const sp = splitThink(content);
+        content = sp.content;
+        if (sp.thinking) thinking += sp.thinking;
+      }
     } finally {
       lease.release(first);
     }
     if (promptTokens + outputTokens > 0) await s.quotas.record({ tenantId: who.tenantId, workspaceId: null, userId: who.userId, kind: 'api', profileId: profile.id, model: model.name, poolId: lease.pool.id, promptTokens, outputTokens, gpuMs });
-    return content;
+    return { content, thinking };
   }
 
   /** 1.6.0 (B-7001): one answer of a profile to a prompt, as a case is answered (metered, through `model-output`), for the red-team suites. */
@@ -400,12 +442,42 @@ export class EvalService {
   }
 
   private async answer(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, prompt: string, signal: AbortSignal): Promise<string> {
+    return (await this.answerWith(who, profile, model, label, prompt, signal)).content;
+  }
+
+  /** 1.7.0 (B-11706): the plan a profile drafts for a prompt before acting (its tools on offer), as plan-first chat asks for it. */
+  private async plan(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, prompt: string, signal: AbortSignal) {
+    const s = this.s();
+    const tools = (await s.registry.list(who.tenantId, { kind: 'tool' })).filter((e) => e.status === 'published' && profile.tools.includes(e.name)).map((e) => ({ name: e.name, description: e.description }));
+    if (profile.tools.includes('calculate')) tools.unshift({ name: 'calculate', description: 'Exact arithmetic.' });
+    const messages = s.thinking.planMessages(profile.system_prompt, [{ role: 'user', content: prompt }], tools);
+    const text = await this.generate(who, profile, model, label, messages, signal);
+    const plan = parsePlan(text, s.cfg.THINKING_PLAN_MAX_STEPS);
+    return plan ? { steps: plan.steps.map((x) => ({ title: x.title, tools: x.tools })), tools: plan.tools } : null;
+  }
+
+  /** 1.7.0 (B-11706): the reflection pass on an answer, by the profile's reflect profile or the profile itself. */
+  private async reflect(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, prompt: string, answer: string, signal: AbortSignal) {
+    const s = this.s();
+    let rp: ProfileRow = profile;
+    let rm: ModelRow = model;
+    if (profile.reflect_profile) {
+      const r = await s.gateway.resolve(who.tenantId, profile.reflect_profile);
+      rp = r.profile;
+      rm = r.model;
+    }
+    const text = await this.generate(who, rp, rm, label, s.thinking.reflectionMessages({ question: prompt, answer, citations: [], tools: [] }), signal);
+    const v = parseReflection(text);
+    return { status: v.status, findings: v.findings };
+  }
+
+  private async answerWith(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, prompt: string, signal: AbortSignal): Promise<{ content: string; thinking: string }> {
     const messages: ChatMessage[] = [...(profile.system_prompt ? [{ role: 'system' as const, content: profile.system_prompt }] : []), { role: 'user', content: prompt }];
-    const content = await this.generate(who, profile, model, label, messages, signal);
-    if (!content) return content;
+    const { content, thinking } = await this.generateWith(who, profile, model, label, messages, signal);
+    if (!content) return { content, thinking };
     const d = await this.s().guardrails.check({ tenantId: who.tenantId, workspaceId: null, checkpoint: 'model-output', text: content, label, principal: who, source: { kind: 'eval', id: profile.id }, meta: { profile: profile.name, model: model.name, via: 'evals', prompt } });
-    if (d.action === 'block' || d.action === 'require-approval') return `This answer was withheld. ${d.reason ?? ''}`.trim();
-    return d.action === 'redact' ? d.text : content;
+    if (d.action === 'block' || d.action === 'require-approval') return { content: `This answer was withheld. ${d.reason ?? ''}`.trim(), thinking: '' };
+    return { content: d.action === 'redact' ? d.text : content, thinking };
   }
 
   /** The judge profile scores the answer against the rubric; an unreadable verdict scores 0. */
@@ -428,7 +500,7 @@ export class EvalService {
     }
   }
 
-  private check(k: Exclude<EvalCheck, { kind: 'judge' }>, output: string): { passed: boolean; detail: string | null } {
+  private check(k: Exclude<EvalCheck, { kind: 'judge' | 'thinking-rubric' | 'plan-tools' | 'reflection' }>, output: string): { passed: boolean; detail: string | null } {
     if (k.kind === 'contains' || k.kind === 'not-contains') {
       const has = k.caseSensitive ? output.includes(k.value) : output.toLowerCase().includes(k.value.toLowerCase());
       const passed = k.kind === 'contains' ? has : !has;

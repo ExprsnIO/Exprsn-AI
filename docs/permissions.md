@@ -29,33 +29,33 @@ An admin permission is any permission outside the member baseline: a custom role
 
 | Permission | Admin | Routes | `system-admin` | `tenant-admin` | `identity-admin` | `model-admin` | `guardrail-admin` | `tool-admin` | `knowledge-curator` | `ml-admin` | `workflow-admin` | `connection-admin` | `flag-reviewer` | `member` | `legal-review` | `auditor` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `chat:read` | no | 30 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `chat:write` | no | 26 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:read` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:write` | no | 28 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `inference:invoke` | no | 18 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 13 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 32 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
 | `models:manage` | yes | 11 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `profiles:manage` | yes | 27 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 35 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `profiles:manage` | yes | 29 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `tools:manage` | yes | 19 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 37 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 22 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
-| `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
+| `workflows:manage` | yes | 23 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `guardrails:manage` | yes | 20 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `knowledge:manage` | yes | 4 | x |  |  |  |  |  | x |  |  |  |  |  |  |  |
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
-| `identity:manage` | yes | 59 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
+| `identity:manage` | yes | 60 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `tenant:manage` | yes | 51 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -141,6 +141,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/shared-conversations`
 - `GET /api/shared-conversations/{id}`
 - `GET /api/shared-conversations/{id}/messages/{mid}/stream`
+- `GET /api/catalog`
 - `POST /api/conversations/{id}/exports`
 - `POST /api/flags/report`
 - `POST /api/prompts/{id}/render`
@@ -160,6 +161,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/conversations/{id}/workflow-runs`
 - `PUT /api/conversations/{id}/skills`
 - `PATCH /api/conversations/{id}`
+- `POST /api/catalog/suggestions`
+- `POST /api/conversations/{id}/suggestions/dismiss`
 - `POST /api/chat`
 - `POST /api/compare`
 - `POST /api/conversations`
@@ -259,6 +262,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
+- `POST /api/runs/{id}/plan` (or another permission)
 - `GET /api/chains/{id}` (or another permission)
 - `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 - `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
@@ -383,6 +387,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/profiles/{id}/evaluations/overrides/{oid}/decide`
 - `POST /api/admin/profiles/{id}/evaluations/run`
 - `POST /api/admin/profiles/{id}/publish`
+- `GET /api/admin/thinking/policy`
+- `PUT /api/admin/thinking/policy`
 - `POST /api/admin/profiles/{id}/rollback`
 - `PUT /api/admin/profiles/{id}/canary`
 - `DELETE /api/admin/red-team/suites/{id}` (or another permission)
@@ -400,6 +406,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/runs` (or another permission)
 - `GET /api/runs/{id}` (or another permission)
 - `PATCH /api/admin/registry/{id}` (or another permission)
+- `PUT /api/admin/registry/{id}/discovery` (or another permission)
 - `POST /api/admin/registry` (or another permission)
 - `POST /api/admin/registry/{id}/checks` (or another permission)
 - `POST /api/admin/registry/{id}/lifecycle` (or another permission)
@@ -436,6 +443,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PATCH /api/agent-schedules/{id}` (or another permission)
 - `POST /api/admin/red-team/suites` (or another permission)
 - `POST /api/admin/red-team/run` (or another permission)
+- `PUT /api/admin/registry/{id}/discovery` (or another permission)
 - `POST /api/admin/registry` (or another permission)
 - `POST /api/admin/registry/{id}/checks` (or another permission)
 - `POST /api/admin/registry/{id}/lifecycle` (or another permission)
@@ -447,6 +455,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/cancel` (or another permission)
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
+- `POST /api/runs/{id}/plan` (or another permission)
 - `GET /api/admin/registry/{id}/used-by` (or another permission)
 - `GET /api/chains/{id}` (or another permission)
 - `POST /api/chains/{id}/held/{node}/decision` (or another permission)
@@ -475,6 +484,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/workflow-dead-letters`
 - `GET /api/workflows/{id}/bundle`
 - `PATCH /api/workflows/{id}/triggers`
+- `PUT /api/workflows/{id}/discovery`
 - `POST /api/workflow-dead-letters/{id}/redrive`
 - `POST /api/workflows`
 - `POST /api/workflows/import`
@@ -504,6 +514,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `GET /api/admin/guardrails/status`
 - `POST /api/admin/guardrails/requests`
 - `POST /api/admin/guardrails/sets`
+- `POST /api/admin/guardrails/sets/{id}/describe`
 - `POST /api/admin/guardrails/sets/{id}/draft/approve`
 - `POST /api/admin/guardrails/sets/{id}/draft/publish`
 - `POST /api/admin/guardrails/sets/{id}/draft/submit`
@@ -667,6 +678,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/identity-policy/signup`
 - `GET /api/admin/mcp-server`
 - `GET /api/admin/mcp-server/workspaces/{workspaceId}/tools`
+- `DELETE /api/admin/mcp-server/approvals/{id}`
 - `PUT /api/admin/mcp-server/settings`
 - `PUT /api/admin/mcp-server/workspaces/{workspaceId}`
 - `GET /api/admin/identity-providers/{id}/scim`
@@ -1755,6 +1767,8 @@ These need a signed-in session or credential and no particular permission; the h
 - `GET /api/workflow-approvals`
 - `GET /api/workflow-runs/{id}`
 - `PATCH /api/me/preferences`
+- `GET /api/me/catalog-notices`
+- `PUT /api/me/catalog-notices`
 - `POST /api/auth/device`
 - `POST /api/auth/mfa/email`
 - `POST /api/auth/mfa/email/send`
@@ -1791,6 +1805,10 @@ These need a signed-in session or credential and no particular permission; the h
 - `GET /api/me/mcp-holds`
 - `GET /api/me/mcp-server`
 - `POST /api/me/mcp-holds/{id}/decide`
+- `DELETE /api/me/mcp-approvals/{id}`
+- `GET /api/me/mcp-approvals`
+- `GET /api/me/mcp-approvals/tools`
+- `POST /api/me/mcp-approvals`
 - `POST /mcp/{tenant}/{workspace}`
 
 ## Public routes

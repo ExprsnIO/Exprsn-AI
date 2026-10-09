@@ -100,3 +100,72 @@ test.describe('Profiles', () => {
     await expect(panel).toContainText('No red-team suites');
   });
 });
+
+// 1.7.0, Sprint 41c (B-11701, B-11702, B-11708): the thinking policy per tenant and per workspace, and a profile's
+// thinking budget, plan first and reflection, saved as a version.
+test.describe('thinking policy, budgets, plan first and reflection', () => {
+  test('B-11701, B-11702: saves the tenant policy and a workspace policy that inherits again; a profile\'s budget, plan first and reflection save as a version', async ({ page }) => {
+    await open(page, 'profiles');
+    await expectLive(page);
+    await page.locator('.leftpane [data-profile]').filter({ hasText: 'general' }).first().click();
+    const panel = page.locator('#pf-thinking-policy');
+    await expect(panel).toContainText('Thinking policy');
+    await expect(panel.locator('[data-tp="visibility"]')).toBeVisible();
+    await expectAxeClean(page, 'aa', 'profiles with the thinking policy panel');
+
+    // The tenant's policy: reviewers only, 7 days, exports off.
+    await panel.locator('[data-tp="visibility"]').selectOption('reviewers');
+    await panel.locator('[data-tp="retentionDays"]').fill('7');
+    await panel.locator('[data-tp-exports]').uncheck();
+    await panel.locator('[data-tp-save]').click();
+    await toast(page, /Thinking policy saved for the tenant/);
+    await expect(panel.locator('[data-tp="visibility"]')).toHaveValue('reviewers');
+    await expect(panel.locator('[data-tp="retentionDays"]')).toHaveValue('7');
+
+    // A workspace inherits it, gets its own with a budget, and inherits again on reset.
+    await panel.locator('[data-tp-scope] [data-seg]').nth(1).click();
+    await expect(panel).toContainText('inherits the tenant');
+    await expect(panel.locator('[data-tp="visibility"]')).toHaveValue('reviewers');
+    await panel.locator('[data-tp="visibility"]').selectOption('nobody');
+    await panel.locator('[data-tp="budgetTokensPerDay"]').fill('5000');
+    await panel.locator('[data-tp-save]').click();
+    await toast(page, /Thinking policy saved for/);
+    await expect(panel).toContainText('has its own policy');
+    await expect(panel.locator('[data-tp="visibility"]')).toHaveValue('nobody');
+    await panel.locator('[data-tp-reset]').click();
+    await confirmDialog(page, 'Inherit');
+    await toast(page, /inherits the tenant/);
+    await expect(panel).toContainText('inherits the tenant');
+    await expect(panel.locator('[data-tp="visibility"]')).toHaveValue('reviewers');
+
+    // Back to the author on the tenant, so the later sweeps see thinking as before.
+    await panel.locator('[data-tp-scope] [data-seg]').first().click();
+    await panel.locator('[data-tp="visibility"]').selectOption('author');
+    await panel.locator('[data-tp="retentionDays"]').fill('');
+    await panel.locator('[data-tp-exports]').check();
+    await panel.locator('[data-tp-save]').click();
+    await toast(page, /Thinking policy saved for the tenant/);
+
+    // The profile's own fields: a budget, plan first and reflection by another profile, saved as a version.
+    await page.locator('[data-f="thinkingBudget"]').fill('25000');
+    await page.locator('[data-f="planFirst"]').check();
+    await page.locator('[data-f="reflect"]').check();
+    await page.locator('[data-f="reflectProfile"]').selectOption('analyst');
+    await page.locator('[data-save]').click();
+    const modal = page.locator('#overlay .modal');
+    await expect(modal).toContainText('Thinking budget');
+    await expect(modal).toContainText('Plan first');
+    await expect(modal).toContainText('Reflection by');
+    await modal.locator('[data-ok]').click();
+    await toast(page, /saved as version/);
+    await expect(page.locator('.pf-yaml')).toContainText('thinking: { budget: 25000, planFirst: on, reflect: analyst }');
+    // And off again: the General profile answers the other specs' questions without a plan card.
+    await page.locator('[data-f="planFirst"]').uncheck();
+    await page.locator('[data-f="reflect"]').uncheck();
+    await page.locator('[data-f="thinkingBudget"]').fill('');
+    await page.locator('[data-save]').click();
+    await modal.locator('[data-ok]').click();
+    await toast(page, /saved as version/);
+    await expect(page.locator('.pf-yaml')).toContainText('thinking: { budget: none, planFirst: off, reflect: off }');
+  });
+});

@@ -151,6 +151,47 @@ test.describe('MCP server and MCP authorization', () => {
     const ran = await rpc(endpoint, tok.access_token, 'tools/call', { name: 'records_create', arguments: args });
     expect(ran.body!.result!.isError).toBe(false);
     expect(ran.body!.result!.structuredContent.values.title).toBe('Asked over MCP');
+
+    // 1.7.0 (B-12201): a standing approval for records_create from this client, granted under MCP access: the next
+    // call with other arguments runs without a hold; revoking it makes the one after wait again.
+    await open(member, 'settings');
+    await expectLive(member);
+    const access = member.locator('#main .panel', { hasText: 'MCP access' });
+    await expect(access).toContainText('No standing approvals');
+    await access.getByRole('button', { name: 'Grant a standing approval' }).click();
+    const grant = member.locator('#overlay .modal');
+    await expect(grant).toContainText('Grant a standing approval');
+    await expect(grant.locator('[data-sttool] option', { hasText: 'records_create' })).toHaveCount(1);
+    await grant.locator('[data-sttool]').selectOption('records_create');
+    await grant.locator('[data-stclient]').fill(client.clientId);
+    await grant.locator('[data-stdays]').selectOption('7');
+    await grant.locator('[data-streason]').fill('My own client');
+    await checkView(member, 'Settings MCP standing approval dialog', true);
+    await grant.getByRole('button', { name: 'Grant' }).click();
+    await toast(member, 'Standing approval granted');
+    await settle(member);
+    const standing = member.locator('#main .panel', { hasText: 'MCP access' }).locator('tr', { hasText: 'My own client' });
+    await expect(standing).toContainText('records_create');
+    await expect(standing).toContainText('write');
+    await checkView(member, 'Settings MCP access with a standing approval', false);
+    const covered = await rpc(endpoint, tok.access_token, 'tools/call', { name: 'records_create', arguments: { ...args, values: { title: 'Covered by a standing approval' } } });
+    expect(covered.body!.result!.isError).toBe(false);
+    expect(covered.body!.result!.structuredContent.values.title).toBe('Covered by a standing approval');
+    // The identity admin sees it across the tenant.
+    await open(page, 'identity?tab=mcp');
+    await page.reload(); // the screen keeps its state across navigation: fetch again after the grant
+    await expectLive(page);
+    const adminRow = page.locator('#main .panel', { hasText: 'Standing approvals' }).locator('tr', { hasText: 'records_create' });
+    await expect(adminRow).toContainText('1');
+    await checkView(page, 'Identity MCP server with a standing approval', false);
+    // The member revokes it; the next call waits again.
+    await standing.getByRole('button', { name: 'Revoke the standing approval for records_create' }).click();
+    await expect(member.locator('#overlay .modal')).toContainText('waits for your approval again');
+    await confirmDialog(member, 'Revoke');
+    await toast(member, 'Standing approval revoked');
+    const again = await rpc(endpoint, tok.access_token, 'tools/call', { name: 'records_create', arguments: { ...args, values: { title: 'After the revoke' } } });
+    expect(again.body!.result!.isError).toBe(true);
+    expect(again.body!.result!.structuredContent.held.id).toBeTruthy();
   });
 
   test('a tool admin enters OAuth for a per-user server by hand; discovery without metadata fails with its steps', async ({ page, watch, as }) => {

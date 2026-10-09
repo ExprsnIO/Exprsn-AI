@@ -508,7 +508,7 @@ table.dt .actions{white-space:nowrap}
   // ---------- Navigation model ----------
   const NAV = [
     { group: null, items: [
-      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
+      { id: 'chat', label: 'Chat', icon: 'chat' }, { id: 'catalog', label: 'Catalogue', icon: 'grid' }, { id: 'compare', label: 'Compare', icon: 'compare' }, { id: 'runs', label: 'Runs', icon: 'runs' },
       { id: 'knowledge', label: 'Knowledge', icon: 'knowledge' }, { id: 'memory', label: 'Memory', icon: 'memory' }, { id: 'workflows', label: 'Workflows', icon: 'workflows' },
       { id: 'scripts', label: 'Scripts', icon: 'scripts' }, { id: 'media', label: 'Media', icon: 'media' }, { id: 'images', label: 'Images', icon: 'images' },
       // 1.5.0 (Sprint 29 boards): the workspace screens for the 1.4.0 domains
@@ -800,6 +800,36 @@ table.dt .actions{white-space:nowrap}
   const statusPill = (s) => UI.pill(s, s === 'published' ? 'ok' : s === 'in review' ? 'info' : s === 'deprecated' ? 'warn' : s === 'retired' ? 'danger' : '');
   const VERSIONS = ['draft', 'in review', 'published', 'deprecated', 'retired'];
 
+  // 1.7.0 (B-12304): the catalogue card's purpose, example prompts and category. Entries published before the fields
+  // existed have none and keep working; an entry offered in chat (an agent, a skill, a tool a profile lists) is not
+  // submitted without them.
+  const CARDS = {
+    'kb.search': { purpose: 'Find the passages that answer a question in the knowledge bases you can read.', examples: ['Find the travel policy section on per diems'], category: 'Knowledge' },
+    'ledger.query': { purpose: 'Look up what was posted, without leaving the chat.', examples: ['What did FIELD-SALES post in September?'], category: 'Finance' },
+    'contract-redline': { purpose: 'Answers that show what changed against the template.', examples: ['Redline this clause against our template'], category: 'Documents' },
+    'Data analyst': { purpose: 'Questions about the numbers, answered with sources.', examples: ['How far over budget was travel in Q3?', 'Which cost centre grew fastest this year?'], category: 'Finance' },
+    'Meeting notes': { purpose: 'Turn a recording or notes into actions and owners.', examples: [], category: 'Meetings' },
+    'travel-policy-lookup': { purpose: '', examples: [], category: '' }
+  };
+  const ON_PROFILE = ['kb.search', 'ledger.query', 'jira-internal.create_issue'];
+  const TRIG = { tool: '/', agent: '@', skill: '+' };
+  const cardOf = (st, e) => (st.cards && st.cards[e.id]) || CARDS[e.id] || { purpose: '', examples: [], category: '' };
+  const offeredInChat = (e) => e.kind !== 'tool' || ON_PROFILE.indexOf(e.id) >= 0;
+  const missingOf = (c) => [!c.purpose ? 'purpose' : null, !(c.examples || []).length ? 'example prompt' : null, !c.category ? 'category' : null].filter(Boolean);
+  function cardPreview(st, e) {
+    const c = cardOf(st, e); const call = TRIG[e.kind] + e.id;
+    return '<div class="reg-card"><div class="hstack wrap gap6"><b>' + esc(e.id) + '</b>' + UI.pill(e.kind, 'outline') + '<span class="right">' + UI.label(e.label, { sm: true }) + '</span></div>'
+      + '<div class="fg2" style="font-size:13px">' + esc(c.purpose || 'No purpose yet.') + '</div>'
+      + (c.examples && c.examples[0] ? '<div class="reg-ex">"' + esc(c.examples[0]) + '"</div>' : '<div class="muted" style="font-size:12px">No example prompt yet.</div>')
+      + '<div class="hstack wrap gap6"><span class="mono" style="font-size:12px">' + esc(call) + '</span><span class="muted right" style="font-size:12px">' + esc(c.category || 'Other') + '</span></div></div>';
+  }
+  function cardFields(ctx, e, then) {
+    const st = ctx.state; const c = cardOf(st, e);
+    ctx.modal({ title: 'Catalogue card for ' + esc(e.id), body: '<div class="vstack gap8">' + UI.field('Purpose', UI.input(c.purpose || '', { placeholder: 'What a person gets from it, in one line', attrs: 'data-cpurpose maxlength="500"' })) + UI.field('Example prompts', UI.textarea((c.examples || []).join('\n'), { rows: 3, placeholder: 'One per line, up to five', attrs: 'data-cexamples' }), 'The first one fills the composer when someone picks it from the catalogue.') + UI.field('Category', UI.input(c.category || '', { placeholder: 'Documents, Finance, Writing', attrs: 'data-ccat maxlength="60"' })) + UI.notice('These are not part of the schema hash: a published entry can gain them without a new version or a new review.', 'info') + '</div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-csave' }),
+      onMount(m) { m.querySelector('[data-csave]').addEventListener('click', () => { st.cards = st.cards || {}; st.cards[e.id] = { purpose: m.querySelector('[data-cpurpose]').value.trim(), examples: m.querySelector('[data-cexamples]').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 5), category: m.querySelector('[data-ccat]').value.trim() }; if (st.missingFor === e.id && !missingOf(st.cards[e.id]).length) st.missingFor = null; App.closeOverlay(); ctx.rerender(); ctx.toast('Catalogue card saved.', 'ok'); if (then) then(); }); } });
+  }
+
   let bound = false; const cur = {};
 
   App.register({
@@ -818,6 +848,8 @@ table.dt .actions{white-space:nowrap}
       { title: 'Red-team gate on approve', tone: 'danger', text: 'Approving Support triage 0.4.0 is refused: its gated suite has no passing run for this version\'s hash. Run the suite against the version, or turn the gate off.', apply(ctx) { const st = ctx.state; st.tab = 'review'; st.sel = 'Support triage'; st.over = st.over || {}; st.over['Support triage'] = 'in review'; st.redteamRefused = true; ctx.rerender(); } },
       { title: 'Test harness', tone: 'info', text: 'Runs the tool in the sandbox with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.tab = 'tools'; ctx.state.sel = 'ledger.query'; ctx.state.harnessOpen = true; ctx.rerender(); runHarness(ctx); } },
       { title: 'HTTP host refused', tone: 'danger', text: 'A test call to a host that resolves to a cloud metadata address, an internal host the operator has not named, or a public host off the tenant\'s list is refused before anything is sent.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { url: 'http://169.254.169.254/latest/meta-data/{path}', test: 'refused' }); } },
+      { title: 'Missing for the catalogue', tone: 'danger', text: 'Submitting an agent offered in chat without an example prompt is refused, naming the missing field. The entry stays a draft.', apply(ctx) { const st = ctx.state; st.tab = 'skills'; st.sel = 'travel-policy-lookup'; st.over = st.over || {}; st.over['travel-policy-lookup'] = 'draft'; st.missingFor = 'travel-policy-lookup'; ctx.rerender(); } },
+      { title: 'Catalogue card preview', tone: 'info', text: 'The reviewer sees the card the catalogue will show: purpose, the first example prompt, the call and the category.', apply(ctx) { const st = ctx.state; st.tab = 'review'; st.sel = 'Meeting notes'; st.cards = st.cards || {}; st.cards['Meeting notes'] = { purpose: 'Turn a recording or notes into actions and owners.', examples: ['Turn these notes into actions'], category: 'Meetings' }; ctx.rerender(); } },
       { title: 'Literal credential refused', tone: 'danger', text: 'Saving an HTTP tool with a literal Authorization header, API key query parameter or secret body field is refused: credentials go in as vault references, resolved at call time.', apply(ctx) { ctx.state.tab = 'tools'; ctx.rerender(); httpForm(ctx, { header: 'Bearer 9f3ab21c7d4e5f6a', literal: true }); } }
     ],
     render(root, ctx) {
@@ -884,6 +916,9 @@ table.dt .actions{white-space:nowrap}
         + deprecatedNote + retiredNote
         + (st.redteamRefused && sel.kind === 'agent' && selStatus === 'in review' ? UI.notice('<b>Red-team gate.</b> Approving ' + esc(sel.version) + ' needs a passing run of ' + esc((sel.redteam || {}).suite || 'its suite') + ' for this version\'s hash. No run exists for it yet.', 'danger', UI.btn('Red team', { size: 'sm', attrs: 'data-redteam' })) : '')
         + UI.kv([['Owner', esc(sel.owner)], ['Version', '<span class="mono">' + esc(sel.version) + '</span> <span class="muted">' + esc(selStatus) + '</span>'], ['Schema hash', '<span class="mono">' + esc(sel.hash) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="' + esc(sel.hash) + '"' })], ['Implemented as', esc(sel.impl)], ['Required scopes', '<span class="mono">' + esc(sel.scopes) + '</span>'], ['Ceiling label', UI.label(sel.label, { sm: true })], ['Confirmation required', esc(sel.confirm) + (sel.side && sel.side !== 'read-only' ? ' <span class="muted">(' + esc(sel.side) + ' class)</span>' : '')], ['Rate limit', esc(sel.rate)], ['Secrets', '<span class="mono">' + esc(sel.secrets) + '</span>'], ['MCP hint', esc(sel.hint)]].concat(sel.http ? [['Request', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.method + ' ' + sel.http.url) + '</span>'], ['Parameters', esc(sel.http.params)], ['Headers', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sel.http.headers) + '</span>'], ['Response', esc('JSON pointer ' + sel.http.pointer + ', at most ' + sel.http.cap + ', ' + sel.http.timeout + ' timeout')], ['Calls', esc(sel.http.calls)], ['Outbound guard', 'resolved once, every address checked, connection pinned, redirects not followed']] : []).concat(chainRows(ed(sel))).concat([['Used by', usedByText(sel) + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
+        + (st.missingFor === sel.id ? UI.notice('<b>Missing for the catalogue.</b> ' + esc(sel.id) + ' is offered in chat, so the catalogue needs ' + esc(missingOf(cardOf(st, sel)).join(', ')) + '. It stays a draft.', 'danger', UI.btn('Add them', { size: 'sm', attrs: 'data-cardedit' })) : '')
+        + '<div class="hstack"><div class="eyebrow grow">Catalogue card</div>' + (selStatus !== 'retired' ? UI.btn('Edit', { kind: 'ghost', size: 'xs', icon: 'edit', attrs: 'data-cardedit aria-label="Edit the catalogue card"' }) : '') + '</div>'
+        + cardPreview(st, sel) + (missingOf(cardOf(st, sel)).length ? '<div class="muted" style="font-size:12px">' + (offeredInChat(sel) ? 'Asked for at submit: ' : 'Not asked for (no profile offers it in chat): ') + esc(missingOf(cardOf(st, sel)).join(', ')) + '</div>' : '')
         + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) + '</div>'
         + '<div class="vstack gap4">' + checks.map((c) => '<div class="hstack" style="color:var(--' + (c[1] ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c[1] ? 'check' : 'x', 14) + '<span style="color:var(--fg)">' + esc(c[0]) + '</span></div>').join('')
         + (!checksOk && sel.egressNote ? '<div style="font-size:12px;color:var(--danger-fg)">' + esc(sel.egressNote) + '</div>' : '') + (sel.kind !== 'tool' ? chainProblems(sel).map((x) => '<div style="font-size:12px;color:var(--danger-fg)">' + esc(x) + '</div>').join('') : '') + '</div>'
@@ -897,7 +932,7 @@ table.dt .actions{white-space:nowrap}
         + UI.btn('Test harness', { kind: 'ghost', icon: 'play', attrs: 'data-harness-open' }) + '</div>'
         + harness + '</aside>';
 
-      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
+      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.reg-card{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.reg-ex{font-size:13px;font-style:italic;color:var(--fg2);overflow-wrap:anywhere}.registry-page .tabs .count{margin-left:2px}</style>'
         + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', UI.btn('Allowed hosts', { attrs: 'data-hosts' }) + UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('New HTTP tool', { attrs: 'data-newhttp' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit' }))
         + (st.showEgress && !st.egressFixed ? UI.notice('<b>Undeclared egress.</b> mail.send_internal opened a connection to <span class="mono">ldap.northwind.internal</span> during checks. Approve stays disabled until the owner declares or removes the destination.', 'danger', UI.btn('Declare destination', { size: 'sm', attrs: 'data-declare' })) : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: entries.filter((e) => e.kind === 'tool').length }, { id: 'skills', label: 'Skills', count: entries.filter((e) => e.kind === 'skill').length }, { id: 'agents', label: 'Agents', count: entries.filter((e) => e.kind === 'agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
@@ -946,6 +981,9 @@ table.dt .actions{white-space:nowrap}
       });
       on('click', '[data-submitreview]', async () => {
         const ctx = cur.ctx; const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel);
+        // B-12304: checked at submit: an entry offered in chat needs a purpose, an example prompt and a category.
+        const miss = offeredInChat(e) ? missingOf(cardOf(cur.st, e)) : [];
+        if (miss.length) { cur.st.missingFor = e.id; ctx.rerender(); ctx.toast('<b>Missing for the catalogue.</b> Add ' + esc(miss.join(', ')) + ' before submitting.', 'danger', 6000); return; }
         const ok = await ctx.confirm({ title: 'Submit ' + esc(e.id) + ' for review', tag: 'review', tone: 'info', body: '<p class="fg2" style="margin:0">Automated checks run first: schema, dependency scan and declared egress. A tool admin reviews after they finish.</p>', kv: [['Version', e.version], ['Owner', e.owner]], ok: 'Submit' });
         if (ok) { cur.st.over[e.id] = 'in review'; e.submitted = 'today, ' + e.owner; ctx.rerender(); ctx.toast(esc(e.id) + ' is in the review queue.', 'ok'); }
       });
@@ -956,6 +994,7 @@ table.dt .actions{white-space:nowrap}
       on('click', '[data-publishmore]', () => publishScope(cur.ctx, find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel)));
       on('click', '[data-editentry]', () => { const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); if (e.kind === 'tool') cur.ctx.toast('Tool drafts are edited in their source: script, OpenAPI document or MCP server. The registry only records the entry.'); else editChain(cur.ctx, e); });
       on('click', '[data-submit]', () => submitEntry(cur.ctx));
+      on('click', '[data-cardedit]', () => { const e = find(cur.st.sel) || cur.st.added.find((x) => x.id === cur.st.sel); if (e) cardFields(cur.ctx, e); });
       on('click', '[data-newhttp]', () => httpForm(cur.ctx, {}));
       on('click', '[data-hosts]', () => hostsDrawer(cur.ctx));
       on('click', '[data-entrylink]', (e, t) => { e.preventDefault(); const x = find(t.dataset.entrylink); if (!x) return; cur.st.sel = x.id; cur.st.tab = x.kind === 'tool' ? 'tools' : x.kind + 's'; cur.ctx.rerender(); });
@@ -1171,7 +1210,10 @@ table.dt .actions{white-space:nowrap}
         + UI.field('Side-effect class', UI.select(['read-only', 'write', 'destructive', 'external-comms'], 'write', 'data-side'), 'write, destructive and external-comms require user confirmation by default')
         + UI.field('Max label', UI.select(['public', 'internal', 'confidential', 'restricted'], 'internal', 'data-label'))
         + UI.field('Required scopes', UI.input('tools:invoke')) + UI.field('Allowed egress zones', UI.input('none', {}), 'Every observed destination must be declared here')
-        + '<div class="span2">' + UI.field('Rate limit', UI.input('60 per user per hour')) + '</div></div>'
+        + '<div class="span2">' + UI.field('Rate limit', UI.input('60 per user per hour')) + '</div>'
+        + '<div class="span2">' + UI.field('Purpose', UI.input('', { placeholder: 'What a person gets from it, in one line', attrs: 'data-spurpose' }), 'Shown on the catalogue card') + '</div>'
+        + '<div class="span2">' + UI.field('Example prompts', UI.textarea('', { rows: 2, placeholder: 'One per line', attrs: 'data-sexamples' }), 'At least one for an entry offered in chat') + '</div>'
+        + UI.field('Category', UI.input('', { placeholder: 'Documents, Finance, Writing', attrs: 'data-scat' })) + '</div>'
         + UI.notice('Submitting creates a <b>draft</b>. Automated checks run, then a tool admin reviews it. Nothing reaches a tenant before review.', 'info'),
       actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save draft and run checks', { kind: 'primary', attrs: 'data-ok' }),
       cls: 'wide',
@@ -1181,6 +1223,7 @@ table.dt .actions{white-space:nowrap}
           App.closeOverlay();
           const st = ctx.state; st.added = st.added || [];
           const entry = { id: name, kind, side: kind === 'tool' ? side : undefined, version, label, egress: 'none', status: 'draft', owner: 'Mara Okafor', scopes: 'tools:invoke', confirm: side === 'read-only' ? 'never' : 'always', rate: '60 per user per hour', secrets: 'none', hint: 'none', hash: Math.random().toString(16).slice(2, 10), impl: 'OpenAPI operation', contents: 'Instructions only', tools: 'none', profile: 'plan: chat-default at medium', skills: 'none', kbs: 'none', guard: 'Default baseline v9', limits: '12 steps, 6,000 tokens, 60 s, 4 tool calls', checks: [['Schema valid', true], ['Dependency scan clean', true], ['Declared egress matches observed', true]] };
+          st.cards = st.cards || {}; st.cards[name] = { purpose: m.querySelector('[data-spurpose]').value.trim(), examples: m.querySelector('[data-sexamples]').value.split('\n').map((x) => x.trim()).filter(Boolean), category: m.querySelector('[data-scat]').value.trim() };
           st.added.push(entry); st.sel = name; st.tab = kind === 'tool' ? 'tools' : kind + 's';
           ctx.rerender(); ctx.toast('Draft ' + esc(name) + ' ' + esc(version) + ' saved. Checks are running in the sandbox.', 'ok');
         });

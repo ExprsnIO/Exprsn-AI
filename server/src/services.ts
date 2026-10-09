@@ -88,6 +88,8 @@ import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
 import { ChatArtifacts } from './chat/artifacts.js';
 import { ChatInvocations } from './chat/invocations.js';
+import { ThinkingService } from './thinking/service.js';
+import { DiscoveryService } from './discovery/service.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -222,6 +224,10 @@ export interface Services {
   chatArtifacts: ChatArtifacts;
   /** 1.7.0 (B-40): agents, tools, skills and workflows called from a conversation. */
   chatInvocations: ChatInvocations;
+  /** 1.7.0 (B-117): the thinking policy, budgets, plans and reflection. */
+  thinking: ThinkingService;
+  /** 1.7.0 (B-123): the catalogue, publish notices, composer suggestions and the registry's catalogue fields. */
+  discovery: DiscoveryService;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -623,6 +629,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     sharing: new ConversationSharing(() => s),
     chatArtifacts: new ChatArtifacts(() => s),
     chatInvocations: new ChatInvocations(() => s),
+    thinking: new ThinkingService(() => s),
+    discovery: new DiscoveryService(() => s),
     contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
@@ -746,6 +754,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     }
   };
   chat.invocations = s.chatInvocations; // 1.7.0 (B-40): write-tool cards, agents handed a turn, the conversation's skills
+  chat.thinking = s.thinking; // 1.7.0 (B-117): the thinking policy, budgets, plans and reflection
+  agents.thinking = s.thinking;
   registerPlatformJobs(s);
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
@@ -860,6 +870,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // 1.5.0, Sprint 29 (B-3302, B-3305): custom roles in force (reloaded from the bus), the access review sweep.
   s.customRoles.init();
   s.accessReviews.registerJobs();
+  s.discovery.registerJobs(); // 1.7.0, Sprint 41d (B-12302): the weekly digest of publish notices
   s.imports.registerJobs(); // 1.5.0, Sprint 30 (B-3801 to B-3803): harvests, model imports, bundle matching
   // 1.5.0, Sprint 32b (B-3903, B-3906): event and schedule triggers on workflows, dead letters of failed runs.
   s.workflowTriggers.install();
@@ -889,6 +900,8 @@ function registerPlatformJobs(s: Services): void {
   s.jobs.register('chat.sweep', async (p, ctx) => {
     const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
     await s.chatInvocations.expireCards(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-4003): cards past their expiry
+    await s.mcpServer.expireStanding(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-12201): standing approvals past their period
+    await s.thinking.purgeThinking(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-11701): thinking past the policy's retention
     await s.chat.store.expire(24 * 3_600_000);
     return { interrupted };
   });
@@ -912,6 +925,7 @@ export function startSchedules(s: Services): void {
   s.scheduler.every('memory.consolidate', 24 * 60 * 60_000, activeTenants); // Sprint 30 (B-3702)
   s.scheduler.every('chat.retention', s.cfg.CHAT_RETENTION_SWEEP_MINUTES * 60_000, activeTenants);
   s.scheduler.every('chat.sweep', 15 * 60_000, activeTenants);
+  s.scheduler.every('catalog.digest', 60 * 60_000, activeTenants); // 1.7.0 (B-12302): digests a week after the last
   s.training.schedule(s.scheduler, activeTenants);
   s.zones.schedule(s.scheduler, activeTenants);
   s.ops.schedule(s.scheduler, activeTenants);

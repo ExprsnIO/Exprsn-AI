@@ -128,8 +128,9 @@ export function chatRoutes(s: Services): Router {
     res.status(202).json(await wrap(() => inv().callTool(principalOf(req), String(req.params.id), body))(req));
   });
   r.post('/conversations/:id/invocations/:iid/decide', write, async (req, res) => {
-    const body = parseBody(z.object({ decision: z.enum(['approve', 'deny']) }), req.body);
-    res.json(await wrap(() => inv().decide(principalOf(req), String(req.params.id), String(req.params.iid), body.decision))(req));
+    // 1.7.0 (B-11703): a plan card may be approved with edited steps.
+    const body = parseBody(z.object({ decision: z.enum(['approve', 'deny']), steps: z.array(z.object({ title: z.string().trim().min(1).max(200), tools: z.array(z.string().trim().min(1).max(120)).max(8).default([]), data: z.array(z.string().trim().max(200)).max(8).default([]) })).min(1).max(50).optional() }), req.body);
+    res.json(await wrap(() => inv().decide(principalOf(req), String(req.params.id), String(req.params.iid), body.decision, body.steps))(req));
   });
   r.post('/conversations/:id/invocations/:iid/cancel', write, async (req, res) => {
     res.json(await wrap(() => inv().cancel(principalOf(req), String(req.params.id), String(req.params.iid)))(req));
@@ -148,6 +149,11 @@ export function chatRoutes(s: Services): Router {
   });
   r.delete('/conversations/:id/skills/:name', write, async (req, res) => {
     res.json(await wrap(() => inv().removeSkill(principalOf(req), String(req.params.id), String(req.params.name)))(req));
+  });
+  // 1.7.0 (B-12303): a dismissed composer suggestion stays away for the rest of the conversation.
+  r.post('/conversations/:id/suggestions/dismiss', write, async (req, res) => {
+    const body = parseBody(z.object({ key: z.string().trim().regex(/^(workflow|agent|tool|skill):.{1,200}$/, 'An entry key such as workflow:summarise-contract') }).strict(), req.body);
+    res.json(await wrap(() => s.discovery.dismiss(principalOf(req), String(req.params.id), body.key, { ip: ip(req), traceId: req.traceId }))(req));
   });
 
   r.get('/conversations/:id/artifacts', read, async (req, res) => {

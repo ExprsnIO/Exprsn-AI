@@ -485,7 +485,102 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   model's own `config.json` and can be renamed on the Classifiers screen; thresholds, eval sets, publication and the
   minimum-sample rule apply as to every engine.
 
-## Deployment hardening
+## Standing approvals for MCP write calls (1.7.0, Sprint 41a)
+
+- **A standing approval replaces the per-call click, not the checks (B-12201).** It is a reason for the MCP server to
+  skip the browser approval of a write call; the call still goes through the catalogue (only tools published to the
+  person in that workspace, at the label it publishes), the dispatcher (the tool's ceiling against the call's label,
+  the tool-call guardrail, the rate limit, the chain), the `context` and `untrusted-content` checkpoints on the
+  result, metering and the audit chain. A verdict of `require-approval` from the tool-call guardrail is never covered:
+  the call waits in the Flags queue for a reviewer, as every held call does, and its message says so.
+- **Granted only by the person, only from a browser.** The routes that grant and revoke accept a browser session
+  (`sessionOnly`), never the OAuth token the client holds, so a client cannot widen what it may do on its own, and a
+  stolen MCP token stays bound to what was granted. An approval covers calls made as its owner only; another person's
+  approval never applies, and another person cannot revoke it (an identity admin can, audited with `by: admin`).
+- **Bounded.** One workspace's server; one published write tool or every one; one client (the OAuth client id the
+  client signed in with, as held calls show it) or any; up to `write` or `destructive`; the label the person held in
+  that workspace when they granted it (a call at a higher label is not covered); at most
+  `MCP_STANDING_APPROVAL_MAX_DAYS` days, then expired by the chat sweep and audited. A read tool, a destructive tool
+  under a write-only class, or a period past the longest are refused at grant.
+- **Visible.** Every covered call's `mcp.server.call` event names the approval, the approval counts its uses, revoked
+  and expired approvals stay listed for 30 days, and the identity admin sees the tenant's together.
+
+## The guardrail rule builder (1.7.0, Sprint 41b)
+
+- **A draft is a suggestion in shadow (B-9601).** The model's answer never becomes an enforced rule by itself: the
+  server forces `stage: shadow` and `onError: closed` before validation, validates with the same schema and RE2
+  compiler as a hand-written rule, and saves only into the set's open draft, which runs nowhere until the version is
+  published, and even then only records what the rule would do until it is promoted within the false-positive limit.
+  Promotion and publication are the existing paths with their dual control; the builder adds no route that changes a
+  published rule.
+- **The description is screened, metered and audited.** It passes the `user-input` checkpoint as the admin (a secret
+  or a blocked phrase in the description refuses the draft, a redaction reaches the model redacted), the model call
+  needs `inference:invoke` and goes through the gateway like any turn (profile label, quota, metering, the
+  `model-output` checkpoint on the answer), and every draft is audited with the set, the profile, the mechanism and the
+  action, never the description.
+- **The baseline stays out of reach.** Drafting on the platform baseline needs a platform guardrail admin, like every
+  write; a drafted rule with a baseline rule's id gets a free id instead, so a tenant draft cannot relax a baseline rule
+  by name (the relaxation check runs again at save and at publish).
+
+## Thinking: policy, budgets, plans and reflection (1.7.0, Sprint 41c)
+
+- **Thinking is data with its own reader list (B-11701).** It was always sealed, screened at `model-output` and
+  labelled with its answer; the policy now decides who reads it on top of the clearance: the conversation's author,
+  reviewers (`flags:review`) or nobody. The decision is made on every read (the conversation view, a run's steps, an
+  export), not only when the answer is written, so tightening the policy hides thinking already stored; a reader of a
+  shared conversation never gets thinking, as before. With "nobody" the stream sends none and the store keeps only the token count, so nothing
+  is left to leak. Retention drops the sealed text apart from the answer in the chat sweep (audited); an export
+  carries thinking only when the policy allows exports and the exporter may see it. The policy is per tenant and per
+  workspace (the workspace's wins), managed with `profiles:manage` and audited with the values set.
+- **A budget never refuses (B-11702).** A spent thinking budget lowers the level to `low` (and leaves `off` alone),
+  so a budget is a cost control, not a denial of service on the turn; the drop is on the usage record and the turn
+  says so. `/v1`'s `reasoning_effort` is capped by the profile's ceiling first and the budget second.
+- **A plan bounds the tools; it grants nothing (B-11703).** A plan-first turn calls no tool before the person decides.
+  The plan only narrows: approved, only the tools it names are offered, and an edited plan may name only tools the
+  conversation could already call (the server refuses others); write and destructive tools keep their own cards and
+  guardrails (B-4003), and the dispatcher, labels and the chain apply as before. In an agent run, a call outside the
+  approved plan pauses for the run's owner (or an agent admin) like any held call. A plan is model output: it is shown
+  as escaped text, sealed on the message and the run, and only the step titles and tool names reach the chain node.
+  A declined or expired plan ends the turn or the run with nothing run.
+- **Reflection is a second opinion, not a gate (B-11704).** The reflecting profile is resolved for the conversation's
+  label like any profile, reads the question, answer, cited passages and tool results (cut to
+  `THINKING_REFLECTION_MAX_CHARS` each, the answer and sources treated as data by its prompt), and runs with thinking
+  off. Its revised answer passes the `model-output` checkpoint like any answer (blocked or held: dropped; redacted:
+  kept redacted) and is shown beside the original, never in place of it; an unreadable verdict is recorded as a
+  finding rather than a pass. Its tokens are metered to the conversation under the reflecting profile.
+- **Levels stay under the ceiling (B-11705).** An agent's or a workflow step's thinking level is checked against its
+  profile's ceiling at publish (refused, naming the ceiling) and capped at run time as well.
+- **Evaluations keep what they judged (B-11706).** Thinking, plans and reflections from an evaluation are sealed with
+  the outputs; a thinking rubric is judged by the set's judge profile, which sees the thinking as data.
+
+## Finding what you can use (1.7.0, Sprint 41d)
+
+- **The catalogue is the same decision, not a new one (B-12301).** `GET /api/catalog` is the workspace form of a
+  conversation's capabilities (`ChatInvocations.workspaceCapabilities`, the code path `GET
+  /api/conversations/:id/capabilities` uses): the profile's tool list through the dispatcher, the runnable agents, the
+  profile's skill allow-list and the workspace's published workflows, for the caller's own principal and current
+  workspace, and only through a profile the caller may pick (404 otherwise). It grants nothing: every call still goes
+  through the conversation routes and their checks (the dispatcher, cards, guardrails, labels). On top of the
+  conversation's list it drops every entry whose label is above the caller's clearance, callable or not, so an entry
+  the caller may not see is never named, not even as "not on this profile"; the "not on this profile" entries are only
+  those another profile the caller may pick offers, resolved through the same dispatcher.
+- **A notice is sent once, within the label (B-12302).** Recipients are the active members of the workspaces the entry
+  is published to (every active user of the tenant for a tenant-wide entry) whose clearance reaches the entry's label;
+  the notification carries that label and only the entry's name, kind and description (no content), and links to the
+  catalogue, which re-checks everything when it opens. The (person, entry) row is claimed through a unique key before
+  anything is sent, so concurrent publishes or a later version never notify twice; a person's choice (each, weekly
+  digest, off) is theirs alone (`/api/me/catalog-notices`), audited. A digest carries the highest label of what it
+  lists.
+- **Suggestions call no chat model (B-12303).** The draft is embedded by the embedding profile only, refused when the
+  conversation's label is above that profile's, metered to the caller, and not stored; the candidates are exactly the
+  entries the conversation (or the workspace through the caller's profile) may call, within the caller's clearance.
+  Entry vectors are derived from the entries' public catalogue fields, cached per entry version and model in the
+  tenant, and recomputed when the text changes. A dismissal is the conversation owner's alone (another user gets 404),
+  audited. A profile admin turns suggestions off per profile.
+- **Catalogue fields are not part of the approval (B-12304).** Purpose, examples and category are shown text, kept
+  outside the schema hash, so filling them on a published entry does not change what was reviewed and approved; they
+  are escaped wherever they are shown. The submit check refuses an entry offered in chat without them (422 naming the
+  field, audited); entries published before keep working.
 
 ## Model servers and platform administration (1.6.0, Sprint 35)
 
@@ -598,6 +693,35 @@ filter, private `/tmp`, only the state directory writable.
   imported engine's worker protocol is this server's own (one `POST /classify`), with no reference worker shipped; a
   worker must share the blob store (filesystem or S3) to read the files, and a classifier whose worker is missing
   scores nothing (its evaluation records errors per case).
+- The guardrail rule builder (1.7.0, Sprint 41b). The draft quality is the profile's model's: a vague description can
+  become a pattern on its last words, and only the schema and the RE2 compiler check it, so a reviewer reads the YAML and
+  the replay before promoting. The draft prompt is one English text with the mechanisms it names; a description that
+  needs a classifier or a guard-model category is drafted as a pattern or refused by the schema. A draft saved into a
+  set whose version waits for review is refused rather than queued.
+
+- Thinking policy, budgets, plans and reflection (1.7.0, Sprint 41c). Thinking tokens are an estimate (the output
+  tokens split by the share of characters that were thinking), not a count the model reports. Budgets are checked when
+  a turn starts, so turns running at the same time can each spend past the limit; workflow model steps, evaluations and
+  the reflection and plan drafts are metered but not held to a thinking budget. Retention drops the thinking of chat
+  messages only: a run's steps keep theirs with the run (hidden by the visibility rule, purged with the run). A
+  plan-first turn or run whose draft cannot be parsed goes on without a plan (logged, `plan-skipped`), so tools are
+  then offered as for any turn, still under their own cards and approvals. In an agent run an edited plan is not
+  checked against the agent's tools (the agent's own tool list still bounds every call). A plan bounds tool names, not
+  arguments or the data a step reads; the step order is an instruction to the model, not enforced. Reflection is a
+  model's judgment: it can miss a problem or report one that is not there, and only the revised text is screened (the
+  findings are shown as written, escaped). Policies have no unique key per tenant and workspace in the schema, so two
+  first saves at the same moment can write two rows, of which one is read.
+- Finding what you can use (1.7.0, Sprint 41d). The catalogue lists entries as the caller's current workspace sees
+  them at the lowest label; inside a conversation with a higher label some may be hidden by their ceiling (the
+  composer pickers say why). Publish notices go out when an entry is approved, moved to more workspaces or a workflow
+  is published, not when a profile starts listing a tool, an entry is restored from deprecated, or a person joins a
+  workspace (the catalogue shows those). Suggestions rank by the embedding model's similarity only (no chat-model
+  re-ranking), so they are as good as the entries' descriptions and examples; their minimum score is one setting for
+  the whole deployment; the draft is sent to the embedding model on every pause in typing (the console waits 400 ms),
+  under the ordinary API rate limits only. A dismissal made before a new chat has a conversation is kept in the
+  browser until the conversation exists. "Offered in chat" for the submit check is an agent, a skill, or a tool a
+  published profile lists at submit time; a tool added to a profile later is not asked for its fields.
+  `REGISTRY_DISCOVERY_REQUIRED` is one switch for the deployment, not per tenant.
 - The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
   only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
   Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
@@ -631,7 +755,7 @@ filter, private `/tmp`, only the state directory writable.
 - The MCP server and MCP authorization (1.6.0, Sprint 37b, B-7101 to B-7103). The server offers no sessions, no
   event stream and no resources or prompts: a long agent run or a workflow paused on an approval answers with a handle
   after 20 s, and the client asks again with `exprsn_run_status`. Held calls are matched by the arguments' hash, so a
-  client that changes any argument asks again; the approval is per call, with no "trust this client" setting. Agents
+  client that changes any argument asks again; the approval is per call unless the person grants a standing approval (1.7.0, B-12201) for a tool or a server, a client or any, for a period. Agents
   published to a workspace run as tools with their own approvals inside the run (decided on the Runs screen, as in the
   console), not with a held call. The DNS-rebinding check refuses any foreign `Origin`, so a browser-based MCP client
   on another origin cannot use the endpoint. Dynamically registered clients are not removed when unused. On the client
