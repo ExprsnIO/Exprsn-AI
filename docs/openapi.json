@@ -40343,7 +40343,12 @@
                     }
                   },
                   "target": {
-                    "const": "models"
+                    "type": "string",
+                    "enum": [
+                      "models",
+                      "classifiers"
+                    ],
+                    "description": "1.7.0 (B-3806): classifiers registers a text-classification model as an imported classifier engine"
                   },
                   "label": {
                     "type": "string",
@@ -40477,10 +40482,233 @@
         "tags": [
           "imports"
         ],
-        "summary": "See docs/api.md",
+        "summary": "imports:run. B-3804: the review step of a dataset import: the checks (format, quota and sample, licence, label, destination, PII in the preview rows, columns), the schema preview and the schedule; nothing is written",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repositoryId",
+                  "item",
+                  "target"
+                ],
+                "properties": {
+                  "repositoryId": {
+                    "type": "string"
+                  },
+                  "item": {
+                    "type": "string"
+                  },
+                  "configuration": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "resources": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "splits": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "training",
+                      "classifiers",
+                      "knowledge",
+                      "store"
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "licence": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attribution": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "exception": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "workspaceId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sample": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "keep at most this many rows (a dataset above the quota must be sampled)"
+                  },
+                  "final": {
+                    "type": "boolean",
+                    "description": "the confirm step: a missing destination name or column refuses"
+                  },
+                  "training": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "textColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "labelColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "splits": {
+                        "type": "object"
+                      },
+                      "conversationData": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "classifiers": {
+                    "type": "object",
+                    "properties": {
+                      "evalSet": {
+                        "type": "string"
+                      },
+                      "textColumn": {
+                        "type": "string"
+                      },
+                      "labelColumn": {
+                        "type": "string"
+                      },
+                      "classifier": {
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "evaluate": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "knowledge": {
+                    "type": "object",
+                    "properties": {
+                      "kbId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "embedModel": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "titleColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "textColumns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "metadataColumns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "groupBy": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "schedule": {
+                        "type": "string",
+                        "enum": [
+                          "15m",
+                          "hourly",
+                          "daily",
+                          "weekly",
+                          "monthly",
+                          "manual",
+                          "publisher"
+                        ]
+                      },
+                      "dropPii": {
+                        "type": "boolean"
+                      },
+                      "labelFloor": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -40490,10 +40718,233 @@
         "tags": [
           "imports"
         ],
-        "summary": "See docs/api.md",
+        "summary": "imports:run. B-3804 to B-3806: requests a dataset import into Training, Classifiers, Knowledge or the store (201 the import; 422 refused with nothing written; 409 when the licence needs recording or an exception)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "repositoryId",
+                  "item",
+                  "target"
+                ],
+                "properties": {
+                  "repositoryId": {
+                    "type": "string"
+                  },
+                  "item": {
+                    "type": "string"
+                  },
+                  "configuration": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "resources": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "splits": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "training",
+                      "classifiers",
+                      "knowledge",
+                      "store"
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "licence": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "attribution": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "exception": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "workspaceId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "sample": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "keep at most this many rows (a dataset above the quota must be sampled)"
+                  },
+                  "final": {
+                    "type": "boolean",
+                    "description": "the confirm step: a missing destination name or column refuses"
+                  },
+                  "training": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "textColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "labelColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "splits": {
+                        "type": "object"
+                      },
+                      "conversationData": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "classifiers": {
+                    "type": "object",
+                    "properties": {
+                      "evalSet": {
+                        "type": "string"
+                      },
+                      "textColumn": {
+                        "type": "string"
+                      },
+                      "labelColumn": {
+                        "type": "string"
+                      },
+                      "classifier": {
+                        "type": [
+                          "object",
+                          "null"
+                        ]
+                      },
+                      "evaluate": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "knowledge": {
+                    "type": "object",
+                    "properties": {
+                      "kbId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "embedModel": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "titleColumn": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "textColumns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "metadataColumns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "groupBy": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "schedule": {
+                        "type": "string",
+                        "enum": [
+                          "15m",
+                          "hourly",
+                          "daily",
+                          "weekly",
+                          "monthly",
+                          "manual",
+                          "publisher"
+                        ]
+                      },
+                      "dropPii": {
+                        "type": "boolean"
+                      },
+                      "labelFloor": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -40642,7 +41093,12 @@
                     }
                   },
                   "target": {
-                    "const": "models"
+                    "type": "string",
+                    "enum": [
+                      "models",
+                      "classifiers"
+                    ],
+                    "description": "1.7.0 (B-3806): classifiers registers a text-classification model as an imported classifier engine"
                   },
                   "label": {
                     "type": "string",
@@ -41286,12 +41742,21 @@
         "tags": [
           "imports"
         ],
-        "summary": "See docs/api.md",
+        "summary": "imports:run. B-3804: the select step of a dataset: configurations, splits, resources (files or paged APIs), the licence and update frequency as the source states them",
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "the dataset's id on the source",
             "schema": {
               "type": "string"
             }
@@ -41301,7 +41766,8 @@
           "default": {
             "$ref": "#/components/responses/Default"
           }
-        }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/imports/repositories/{id}/disable": {

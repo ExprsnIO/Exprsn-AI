@@ -458,6 +458,20 @@ dialogs.
   override as one platform admin and approves it as another in a second browser.
 
 
+## Screens made live in 1.7.0
+
+- **Import** (B-3807, Sprint 40b): a six-step wizard whose stepper is a list of buttons with `aria-current="step"` on
+  the current one and the later ones disabled; the kind and destination are segmented controls with `aria-pressed`;
+  repositories are cards that are buttons with `aria-pressed`; the catalogue and the Imports and Repositories tables
+  are rows with `tabindex` that take Enter and Space; facet filters are list links and active filters are chips with
+  an accessible remove label; every control of the review and destination forms has a label (licence, label,
+  attribution, justification, sample, dataset name, columns, eval set, classifier, knowledge base, embedding model,
+  schedule, drop PII), checkboxes carry their text, and the checks, schema preview and log are tables. Progress is a
+  meter with its percentage in text; the running import's log is a timeline in text; the step badge keeps 4.5:1 in
+  dark mode. The log drawer's table goes through the accessibility pass. `e2e/tests/import.spec.ts` runs axe-core on
+  the repositories, review, destination, done and log views, and the accessibility and reflow sweeps cover the screen
+  and its states. The entry points on Models, Training, Classifiers and Knowledge are text buttons.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

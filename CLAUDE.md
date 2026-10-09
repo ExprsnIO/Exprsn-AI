@@ -343,6 +343,15 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `resolveSession` for `exe_` bearers) behind `routes/apps-embed-public.ts` (`/embed/...` pages with their own CSP
   and `/api/public/embeds/*`, outside `/api`); `web/js/embed.js` is the pages' script. `server/test/sprint39d-helpers.ts`
   mints host tokens and builds a tenant CA without the signer.
+- 1.7.0 Sprint 40b: `imports/rows.ts` (B-3804: the streaming CSV, JSON and JSON Lines parsers and the paged readers for
+  the CKAN datastore, Socrata, e-Stat, OGD and SDMX-CSV, capped at the sample or `IMPORT_DATASET_MAX_ROWS`),
+  `imports/datasets.ts` (`s.imports.datasets`: `inspect`, `plan` with the schema preview and PII flags, `request`, the
+  job `imports.dataset`, the destinations into `training.registerImported`, `guard.classifiers.addCases` and
+  `knowledge.create` + `addSource(kind: dataset)`, and `knowledgeItems`, the rows of a dataset source as documents on
+  every refresh, set on `knowledge.datasetItems`); `datasetDetail` on every dataset adapter; the `imported` classifier
+  engine (B-3806: `config.model` names the staged files, `scoreImported` calls the worker at `CLASSIFIER_WORKER_URL`,
+  `createImported`), and `registerClassifier` in `imports/service.ts` for a model import with `target: classifiers`.
+  Fakes in `server/test/sprint40b-fakes.ts` (an open-data portal, a dataset hub, a classifier worker).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.7.0 (in progress)
+
+### Dataset import, knowledge sets and the Import screen (Sprint 40b, B-3804 to B-3807)
+
+- Migration `042b_dataset_import`: `import_jobs.result`, `rows_total`, `sample_rows`, `dataset_id`, `kb_id`, `source_id`,
+  `classifier_id`, `eval_set`; `training_datasets.import_id`.
+- Dataset import (B-3804): a dataset from a confirmed repository (CKAN with its datastore, DCAT-AP, SDMX, OpenML,
+  InvenioRDM, a Hugging Face compatible hub; Kaggle's archives refused) through the same wizard as a model: the select
+  step lists configurations, splits and resources and previews the schema with the columns the PII detectors flag;
+  the review step checks format, quota (a sample above it), licence with the legal-review exception, label, the
+  destination's permission and the columns; the `imports.dataset` job streams rows page by page (CSV, TSV, JSON, JSON
+  Lines; the CKAN datastore, Socrata, e-Stat and OGD APIs by offset and limit; SDMX-CSV) into staging and registers a
+  training version (`source_kind: import`, scrubbed, sealed and hashed as an inline one), an eval set, a knowledge set
+  or the sealed rows, with a signed manifest. `GET /api/imports/repositories/:id/dataset`, `POST /api/imports/dataset-plan`,
+  `POST /api/imports/datasets`; setting `IMPORT_DATASET_MAX_ROWS`.
+- Knowledge sets (B-3805): `knowledge_sources.kind = dataset` with a column mapping, grouping, PII columns dropped,
+  citations back to the row and a refresh schedule that follows the publisher (`weekly` and `monthly` join the
+  schedules); a refresh re-reads the source and swaps changed rows only.
+- Eval sets and imported engines (B-3806): rows into a classifier eval set with the minimum-sample warnings, a new or
+  existing classifier set on them and trained or evaluated at once; `POST /api/imports` with `target: classifiers`
+  registers a text-classification model as a classifier with the `imported` engine, scored by the classifier worker
+  (`CLASSIFIER_WORKER_URL`, `CLASSIFIER_WORKER_TIMEOUT_MS`).
+- Console (B-3807): the Import screen is live (wizard, Imports queue with cancel, retry and logs, Repositories with
+  dual control), with entry points on Models, Training, Classifiers and Knowledge; `e2e/tests/import.spec.ts` with
+  axe-core. Prototype boards: three more Import states, the dataset source on Knowledge, the imported engine on
+  Classifiers, an imported version on Training.
+
 ## 1.6.0
 
 ### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)

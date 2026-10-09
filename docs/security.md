@@ -414,6 +414,34 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
   it ends with its key, with the app's settings turned off, or when the designers end it.
 
+## Dataset import, knowledge sets and imported classifier engines (1.7.0, Sprint 40b)
+
+- **Rows are read, never trusted (B-3804).** A dataset import reaches only the hosts of confirmed repositories, through
+  the staging proxy when there is one, page by page (the sample or `IMPORT_DATASET_MAX_ROWS` at most, `IMPORT_MAX_BYTES`
+  of JSON Lines) into a staging object in the blob store, never whole in memory; the readers accept CSV, TSV, JSON and
+  JSON Lines and the paged APIs, and refuse the rest (spreadsheets, archives, Parquet) at the review step with nothing
+  written. The same checks a model import runs apply: the licence against the tenant's allow-list with the legal-review
+  exception (a licence the requester records counts only when the source states none), the label against the
+  requester's clearance, the quota, and the destination's own permission, which the plan refuses rather than the job.
+  The first rows go through the PII detectors so the wizard shows which columns to drop or mask before anything is
+  stored; what the training scrub then masks is on the version's report as for any version. The manifest (source,
+  revision, resources, rows, hash, licence, label, attribution, requester, destination) is signed with the KMS key and
+  kept on the import; the staging object is deleted once the destination has it (the scrub deletes a training
+  version's input as it does for pipelines).
+- **A knowledge set stays within the base's rules (B-3805).** The rows become documents of one source of kind `dataset`
+  under the base's label floor (at least the import's label); they are chunked, classified, embedded and labelled like
+  any document, and retrieval filters them by clearance and the base's access list as before. A refresh re-reads the
+  source with the same hosts, cap and columns the import used (the mapping is on the source, not re-chosen), and swaps
+  row by row by content hash, so a changed publisher table never serves half-indexed; PII columns the wizard dropped
+  stay out of every refresh.
+- **An imported engine runs on the worker, not here (B-3806).** The model's files are downloaded through the same
+  resumable, digest-pinned, pickle-refusing path as a draft model, stored content-addressed, and never loaded by this
+  server: the classifier worker (`CLASSIFIER_WORKER_URL`) loads them by their blob keys from the same store and
+  answers scores; the worker is an operator-run service on the internal network, called within
+  `CLASSIFIER_WORKER_TIMEOUT_MS`, and a classifier without a worker cannot score or publish. The labels come from the
+  model's own `config.json` and can be renamed on the Classifiers screen; thresholds, eval sets, publication and the
+  minimum-sample rule apply as to every engine.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -453,6 +481,20 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Dataset import, knowledge sets and imported engines (1.7.0, Sprint 40b). Parquet, Excel and archives are not read: a
+  dataset published only that way is refused until the publisher offers CSV, JSON or an API; Kaggle therefore imports
+  nothing yet. SDMX is read as one SDMX-CSV stream (the providers page by period, not by row), so a very large flow is
+  cut at the row cap rather than paged. The PII preview looks at the first 200 rows of the first readable resource
+  only; a column that is clean there and dirty later is caught by the training scrub but not by the knowledge or eval
+  set destinations, which store rows as read (drop the column, or raise the label). A sampled import keeps the first
+  rows in the source's order, not a random sample. The hub's `revision` pins a dataset repository's commit, but CKAN,
+  SDMX and the API sources have none: the job reads whatever the source serves now and logs a changed modification
+  stamp rather than refusing. An eval set's cases are added, never replaced: importing twice doubles them. A
+  knowledge set's refresh reads the whole source each time (no watermark) and holds every row's document in memory as
+  text while it builds the listing; a source above a few hundred thousand rows belongs in a database connection. The
+  imported engine's worker protocol is this server's own (one `POST /classify`), with no reference worker shipped; a
+  worker must share the blob store (filesystem or S3) to read the files, and a classifier whose worker is missing
+  scores nothing (its evaluation records errors per case).
 - The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
   only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
   Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
