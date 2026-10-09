@@ -285,6 +285,39 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   a download streams them part by part and is audited with the counts. An API key scoped to `compliance:export` (the
   eDiscovery token) can do no more than its owner and is named in the audit events and the export row.
 
+## Content credentials and chat artifacts (1.6.0, Sprint 39a)
+
+- **Two manifests, two keys (B-7901).** The HMAC manifest of Sprint 20 proves to this server that it made the image;
+  it proves nothing to anyone else. The C2PA manifest is signed by a certificate the tenant's own issuing CA made, so
+  a verifier outside the server (or `exprsn-ai c2pa:verify` on a downloaded file) can check the claim's signature,
+  chain it to the tenant CA and bind it to the bytes without trusting the server. The certificate's key is in custody
+  (signer process or OpenBao) like every CA key; the app signs claim bytes through the same path it signs
+  certificates and never holds the key. Revoking the certificate on the Certificates screen retires it: the next
+  image signs with a new one, and the old manifests still verify against the chain but a validator that checks
+  revocation (CRL, OCSP, both published by the CA) will say so.
+- **The manifest is part of the file.** It covers every byte outside its own chunk, so a changed pixel fails
+  `dataHash`; a changed claim fails `signature`; a stripped chunk is `present: false`. It is added last, over the
+  HMAC chunk, and the HMAC manifest is verified over the bytes without either chunk, so both verify on one file.
+  Nothing in the manifest is secret: the prompt is a hash, the user an id and username, and the label is stated.
+- **What a conformance validator may dispute.** The implementation is the specification's parts written here (CBOR,
+  JUMBF, COSE_Sign1), not a reference library: there is no RFC 3161 time stamp (the signing time is the action's
+  `when`, and validity is judged at verification time), no `c2pa.ingredient` chain for a variation of another image,
+  and the hashed-URI hash is the SHA-256 of the assertion's content box with its header. `verify` checks what it
+  writes; a third-party validator that reads the structure will see a manifest whose signature verifies but may flag
+  those points.
+- **Artifacts are the answer's own text (B-8001).** An artifact is a sealed copy of a fenced block of an answer, with
+  the answer's label and message id; a share reader sees only versions from the messages on the shared path, never
+  from another branch or a withheld or held answer, and nothing above their clearance. Nothing in an artifact is
+  checked again by the guardrails: it was screened as part of the answer.
+- **Rendering untrusted HTML.** A model's HTML runs in an `<iframe sandbox="allow-scripts">` whose document comes from
+  `/api/public/artifacts/:vid/raw` with its own CSP: `default-src 'none'`, `connect-src 'none'`, `form-action 'none'`,
+  `frame-ancestors 'self'`, and the `sandbox` directive without `allow-same-origin`. The document is an opaque origin:
+  it cannot read the console's cookies, storage or DOM, cannot call the API with the reader's session, cannot
+  navigate the page that frames it, and cannot submit a form or open a connection. The URL is a capability (the
+  version id, an expiry and an HMAC by the KMS) valid for `CHAT_ARTIFACT_RAW_TTL_SECONDS`, minted only when a reader
+  who may see the artifact lists it; the route reads no session, so a stolen link shows that one version for a few
+  minutes and nothing else.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1398,3 +1431,11 @@ filter, private `/tmp`, only the state directory writable.
   runs have no retention purge to suspend. A compliance export matches by `createdAt`, not by activity in the range;
   file bytes are not in it; conversations hold at most 10 000 messages each; nothing is signed, so an export's
   integrity rests on the audit events around it.
+- Content credentials and artifacts (1.6.0, Sprint 39a). Content credentials are built from the specification's parts,
+  not a reference library: no time stamp, no ingredient chain for variations, and an assertion hash over the content
+  box; a third-party validator may flag those (see above). JPEG images from a ComfyUI worker carry neither manifest
+  chunk. Verification judges certificate validity at the time of the check, so an image signed with a since-expired
+  certificate reports `certificateValid: false` though it was valid when made. Artifacts are taken from fenced blocks
+  only (a model that writes code without a fence makes none), names come from the fence's info string (two blocks the
+  model names the same in one answer keep the first), and a conversation holds at most 200 artifacts. A render link
+  is a bearer capability for its lifetime; anyone holding it can show that version until it expires.

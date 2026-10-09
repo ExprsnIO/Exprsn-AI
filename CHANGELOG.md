@@ -2,6 +2,32 @@
 
 ## 1.6.0 (in progress)
 
+### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
+
+- Migration `041_provenance_artifacts`: `image_jobs.c2pa`, `pki_content_signers`, `chat_artifacts`,
+  `chat_artifact_versions`.
+- Content credentials (B-7901): a generated PNG carries a C2PA manifest store in a `caBX` chunk (`c2pa.actions`,
+  `c2pa.hash.data` over every byte outside the chunk, `io.exprsn.generation`), signed as a COSE_Sign1 (ES256) by the
+  tenant's content-credentials certificate, which the tenant's issuing CA makes on first use with its key in custody
+  and lists among the tenant's certificates (revoke it there and the next image signs with a new one). The manifest
+  travels with the bytes through the blob store, downloads and attachments; `GET /api/images/:id/content-credentials`
+  and `exprsn-ai c2pa:verify <file.png> [anchor.pem…]` read it back and check the claim hashes, the data hash, the
+  signature, the chain and its trust. The HMAC manifest of Sprint 20 stays and still verifies. Without an issuing CA
+  or key custody the image keeps the HMAC manifest and says why. Setting `IMAGE_C2PA`. Built from the
+  specification's parts (CBOR, JUMBF, COSE) in `server/src/images/c2pa.ts`; the deviations a conformance validator
+  may flag are in `docs/security.md`.
+- Versioned artifacts (B-8001): the fenced blocks of a finished answer become artifacts of the conversation, named
+  from the fence or `<language>-<n>`; a later turn that changes one adds a version and the earlier ones stay
+  readable, the same content adds none. `GET /api/conversations/:id/artifacts` and `.../versions/:n` for owners and
+  share readers; transcripts of shares and links carry the artifacts of the shown messages. HTML renders in a
+  sandboxed iframe on `GET /api/public/artifacts/:vid/raw`, a short-lived capability URL with its own CSP (an opaque
+  origin with no access to the console, its cookies or the API). Settings `CHAT_ARTIFACT_MIN_CHARS`,
+  `CHAT_ARTIFACT_MAX_BYTES`, `CHAT_ARTIFACT_RAW_TTL_SECONDS`.
+- Console: the Images inspector and download dialog show the content credentials beside the HMAC manifest, with a
+  details dialog of every check; the Chat inspector (and the shared and public link views) has an Artifacts panel with
+  chips under each answer, a version switcher, the sandboxed render and text views. Prototype boards first;
+  `e2e/tests/chat.spec.ts` and `images.spec.ts` extended with axe-core.
+
 ### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
 
 - Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,

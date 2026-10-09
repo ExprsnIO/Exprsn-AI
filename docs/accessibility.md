@@ -338,6 +338,16 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
 - **Runs: handoffs** (B-7801, Sprint 38b): a run that handed off says who answered in its page head and in the list
   entry (an arrow to the specialist's name), and a notice explains the handoff with a button to the specialist's run.
 
+- **Chat artifacts and image content credentials (Sprint 39a, B-8001, B-7901).** The chips under an answer are
+  buttons named "Open <file> version n", pressed for the open version; the Artifacts panel has a labelled version
+  select ("Version of <file>") between Earlier and Later buttons (disabled at the ends), and every list entry is a
+  button. An HTML artifact is an `iframe` titled "<file> version n", sandboxed; code and documents are `pre` text that
+  wraps, so nothing scrolls sideways at 320 px. Copy announces its result as a toast. The public link page renders the
+  same controls without a session. On Images, the content-credentials row names its state in words (signed by the
+  tenant CA, or not signed and why) with a "details" link to a dialog of every check as ok/failed/not checked pills
+  with their names; the dialog closes with Close and Escape and returns focus. Checked by `chat.spec.ts` and
+  `images.spec.ts` with axe-core (Standard, light) on the panel and the dialog.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

@@ -302,6 +302,13 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
   read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
   parts) behind `routes/compliance.ts`.
+- 1.6.0 Sprint 39a: `images/c2pa.ts` (B-7901: CBOR, JUMBF boxes, the manifest store with its assertions and claim, the
+  COSE_Sign1 signature, PNG `caBX` embedding and `verifyPng`, also `exprsn-ai c2pa:verify`), `images/content-credentials.ts`
+  (`s.contentCredentials`: signs in the image job through `PkiService.contentSigner`, the tenant's content-credentials
+  certificate with its key in custody, `pki_content_signers`, and verifies against `contentAnchors`); `chat/artifacts.ts`
+  (`s.chatArtifacts`, B-8001: `extractArtifacts` from fenced blocks on `chat.answerListeners`, `chat_artifacts` and sealed
+  `chat_artifact_versions`, the share reader's view through `sharing.readable`, `forTranscript` for shares and links,
+  `rawToken` and the public render route in `routes/sharing-public.ts`).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

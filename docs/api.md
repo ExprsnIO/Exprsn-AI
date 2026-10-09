@@ -5169,3 +5169,52 @@ counted (`omitted`); the export's label is the highest it carries. More than `CO
 | `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
 | `GET /api/compliance/exports/:id` | One export |
 | `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
+
+
+## Sprint 39a (1.6.0): content credentials and versioned artifacts (B-7901, B-8001)
+
+Migration `041_provenance_artifacts`. Settings `IMAGE_C2PA`, `CHAT_ARTIFACT_MIN_CHARS`, `CHAT_ARTIFACT_MAX_BYTES`,
+`CHAT_ARTIFACT_RAW_TTL_SECONDS`. CLI `exprsn-ai c2pa:verify <file.png> [anchor.pem…]`.
+
+### Content credentials (B-7901; `images:generate`)
+
+A generated PNG carries, after the HMAC provenance chunk of Sprint 20, a C2PA manifest store in a `caBX` chunk: the
+assertions `c2pa.actions` (one `c2pa.created` action by a trained algorithmic source, with the job and model),
+`c2pa.hash.data` (the SHA-256 of every byte of the file outside the chunk) and `io.exprsn.generation` (job, tenant,
+workspace, user, model, profile, backend, seed, steps, size, prompt hash, label, time); the claim (hashed references
+to them, the generator, the format); and a COSE_Sign1 signature (ES256) over the claim with the certificate chain in
+its protected header. The signer is the tenant's **content-credentials certificate**: an end-entity certificate the
+tenant's active issuing CA makes on first use, key in custody like every CA key, listed under the tenant's
+certificates (common name `Exprsn-AI content credentials`, no profile) where it can be revoked; a revoked, expiring
+(within 7 days) or re-parented certificate is replaced on the next image, audited `pki.content_signer.created`. The
+manifest travels with the bytes: downloads, attachments and the blob store keep it. A tenant with no issuing CA, or a
+server with no key custody, gets images with the HMAC manifest only and a reason; `IMAGE_C2PA=off` turns signing off.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/images/:id` and `GET /api/images` | Each image carries `contentCredentials: {signed, label, instanceId, signedAt, certificate, fingerprint, issuer}` or `{signed: false, reason}` |
+| `GET /api/images/:id/content-credentials` | Reads the manifest back from the stored bytes and verifies it: `{present, verified, checks: {claimHashes, dataHash, signature, chain, anchor, certificateValid}, problems, manifest: {label, generator, instanceId, created, action, model, profile, tenant, tenantName, job}, signer: {subject, issuer, fingerprint, notBefore, notAfter}, summary}`. `anchor` is checked against the tenant's issuing CAs and the platform root |
+
+`exprsn-ai c2pa:verify <file.png> [anchor.pem…]` runs the same checks offline on a downloaded file (exit code 2 when
+it does not verify); without anchors the chain is checked internally and `anchor` is `null`. The HMAC manifest
+(`GET /api/images/:id/provenance`) is verified over the bytes without either chunk, so both verify on one file.
+
+### Versioned artifacts (B-8001; `chat:read`)
+
+When an answer finishes (`complete` or `stopped`), every fenced block in it of at least `CHAT_ARTIFACT_MIN_CHARS`
+characters and at most `CHAT_ARTIFACT_MAX_BYTES` bytes becomes an artifact of the conversation, named from the fence
+(` ```html index.html`, ` ```ts title="app.ts"`) or, unnamed, `<language>-<n>` (the n-th unnamed block of that language
+in the answer); the kind is `html` (html, svg), `document` (markdown, text) or `code`. An answer that produces the same
+name with different content adds a version; the same content adds none. Versions are sealed with the tenant key
+and carry their message id; a conversation holds at most 200 artifacts. The artifact's label is the high-water mark
+of the answers that produced it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/conversations/:id/artifacts` | For the owner or a share reader: `{artifacts: [{id, key, kind, language, title, label, versions: [{id, version, messageId, bytes, sha256, createdAt, rawUrl}], createdAt, updatedAt}]}`, oldest first, above the caller's clearance left out |
+| `GET /api/conversations/:id/artifacts/:aid/versions/:n` | One version with its `content`; `404` for a version that does not exist, `403 step: clearance` above the reader's |
+| `GET /api/shared-conversations/:id`, `POST /api/shared-links/open`, `POST /api/public/shared-links/open` | Transcripts carry `artifacts` the same way, limited to the versions of the messages shown |
+| `GET /api/public/artifacts/:vid/raw?t=` | No session: the version's bytes for a sandboxed iframe, under the token minted with the list (`rawUrl`, valid `CHAT_ARTIFACT_RAW_TTL_SECONDS`, an HMAC by the KMS). `text/html` for html artifacts, `text/plain` otherwise, with its own CSP (`sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; frame-ancestors 'self'`). `404` for a wrong, stale or missing token |
+
+The console renders html artifacts in `<iframe sandbox="allow-scripts">` on that URL (an opaque origin: no cookies,
+storage or API of the console), code and documents as text.
