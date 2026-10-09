@@ -1,3 +1,5 @@
+import { AppPolicies } from '../../apps/policies.js';
+import { json } from '../../db/knex.js';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { actorFrom, isUniqueViolation } from '../../audit/chain.js';
@@ -50,6 +52,7 @@ export function userAdminRoutes(s: Services): Router {
       clearance: u.clearance,
       clearanceDirect: u.clearance_direct,
       mfaRequired: u.mfa_required,
+      attributes: json<Record<string, string>>(u.attributes, {}),
       lastLoginAt: u.last_login_at,
       createdAt: u.created_at,
       roles,
@@ -127,7 +130,9 @@ export function userAdminRoutes(s: Services): Router {
         disabledReason: z.string().trim().max(200).optional(),
         clearanceDirect: z.enum(LABELS).nullable().optional(),
         roles: z.array(z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role')).optional(),
-        mfaRequired: z.boolean().optional()
+        mfaRequired: z.boolean().optional(),
+        // 1.6.0 (B-8101): attributes app policies compare records with ($user.attributes.<name>).
+        attributes: AppPolicies.attributesSchema.optional()
       }),
       req.body
     );
@@ -161,6 +166,7 @@ export function userAdminRoutes(s: Services): Router {
     }
     const roleIds = await s.users.roleIds(u.id);
     if (body.mfaRequired !== undefined || rolesRequireMfa(roleIds, p.tenantId)) patch.mfa_required = (body.mfaRequired ?? u.mfa_required) || rolesRequireMfa(roleIds, p.tenantId);
+    if (body.attributes !== undefined) patch.attributes = Object.keys(body.attributes).length ? JSON.stringify(body.attributes) : null;
     await s.users.update(p.tenantId, u.id, patch);
 
     let revoked = 0;

@@ -2,6 +2,7 @@ import { ulid } from 'ulid';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
+import { noDlp, type DlpInspector } from '../compliance/dlp-types.js';
 import { ChainLimit, type ChainRef, type ChainService } from '../chain/context.js';
 import { authorize, effectivePermissions, type Principal } from '../authz/policy.js';
 import { actorFrom, type AuditLog } from '../audit/chain.js';
@@ -160,6 +161,8 @@ export class AgentService {
   onCallerDone: ((tenantId: string, kind: string, id: string) => Promise<void>) | null = null;
   /** 1.6.0 (B-7701): the principal a run acts as, narrowed to the agent's identity; unset, runs act as their owner. */
   identity: ((p: Principal, agentName: string) => Promise<Principal>) | null = null;
+  /** 1.6.0 (B-7601): DLP on a run's output: its label rises, a redaction is what is stored, a hold fails the run. */
+  dlp: DlpInspector = noDlp;
 
   constructor(
     private readonly db: Db,
@@ -911,7 +914,24 @@ export class AgentService {
         await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
         await charge({ tokens, steps: 1, wallMs: Date.now() - started, gpuMs: gpuNs / 1e6 });
         if (!pending.length) {
-          await this.finish(run, 'succeeded', { output: content, usage, error: null });
+          // 1.6.0 (B-7601): DLP on the run's answer. A raised label is the run's; a hold ends the run with the reason
+          // (a reviewer reads the step's detail); a redaction is the stored output.
+          let output = content;
+          const dlp = await this.dlp.inspect({ tenantId: run.tenant_id, text: content, scope: 'agent', label: run.label });
+          if (dlp.rules.length) {
+            const names = dlp.rules.map((x) => x.name).join(', ');
+            if (dlp.raised) {
+              run.label = dlp.label;
+              await this.db('agent_runs').where({ id: run.id }).update({ label: dlp.label, updated_at: Date.now() });
+            }
+            await this.audit.append({ tenantId: run.tenant_id, action: 'agent.run.dlp', kind: 'system', actor: { service: 'agents', user: run.user_id }, target: { run: run.id, agent: run.agent_name }, label: run.label, detail: { rules: dlp.rules.map((x) => x.name), action: dlp.action, label: dlp.label } });
+            if (dlp.action === 'hold') {
+              await this.finish(run, 'failed', { error: `Held by the DLP rule ${names}: the answer is kept for review.`, usage });
+              return { state: 'failed', steps: usage.steps };
+            }
+            if (dlp.action === 'redact') output = dlp.text;
+          }
+          await this.finish(run, 'succeeded', { output, usage, error: null });
           if (policy && this.memoryExtract) this.memoryExtract({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, runId: run.id, agent: run.agent_name, label: run.label, types: policy.types, remaining: policy.maxPerRun - proposals });
           return { state: 'succeeded', steps: usage.steps };
         }

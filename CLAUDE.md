@@ -293,6 +293,15 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `actor.agent`, keys with `api_keys.agent_id` resolved in `authenticate`) behind `routes/admin/agent-identities.ts`;
   handoffs in `agents/service.ts` (B-7801: `handoffs` offered through `resolveCallees`, the run ends with the
   handed-to run's answer, `agent_runs.handed_to`). `leakingReply` in `server/test/fake-ollama.ts`.
+
+- 1.6.0 Sprint 38c: `apps/policies.ts` (`s.apps.policies`, B-8101 to B-8103: row and field policies, the reader's
+  grant that `apps/service.ts` applies in queries, reads, writes and views through `grantFor`, masks, explain; user
+  attributes on `users.attributes`); `compliance/dlp.ts` (`s.dlp`, B-7601: rules and tenant RE2 patterns, `inspect`
+  called by chat's `guardOutput`, the OpenAI-compatible API, agent `finish`, attachment and file scans; the feature
+  side imports only `compliance/dlp-types.ts`, which keeps `guardrails/detectors.ts` out of an import cycle);
+  `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
+  read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
+  parts) behind `routes/compliance.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

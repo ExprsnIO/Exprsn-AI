@@ -254,6 +254,37 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   platform stream (`SIEM_URL`) stays the operator's. Delivery is at least once with backoff; overflow is counted as
   dropped on the row, and the chain in the database stays the record of truth.
 
+## Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c)
+
+- **Policies narrow, never widen (B-8101, B-8102).** A policy is applied after labels and workspace membership: a
+  reader reaches a record only when it is at a label they clear, in an app of their workspaces, and (once the entity
+  has a policy) in the rows a policy that names them allows. The row condition is run by the same query builder as any
+  filter, over the clear index, so a policy can only name indexed or unique fields (checked when it is saved, for
+  every entity it covers); a placeholder the reader has no value for makes the policy grant nothing, never everything.
+  A reader without `read` on a field cannot filter or sort by it (no inference from an ordering), and the field is not
+  in the record at all; a reader without `unmasked` gets the mask from the server (the full value never leaves it,
+  exports included). Grants combine permissively across the policies that name a reader, so a tenant that wants a
+  narrow result keeps its policies narrow. Designers (`apps:design`) are exempt: they define policies and can read the
+  records through the bundle export anyway; explain shows them what every reader gets. The user attributes policies
+  compare are set only by `users:manage` and audited with the user update.
+- **DLP acts after the guardrails, with no shadow stage (B-7601).** DLP rules are the tenant's data classification,
+  always in force for the scopes they name, kept by `compliance:manage` and audited. The built-in detectors are the
+  checksummed ones of the PII and secrets classifiers (scores below 0.8 are ignored); tenant patterns are compiled
+  with RE2 (linear time, no backtracking). A hold goes where a guardrail hold goes: the flag queue, where a reviewer
+  cleared for the label decides; an agent run ends failed with the rule's name; an upload is rejected with it. A
+  raised label is written to the message, the conversation (a high-water mark, never lowered), the run, the
+  attachment or the file version, and content raised above its owner's clearance is held regardless of the rule, so a
+  rule that only labels cannot show someone what they may not read. The DLP test endpoint stores and audits nothing.
+- **Legal holds are dual-controlled and quiet (B-7602).** A hold is asked for by one holder of `compliance:manage`
+  and approved by another (self-approval is refused), the reason is sealed with the tenant key (the audit chain keeps
+  a 500-character excerpt), and the people concerned are not told. An active hold is read by the chat, memory and file
+  purges on every run; releasing it is audited and takes effect at the next purge, nothing is deleted at once.
+- **Compliance exports are clearance-bound and sealed (B-7603).** The job reads the requester's clearance when it
+  runs and leaves out every row above it, counting what it left out; the export carries the highest label it holds and
+  is downloaded only by someone cleared for it. Parts are sealed with the tenant key (per-part AAD) in the blob store;
+  a download streams them part by part and is audited with the counts. An API key scoped to `compliance:export` (the
+  eDiscovery token) can do no more than its owner and is named in the audit events and the export row.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1356,3 +1387,14 @@ filter, private `/tmp`, only the state directory writable.
   are skipped as icons. A guardrail rule that names a vision classifier on text fails, and its `onError` decides. The
   vision profile's description and classification calls are metered as `embed` usage (knowledge indexing), with no
   user, not under a usage kind of their own.
+- Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c). A record a reader creates
+  outside the rows their policies allow is accepted and then out of their reach (the create grant is per field, not per
+  row); a lookup field's option list is not narrowed by policies; a policy's row condition is one filter of at most 30
+  conditions and 4 levels, and the reader's own filter is ANDed to it, not merged into those limits. DLP inspects at
+  most `DLP_MAX_TEXT_BYTES` characters of a text (the rest keeps its label); streamed chat answers are inspected when
+  finished, so a redacted span may have been shown while streaming, as with a guardrail redaction; the thinking of an
+  answer is not inspected by DLP; uploads are inspected only when they are text (UTF-8 or JSON), not inside PDF or
+  Office documents. A legal hold does not stop a user from deleting their own conversation, memory or file, and agent
+  runs have no retention purge to suspend. A compliance export matches by `createdAt`, not by activity in the range;
+  file bytes are not in it; conversations hold at most 10 000 messages each; nothing is signed, so an export's
+  integrity rests on the audit events around it.

@@ -217,6 +217,162 @@
     });
   }
 
+  // ---------- Compliance tab (1.6.0, Sprint 38c: B-7601 DLP, B-7602 legal holds, B-7603 compliance exports) ----------
+  const canCompliance = () => App.can('compliance:manage') || App.can('compliance:export');
+  const detectorLabel = (d, patterns) => (d.startsWith('pattern:') ? 'pattern ' + (((patterns || []).find((p) => p.id === d.slice(8)) || {}).name || d.slice(8, 14)) : d.replace(/_/g, ' '));
+  const holdTone = (s) => (s === 'active' ? 'ok' : s === 'pending' ? 'info' : s === 'rejected' ? 'danger' : '');
+
+  function complianceLoad(st, refresh) {
+    if (st.cmpLoaded || st.cmpBusy) return;
+    st.cmpBusy = true; st.cmpError = null;
+    const manage = App.can('compliance:manage');
+    const exporter = App.can('compliance:export');
+    Promise.all([manage ? App.get('/api/compliance/dlp') : null, manage ? App.get('/api/compliance/holds') : null, exporter ? App.get('/api/compliance/exports') : null])
+      .then(([dlp, holds, exports]) => { st.cmp = { dlp, holds, exports: exports ? exports.exports : [] }; st.cmpLoaded = true; })
+      .catch((err) => { st.cmpError = err; st.cmpLoaded = true; })
+      .finally(() => { st.cmpBusy = false; refresh(); });
+  }
+
+  function complianceHtml(st) {
+    if (st.cmpError) return UI.problem('Compliance could not be loaded', (st.cmpError.problem && (st.cmpError.problem.detail || st.cmpError.problem.title)) || st.cmpError.message, st.cmpError.problem && st.cmpError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-cmpreload' }) + '</div>';
+    if (!st.cmpLoaded) return UI.notice('Loading…', 'info');
+    const c = st.cmp;
+    const me = App.me.user.id;
+    let out = st.cmpProblem ? UI.problem(st.cmpProblem.title, st.cmpProblem.text, st.cmpProblem.trace) : '';
+    if (c.dlp) {
+      const rules = c.dlp.rules.map((r) => ({ cells: ['<b>' + esc(r.name) + '</b>', esc(r.detectors.map((d) => detectorLabel(d, c.dlp.patterns)).join(', ')), UI.label(r.raiseTo, { sm: true }), UI.pill(r.action, r.action === 'hold' ? 'danger' : r.action === 'redact' ? 'warn' : 'info'), esc(r.scopes.join(', ')), UI.pill(r.enabled ? 'enabled' : 'off', r.enabled ? 'ok' : ''), UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-dlpedit="' + esc(r.id) + '"' }) + ' ' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-dlpdel="' + esc(r.id) + '"' })], attrs: 'data-dlprule="' + esc(r.id) + '"' }));
+      const pats = c.dlp.patterns.map((p) => [esc(p.name), '<span class="mono">' + esc(p.pattern) + '</span>', UI.label(p.label, { sm: true }), UI.pill(p.enabled ? 'enabled' : 'off', p.enabled ? 'ok' : ''), UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-patdel="' + esc(p.id) + '"' })]);
+      const t = st.dlpTest;
+      out += UI.panel('DLP: classification of answers, agent outputs and uploads', UI.notice('A rule names what it detects (the built-in PII and secret detectors, and your own RE2 patterns), the label the content rises to, and what happens by that label: <b>label</b> raises it only, <b>redact</b> replaces the detected spans, <b>hold</b> keeps the answer for a reviewer (an upload is refused). The message, run, attachment or file version and the conversation carry the raised label; content raised above its owner\'s clearance is held whatever the rule says.', 'info')
+        + UI.table(['Rule', 'Detects', 'Raises to', 'Action', 'Scopes', 'State', { label: '', right: true }], rules, { clickable: false, minWidth: '900px', emptyTitle: 'No DLP rules', emptyText: 'Answers and uploads keep the label of their conversation or workspace.' })
+        + '<div class="hstack gap6 wrap" style="margin:8px 0 12px">' + UI.btn('New rule', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-dlpnew' }) + UI.btn('New pattern', { size: 'sm', icon: 'plus', attrs: 'data-patnew' }) + '</div>'
+        + '<div class="eyebrow">Your patterns (RE2)</div>' + UI.table(['Pattern', 'Expression', 'Label', 'State', ''], pats, { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'No patterns', emptyText: 'Add one for project codes, customer numbers or anything the built-in detectors do not know.' })
+        + '<div class="eyebrow" style="margin-top:12px">Try the rules</div><div class="formgrid">' + UI.field('Text', UI.textarea(st.dlpText || '', { placeholder: 'The card on file is 4111 1111 1111 1111', attrs: 'data-dlptext aria-label="Text to try"', rows: 3 })) + UI.field('Scope', UI.select(c.dlp.scopes, st.dlpScope || 'answer', 'data-dlpscope aria-label="Scope"')) + '</div>'
+        + '<div class="hstack gap6">' + UI.btn('Try', { size: 'sm', attrs: 'data-dlptry' }) + '<span class="muted" style="font-size:12px">Nothing is stored or audited.</span></div>'
+        + (t ? (t.rules.length ? UI.notice('<b>' + esc(t.rules.map((r) => r.name).join(', ')) + '</b> fired on ' + esc(t.rules.map((r) => r.kinds.join(', ')).join('; ')) + ': label ' + UI.label(t.label, { sm: true }) + ', action <b>' + esc(t.action) + '</b>.' + (t.action === 'redact' ? '<pre class="codebox" style="margin-top:6px;white-space:pre-wrap">' + esc(t.text) + '</pre>' : ''), t.action === 'hold' ? 'danger' : t.action === 'redact' ? 'warn' : 'info') : UI.notice('No rule fired. The text keeps its label.', 'info')) : ''));
+    }
+    if (c.holds) {
+      const person = (x) => (x ? esc(x.displayName || x.username || x.id) : '');
+      const rows = c.holds.holds.map((h) => ({ cells: ['<b>' + esc(h.subject) + '</b><div class="muted" style="font-size:12px">' + esc(h.scope) + '</div>', esc(h.reason), UI.pill(h.state, holdTone(h.state)), person(h.requestedBy) + '<div class="muted" style="font-size:12px">' + esc(when(h.createdAt)) + '</div>', person(h.approver) + (h.decidedAt ? '<div class="muted" style="font-size:12px">' + esc(when(h.decidedAt)) + '</div>' : h.state === 'pending' ? '<div class="muted" style="font-size:12px">waiting</div>' : ''),
+        h.state === 'pending' && h.requestedBy && h.requestedBy.id === me ? UI.btn('Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-holdwithdraw="' + esc(h.id) + '"' }) : h.state === 'pending' ? UI.btn('Approve', { size: 'xs', attrs: 'data-holddecide="' + esc(h.id) + ':approved"' }) + ' ' + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-holddecide="' + esc(h.id) + ':rejected"' }) : h.state === 'active' ? UI.btn('Release', { size: 'xs', kind: 'ghost', attrs: 'data-holdrelease="' + esc(h.id) + '"' }) : ''], attrs: 'data-hold="' + esc(h.id) + '"' }));
+      out += UI.panel('Legal holds', UI.notice('A hold on a user or a workspace suspends every retention purge of their conversations, memories and files until it is released. It is placed under dual control: you ask and name another compliance manager, who approves; nothing is suspended until then. The people concerned are not told. Audited legal_hold.requested, approved, rejected, withdrawn and released.', 'info')
+        + UI.table(['Subject', 'Reason', 'State', 'Requested by', 'Approver', { label: '', right: true }], rows, { clickable: false, minWidth: '860px', emptyTitle: 'No holds', emptyText: 'Retention runs as configured for everyone.' })
+        + '<div class="hstack gap6 wrap">' + UI.btn('Request a hold', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-holdnew' }) + (c.holds.approvers.length ? '' : '<span class="muted" style="font-size:12px">No other compliance manager can approve a request yet.</span>') + '</div>');
+    }
+    if (c.exports) {
+      const rows = c.exports.map((x) => ['<span class="mono">' + esc(x.file) + '</span>', esc(x.scope), UI.pill(x.state, x.state === 'ready' ? 'ok' : x.state === 'failed' ? 'danger' : 'info'), UI.label(x.label, { sm: true }), x.counts ? esc(Object.keys(x.counts).filter((k) => x.counts[k]).map((k) => fmt(x.counts[k]) + ' ' + k).join(', ')) + (x.omitted ? '<div class="muted" style="font-size:12px">' + fmt(x.omitted) + ' above the requester\'s clearance left out</div>' : '') : x.error ? '<span class="fg2">' + esc(x.error) + '</span>' : '<span class="muted">-</span>', (x.apiKeyId ? 'API key ' : 'user ') + esc(String(x.createdBy).slice(-6)) + '<div class="muted" style="font-size:12px">' + esc(when(x.createdAt)) + '</div>', x.state === 'ready' ? UI.btn('Download', { size: 'xs', icon: 'download', attrs: 'data-cxdl="' + esc(x.id) + '"' }) : '']);
+      out += UI.panel('Compliance exports (eDiscovery)', UI.notice('An export writes the conversations (with their messages), files (metadata and versions), memories, agent runs and accounts of one user or one workspace over a date range as JSON Lines, sealed in the blob store. It needs <span class="mono">compliance:export</span>: a person, or an API key scoped to it that an eDiscovery tool holds (Settings, API keys). Rows above the requester\'s clearance are left out and counted; only someone cleared for the export\'s label downloads it. Every request, run and download is audited.', 'info')
+        + UI.table(['Export', 'Scope', 'State', 'Label', 'Contents', 'Requested by', { label: '', right: true }], rows, { clickable: false, minWidth: '900px', emptyTitle: 'No exports', emptyText: 'Request one for a user or a workspace and a date range.' })
+        + '<div class="hstack gap6 wrap">' + UI.btn('Request an export', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-cxnew' }) + UI.btn('Refresh', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-cmpreload' }) + '</div>');
+    }
+    return out;
+  }
+
+  function complianceWire(st, ctx, refresh) {
+    const reload = () => { st.cmpLoaded = false; st.cmpProblem = null; ctx.rerender(); };
+    const fail = (err, title) => { st.cmpProblem = { title, text: (err.problem && (err.problem.detail || err.problem.title)) || err.message, trace: err.problem && err.problem.trace_id }; App.closeOverlay(); ctx.rerender(); };
+    ctx.on('click', '[data-cmpreload]', reload);
+    const c = st.cmp || {};
+    // ----- DLP -----
+    const ruleModal = (existing) => {
+      const r = existing ? JSON.parse(JSON.stringify(existing)) : { name: '', enabled: true, detectors: ['payment_card'], raiseTo: 'confidential', action: 'redact', scopes: ['answer', 'agent', 'upload'] };
+      const choices = c.dlp.detectors.map((d) => ({ value: d, label: d.replace(/_/g, ' ') })).concat(c.dlp.patterns.map((p) => ({ value: 'pattern:' + p.id, label: 'pattern ' + p.name })));
+      ctx.modal({
+        title: existing ? 'Edit ' + existing.name : 'New DLP rule',
+        body: '<div class="formgrid">' + UI.field('Name', UI.input(r.name, { attrs: 'data-rname aria-label="Rule name"' }))
+          + UI.field('Detects', '<div class="vstack gap4">' + choices.map((x) => '<label class="hstack gap6" style="font-size:13px"><input type="checkbox" data-rdet="' + esc(x.value) + '"' + (r.detectors.includes(x.value) ? ' checked' : '') + '> ' + esc(x.label) + '</label>').join('') + '</div>', 'Built-in detectors score by checksum where one exists (cards by Luhn, IBANs by mod-97); patterns are your own.')
+          + UI.field('Raises the label to', UI.select(c.dlp.labels, r.raiseTo, 'data-rraise aria-label="Raise to"'))
+          + UI.field('Action', UI.select([{ value: 'label', label: 'label: raise only' }, { value: 'redact', label: 'redact: replace the spans' }, { value: 'hold', label: 'hold: keep for a reviewer' }], r.action, 'data-raction aria-label="Action"'))
+          + UI.field('Scopes', '<div class="hstack gap6">' + c.dlp.scopes.map((s) => '<label class="hstack gap4" style="font-size:13px"><input type="checkbox" data-rscope="' + s + '"' + (r.scopes.includes(s) ? ' checked' : '') + '> ' + s + '</label>').join('') + '</div>', 'answer: chat and /v1; agent: run outputs; upload: attachments and files (a hold refuses the upload).')
+          + UI.field('Enabled', UI.toggle('In force', r.enabled !== false, 'data-renabled')) + '</div>',
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(existing ? 'Save' : 'Create rule', { kind: 'primary', attrs: 'data-rsave' }),
+        onMount(m) {
+          const tg = m.querySelector('[data-renabled]'); tg.addEventListener('click', () => { tg.classList.toggle('on'); tg.setAttribute('aria-checked', tg.classList.contains('on')); });
+          m.querySelector('[data-rsave]').addEventListener('click', async () => {
+            const name = m.querySelector('[data-rname]').value.trim(); if (!name) { ctx.toast('A rule needs a name.', 'warn'); return; }
+            const detectors = [...m.querySelectorAll('[data-rdet]:checked')].map((el) => el.dataset.rdet); if (!detectors.length) { ctx.toast('Pick at least one detector.', 'warn'); return; }
+            const scopes = [...m.querySelectorAll('[data-rscope]:checked')].map((el) => el.dataset.rscope); if (!scopes.length) { ctx.toast('Pick at least one scope.', 'warn'); return; }
+            const body = { name, enabled: tg.classList.contains('on'), detectors, raiseTo: m.querySelector('[data-rraise]').value, action: m.querySelector('[data-raction]').value, scopes };
+            try { if (existing) await App.put('/api/compliance/dlp/rules/' + encodeURIComponent(existing.id), body); else await App.post('/api/compliance/dlp/rules', body); App.closeOverlay(); reload(); ctx.toast('DLP rule ' + esc(name) + (existing ? ' saved' : ' created') + '. Audited dlp.rule.' + (existing ? 'updated' : 'created') + '.', 'ok'); } catch (err) { fail(err, existing ? 'Rule not saved' : 'Rule not created'); }
+          });
+        }
+      });
+    };
+    ctx.on('click', '[data-dlpnew]', () => ruleModal(null));
+    ctx.on('click', '[data-dlpedit]', (e, t) => ruleModal(c.dlp.rules.find((r) => r.id === t.dataset.dlpedit)));
+    ctx.on('click', '[data-dlpdel]', async (e, t) => { const r = c.dlp.rules.find((x) => x.id === t.dataset.dlpdel); if (!r) return; const ok = await ctx.confirm({ title: 'Remove ' + r.name, tone: 'danger', body: '<p class="fg2" style="margin:0">Answers and uploads it classified keep their labels. Audited dlp.rule.deleted.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del('/api/compliance/dlp/rules/' + encodeURIComponent(r.id)); reload(); ctx.toast('Rule ' + esc(r.name) + ' removed.', 'ok'); } catch (err) { fail(err, 'Rule not removed'); } });
+    ctx.on('click', '[data-patnew]', () => ctx.modal({
+      title: 'New pattern',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'Customer numbers', attrs: 'data-pname aria-label="Pattern name"' })) + UI.field('Expression (RE2)', UI.input('', { placeholder: 'NW-C-\\d{6}', attrs: 'data-pexpr aria-label="Expression"' }), 'RE2 refuses backreferences and look-around; the position of the offending construct is reported.') + UI.field('Label it implies', UI.select(c.dlp.labels, 'confidential', 'data-plabel aria-label="Label"')) + '</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Create pattern', { kind: 'primary', attrs: 'data-psave' }),
+      onMount(m) {
+        m.querySelector('[data-psave]').addEventListener('click', async () => {
+          const name = m.querySelector('[data-pname]').value.trim(); const pattern = m.querySelector('[data-pexpr]').value; if (!name || !pattern.trim()) { ctx.toast('A pattern needs a name and an expression.', 'warn'); return; }
+          try { await App.post('/api/compliance/dlp/patterns', { name, pattern, label: m.querySelector('[data-plabel]').value, enabled: true }); App.closeOverlay(); reload(); ctx.toast('Pattern ' + esc(name) + ' created. Audited dlp.pattern.created.', 'ok'); } catch (err) { fail(err, 'Pattern not created'); }
+        });
+      }
+    }));
+    ctx.on('click', '[data-patdel]', async (e, t) => { const p = c.dlp.patterns.find((x) => x.id === t.dataset.patdel); if (!p) return; const ok = await ctx.confirm({ title: 'Remove ' + p.name, tone: 'danger', body: '<p class="fg2" style="margin:0">A pattern a rule detects with cannot go; change the rule first. Audited dlp.pattern.deleted.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del('/api/compliance/dlp/patterns/' + encodeURIComponent(p.id)); reload(); ctx.toast('Pattern removed.', 'ok'); } catch (err) { fail(err, 'Pattern not removed'); } });
+    ctx.on('input', '[data-dlptext]', (e, t) => { st.dlpText = t.value; });
+    ctx.on('change', '[data-dlpscope]', (e, t) => { st.dlpScope = t.value; });
+    ctx.on('click', '[data-dlptry]', async () => { if (!(st.dlpText || '').trim()) { ctx.toast('Write a text to try.', 'warn'); return; } try { st.dlpTest = await App.post('/api/compliance/dlp/test', { text: st.dlpText, scope: st.dlpScope || 'answer' }); ctx.rerender(); } catch (err) { App.fail(err, 'The rules could not be tried'); } });
+    // ----- legal holds -----
+    ctx.on('click', '[data-holdnew]', () => {
+      const approvers = (c.holds && c.holds.approvers) || [];
+      ctx.modal({
+        title: 'Request a legal hold',
+        body: UI.notice('Nothing is suspended until the approver, another compliance manager, approves. The people concerned are not told.', 'info')
+          + '<div class="formgrid">' + UI.field('On', '<div class="hstack gap6">' + UI.select([{ value: 'user', label: 'A user (id)' }, { value: 'workspace', label: 'A workspace' }], 'user', 'data-hscope aria-label="Scope"') + UI.input('', { placeholder: 'the user id', attrs: 'data-hsubject aria-label="Subject"' }) + '</div>', 'For a workspace, pick it below.')
+          + UI.field('Workspace', UI.select([{ value: '', label: 'none' }].concat(((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name }))), '', 'data-hws aria-label="Workspace"'))
+          + UI.field('Reason', UI.textarea('', { placeholder: 'Litigation, regulator request, investigation: the case and what to preserve.', attrs: 'data-hreason aria-label="Reason"', rows: 3 }), 'Sealed with the tenant key; the audit chain keeps an excerpt.')
+          + UI.field('Approver', UI.select(approvers.map((a) => ({ value: a.userId, label: a.displayName + ' (' + a.username + ')' })), approvers[0] ? approvers[0].userId : '', 'data-happrover aria-label="Approver"'), 'Another holder of compliance:manage.') + '</div>',
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Ask for approval', { kind: 'primary', attrs: 'data-hsave', disabled: !approvers.length }),
+        onMount(m) {
+          m.querySelector('[data-hsave]').addEventListener('click', async () => {
+            const scope = m.querySelector('[data-hscope]').value; const scopeId = scope === 'workspace' ? m.querySelector('[data-hws]').value : m.querySelector('[data-hsubject]').value.trim(); const reason = m.querySelector('[data-hreason]').value.trim(); const approverId = m.querySelector('[data-happrover]').value;
+            if (!scopeId || reason.length < 3) { ctx.toast('Name the subject and give a reason.', 'warn'); return; }
+            try { await App.post('/api/compliance/holds', { scope, scopeId, reason, approverId }); App.closeOverlay(); reload(); ctx.toast('Hold requested; the approver was asked. Audited legal_hold.requested.', 'ok'); } catch (err) { fail(err, 'Hold not requested'); }
+          });
+        }
+      });
+    });
+    ctx.on('click', '[data-holddecide]', async (e, t) => { const i = t.dataset.holddecide.lastIndexOf(':'); const id = t.dataset.holddecide.slice(0, i), decision = t.dataset.holddecide.slice(i + 1); const h = c.holds.holds.find((x) => x.id === id); if (!h) return; const ok = await ctx.confirm({ title: (decision === 'approved' ? 'Approve' : 'Reject') + ' the hold on ' + h.subject, tone: decision === 'approved' ? 'info' : 'danger', body: '<p class="fg2" style="margin:0">' + (decision === 'approved' ? 'Every retention purge of their conversations, memories and files is suspended at once.' : 'The request ends; the requester is told.') + ' Audited legal_hold.' + decision + '.</p>', ok: decision === 'approved' ? 'Approve' : 'Reject' }); if (!ok) return; try { await App.post('/api/compliance/holds/' + encodeURIComponent(id) + '/decide', { decision }); reload(); ctx.toast('Hold ' + (decision === 'approved' ? 'active' : 'rejected') + '.', 'ok'); } catch (err) { fail(err, 'Not decided'); } });
+    ctx.on('click', '[data-holdwithdraw]', async (e, t) => { try { await App.post('/api/compliance/holds/' + encodeURIComponent(t.dataset.holdwithdraw) + '/withdraw'); reload(); ctx.toast('Request withdrawn. Audited legal_hold.withdrawn.', 'ok'); } catch (err) { fail(err, 'Not withdrawn'); } });
+    ctx.on('click', '[data-holdrelease]', async (e, t) => { const h = c.holds.holds.find((x) => x.id === t.dataset.holdrelease); if (!h) return; const ok = await ctx.confirm({ title: 'Release the hold on ' + h.subject, tone: 'danger', body: '<p class="fg2" style="margin:0">The next retention purge treats their content as before. Audited legal_hold.released.</p>', ok: 'Release' }); if (!ok) return; try { await App.post('/api/compliance/holds/' + encodeURIComponent(h.id) + '/release', {}); reload(); ctx.toast('Hold released.', 'ok'); } catch (err) { fail(err, 'Not released'); } });
+    // ----- compliance exports -----
+    ctx.on('click', '[data-cxnew]', () => ctx.modal({
+      title: 'Request a compliance export',
+      body: '<div class="formgrid">' + UI.field('User id', UI.input('', { placeholder: 'optional', attrs: 'data-cxuser aria-label="User id"' })) + UI.field('Workspace', UI.select([{ value: '', label: 'none' }].concat(((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name }))), '', 'data-cxws aria-label="Workspace"'), 'One or both.')
+        + UI.field('From', UI.input(new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10), { type: 'date', attrs: 'data-cxfrom aria-label="From"' })) + UI.field('To', UI.input(new Date().toISOString().slice(0, 10), { type: 'date', attrs: 'data-cxto aria-label="To"' }))
+        + UI.field('Contents', '<div class="hstack gap6 wrap">' + ['conversations', 'files', 'memories', 'runs', 'users'].map((k) => '<label class="hstack gap4" style="font-size:13px"><input type="checkbox" data-cxkind="' + k + '" checked> ' + k + '</label>').join('') + '</div>') + '</div>'
+        + UI.notice('Rows above your clearance are left out and counted. An eDiscovery tool requests and downloads the same way with an API key scoped to compliance:export.', 'info'),
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Request export', { kind: 'primary', attrs: 'data-cxsave' }),
+      onMount(m) {
+        m.querySelector('[data-cxsave]').addEventListener('click', async () => {
+          const userId = m.querySelector('[data-cxuser]').value.trim() || null; const workspaceId = m.querySelector('[data-cxws]').value || null;
+          if (!userId && !workspaceId) { ctx.toast('Name a user, a workspace, or both.', 'warn'); return; }
+          const kinds = [...m.querySelectorAll('[data-cxkind]:checked')].map((el) => el.dataset.cxkind); if (!kinds.length) { ctx.toast('Pick what to export.', 'warn'); return; }
+          const from = Date.parse(m.querySelector('[data-cxfrom]').value + 'T00:00:00Z'); const to = Date.parse(m.querySelector('[data-cxto]').value + 'T23:59:59.999Z');
+          if (isNaN(from) || isNaN(to)) { ctx.toast('Give both dates.', 'warn'); return; }
+          const body = { from, to, kinds }; if (userId) body.userId = userId; if (workspaceId) body.workspaceId = workspaceId;
+          try { const x = await App.post('/api/compliance/exports', body); App.closeOverlay(); reload(); ctx.toast('Export ' + esc(x.file) + ' queued. Audited compliance.export.requested.', 'ok'); setTimeout(() => { if (App.state.route === 'usage-audit' && st.tab === 'compliance') reload(); }, 2500); } catch (err) { fail(err, 'Export not requested'); }
+        });
+      }
+    }));
+    ctx.on('click', '[data-cxdl]', async (e, t) => {
+      const x = c.exports.find((r) => r.id === t.dataset.cxdl); if (!x) return;
+      try {
+        const res = await fetch('/api/compliance/exports/' + encodeURIComponent(x.id) + '/download', { credentials: 'same-origin' });
+        if (!res.ok) { let p = null; try { p = await res.json(); } catch (e2) { /* not JSON */ } throw new App.ApiError(p || { status: res.status, title: res.statusText }); }
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement('a'); a.href = url; a.download = x.file; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        ctx.toast('Downloaded ' + esc(x.file) + '. Audited compliance.export.downloaded.', 'ok');
+      } catch (err) { fail(err, 'Download refused'); }
+    });
+  }
+
   App.register({
     id: 'usage-audit', title: 'Usage and audit', section: 'admin', crumb: ['Admin', 'Usage and audit'], live: true,
     summary: 'Metering per tenant, user and model, quotas, hash-chained audit log, exports',
@@ -361,9 +517,10 @@
         { actions: UI.btn(st.chartTable ? 'View as chart' : 'View as table', { size: 'sm', kind: 'ghost', attrs: 'data-charttable' }) });
 
       // ----- tabs -----
-      const tabItems = (canUsage ? [{ id: 'usage', label: 'Usage' }, { id: 'quotas', label: 'Quotas' }] : []).concat([{ id: 'audit', label: 'Audit log', count: events.length + (st.eventsEnd ? '' : '+') }, { id: 'exports', label: 'Exports', count: exportsList.length }]).concat(App.can('billing:read') ? [{ id: 'billing', label: 'Statements' }] : []);
+      const tabItems = (canUsage ? [{ id: 'usage', label: 'Usage' }, { id: 'quotas', label: 'Quotas' }] : []).concat([{ id: 'audit', label: 'Audit log', count: events.length + (st.eventsEnd ? '' : '+') }, { id: 'exports', label: 'Exports', count: exportsList.length }]).concat(App.can('billing:read') ? [{ id: 'billing', label: 'Statements' }] : []).concat(canCompliance() ? [{ id: 'compliance', label: 'Compliance', count: st.cmpLoaded && st.cmp && st.cmp.holds ? st.cmp.holds.holds.filter((h) => h.state === 'pending' || h.state === 'active').length : null }] : []);
       if (!canUsage && (st.tab === 'usage' || st.tab === 'quotas')) st.tab = 'audit';
       if (st.tab === 'billing' && !App.can('billing:read')) st.tab = 'audit';
+      if (st.tab === 'compliance' && !canCompliance()) st.tab = 'audit';
 
       let body = '';
       if (st.loadError) body = UI.problem('Usage and audit could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-reload' }) + '</div>';
@@ -412,6 +569,9 @@
       } else if (st.tab === 'billing') {
         billingLoad(st, refresh);
         body = billingHtml(st, refresh);
+      } else if (st.tab === 'compliance') {
+        complianceLoad(st, refresh);
+        body = complianceHtml(st);
       } else {
         const rows = exportsList.map((x) => {
           const prog = (x.state === 'queued' || x.state === 'running') && st.progress && x.jobId && st.progress[x.jobId] != null ? ' ' + st.progress[x.jobId] + '%' : '';
@@ -665,6 +825,7 @@
 
       // ----- handlers -----
       ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      if (st.tab === 'compliance' && st.cmpLoaded) complianceWire(st, ctx, refresh);
       ctx.on('click', '[data-reload]', () => { st.details = {}; reload(); });
       ctx.on('click', '[data-byseg] [data-seg]', (e, t) => { if (st.by === t.dataset.seg) return; st.by = t.dataset.seg; st.inspect = 'event'; reloadUsage(); });
       ctx.on('change', '[data-period]', (e, t) => { st.period = t.value; st.inspect = 'event'; reloadUsage(); });

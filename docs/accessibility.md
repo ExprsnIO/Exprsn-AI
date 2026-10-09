@@ -153,6 +153,21 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
 
 ## Screens changed in 1.6.0
 
+- **Apps: policies and explain** (B-8103, Sprint 38c): a Policies tab for designers lists the app's policies in a
+  table whose state is a pill with its word; the editor is a labelled form (name, description, entity, the subjects as
+  labelled kind and value controls with a text Remove button each, the row condition as three labelled controls with
+  a sentence of hints, an Enabled switch with `role="switch"` and `aria-checked`, and the field grants as a table of
+  labelled checkboxes and mask selects, one row per field). Placeholder and list mistakes are refused before the
+  request in a toast that names the valid placeholders. Explain is a labelled form (reader, entity, record, field) whose
+  answer is a key-value list and a table: reachable or not, and each grant, is a pill with its word, with the policy
+  named in text. `e2e/tests/apps-policies.spec.ts` runs axe-core on the tab with an explain answer.
+- **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
+  exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
+  label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,
+  danger) is also said in words, with the redacted text in a `pre`. The rule, pattern, hold and export dialogs are
+  labelled forms (detectors and scopes as labelled checkboxes, the approver a labelled select of named people); every
+  refusal (a pattern in use, dual control, an export above one's clearance) is a problem block with its trace id.
+  `e2e/tests/compliance.spec.ts` runs axe-core on the tab.
 - **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
   Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
   unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not

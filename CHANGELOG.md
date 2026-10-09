@@ -178,6 +178,39 @@
 - Tests: `sprint38b-redteam`, `sprint38b-identities`, `sprint38b-handoffs`; integration `redteam-agents`. The fake
   Ollama gained `leakingReply` (a model that prints its system prompt and obeys canaries).
 
+### Row and field policies, DLP, legal hold and compliance export (Sprint 38c, B-8101 to B-8103, B-7601 to B-7603)
+
+- Migration `040c_policies_dlp`: `app_policies`, `users.attributes`, `dlp_rules`, `dlp_patterns`, `legal_holds`,
+  `compliance_exports`. Permissions `compliance:manage` (tenant-admin, legal-review) and `compliance:export`
+  (legal-review, and an API key scope). Settings `DLP_MAX_TEXT_BYTES`, `COMPLIANCE_EXPORT_MAX_ROWS`,
+  `COMPLIANCE_EXPORT_MAX_DAYS`. Job `compliance.export`.
+- Row and field policies (B-8101, B-8102): reusable rule sets per app or entity with subjects (everyone, a role, a
+  group, a workspace's members, a user), row conditions in the record query grammar whose values name the reader
+  (`$user.id`, `$user.username`, `$user.clearance`, `$user.roles`, `$user.groups`, `$user.workspaces`,
+  `$user.attributes.<name>`, the last set by a tenant admin on the user) and per-field grants (read, read unmasked,
+  create, update) with masks `last4`, `hash` and `hidden`. The reader's grant narrows record queries, counts,
+  aggregates, reads, updates, deletes, transitions, bulk writes, exports, the `records.*` tools and workflow record
+  steps, and form submissions by a signed-in person; a reader no policy names reaches nothing; designers are exempt.
+  `server/src/apps/policies.ts`, `/api/apps/:app/policies`.
+- Explain (B-8103): `POST /api/apps/:app/entities/:entity/policies/explain` says which policies name a reader and
+  why, whether a record is in their reach and by which policy, and what a field shows; the Apps screen's Policies tab
+  has the editor and the explain panel.
+- DLP (B-7601): rules over the built-in PII and secret detectors and the tenant's own RE2 patterns that raise the
+  label and act by it (label, redact, hold) on chat and `/v1` answers, agent run outputs and uploads (attachments and
+  file versions); content raised above its owner's clearance is held. A held answer goes to the flag queue as
+  `DLP: <rule>`; a held run fails with the reason; a held upload is rejected. `server/src/compliance/dlp.ts`,
+  `/api/compliance/dlp`.
+- Legal holds (B-7602): a hold on a user or a workspace, asked for by one holder of `compliance:manage` and approved
+  by another, suspends the chat, memory and file retention purges of their content until it is released; the reason
+  is sealed. `server/src/compliance/holds.ts`, `/api/compliance/holds`.
+- Compliance exports (B-7603): conversations (with messages), files (metadata and versions), memories, agent runs and
+  accounts of a user and/or a workspace over a date range as sealed JSON Lines, requested and downloaded with
+  `compliance:export` (a person or a scoped API key); rows above the requester's clearance are left out and counted;
+  every request, run and download is audited. `server/src/compliance/exports.ts`, `/api/compliance/exports`.
+- Console: the Apps screen's Policies tab (designers) and the Usage and audit screen's Compliance tab (DLP rules and
+  patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
+  `e2e/tests/compliance.spec.ts`.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
