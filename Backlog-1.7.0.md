@@ -31,7 +31,7 @@ B-29 PDS, and on 1.6.0's HTTP tool kind (B-89), per-post visibility (B-4901), gr
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
 | 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | **Done** |
-| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (re-planned by usage on 2026-10-09) | B-11701–B-11706, B-11708, B-11901–B-11902, B-11906, B-9201, B-9203, B-9601–B-9602, B-12201 | 68 | Next |
+| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (re-planned by usage on 2026-10-09) | B-11701–B-11706, B-11708, B-11901–B-11902, B-11906, B-9201, B-9203, B-9601–B-9602, B-12201 | 68 | **Partly done** (42 of 68 points; B-9201, B-9203, B-11901, B-11902, B-11906 not started) |
 | 42 | The vault for signing keys and session tokens; Redis for multi-process installs; workflows calling listed public hosts; dynamic API-key leases | B-9202, B-9204–B-9209, B-9001–B-9002, B-9101–B-9102, B-9301–B-9302 | 60 | Planned |
 | 43 | Groups: the rest of nexus; groups as access subjects; skills from knowledge, second part | B-9701–B-9709, B-9801–B-9805, B-11903–B-11905 | 76 | Planned |
 | 44 | Held messages for review; evidence retention and legal hold; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9401–B-9404, B-9501–B-9504, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 74 | Planned |
@@ -51,7 +51,17 @@ B-115, B-116, B-118, B-120 and B-121 stay unscheduled.
 
 ### Progress
 
-**Sprint 40: done** (this PR). Agents, tools, skills and workflows in chat (B-4001 to B-4009, migration
+**Sprint 41: partly done** (this PR; 42 of 68 points, the owner's choice). Standing approvals for MCP write calls
+(B-12201, migration `043_mcp_standing_approvals`), the guardrail rule builder (B-9601, B-9602) and thinking policy,
+budgets, plan first, reflection, step levels and evaluations with their screens (B-11701 to B-11706, B-11708, migration
+`043c_thinking`). Not started: B-9201, B-9203 (vault system scope and hot path) and B-11901, B-11902, B-11906 (skills
+from knowledge, first part); they stay in Sprint 41 until the owner moves them. Unit suite 1209 passed; PostgreSQL
+integration passed; prototype smoke 51 of 51; touched specs passed (27). Choices to know: the person grants standing
+approvals for their own client and an identity admin lists and revokes them tenant-wide; drafting a rule needs
+`inference:invoke`, which `guardrail-admin` does not hold; plan first fails open when the draft cannot be parsed. Known
+gaps in `docs/security.md`.
+
+**Sprint 40: done** (PR #74). Agents, tools, skills and workflows in chat (B-4001 to B-4009, migration
 `042_chat_invocation`): the capabilities of a conversation, `/tool` through the dispatcher and the tool-call guardrail
 with held calls in the Flags queue, approval cards for write and destructive tools, `@agent` runs with run cards and
 attributed answers linked from Runs, `+skill` chips, agents as `agent:<name>` tools within the chain, `/workflow` with
