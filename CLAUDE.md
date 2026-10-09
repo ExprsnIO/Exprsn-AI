@@ -276,6 +276,14 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   and `routes/scim.ts` (`/scim/v2`, outside `/api`, and the token routes under Identity, B-7201, B-7202);
   `vault/shares.ts` (`s.vaultShares`, B-4801: a KV secret shared as a policy grant); the MongoDB lease engine in
   `vault/db-engines.ts` (B-4802); quotes and visibility in `feed/service.ts` (B-4901).
+- 1.6.0 Sprint 38a: `governance/inventory.ts` (`s.inventory`, B-7301, B-7302: the AI system inventory over the
+  objects' own tables plus `inventory_systems`, the owner publish gate the registry asks through `publishGate`, the
+  register as CSV or JSON); `tenancy/analytics.ts` (`s.analytics`, B-7401, B-7402: sums over `usage_records` by
+  dimension and per day, prices per model or pool, the chargeback); `audit/export-verify.ts` (B-7501: the JSONL
+  export's shape and its offline verifier, also `exprsn-ai audit:verify-export`) with `runAuditJsonl` in
+  `audit/exports.ts` and `AuditCheckpoints.createAt`; `audit/siem-destinations.ts` (`s.siemDestinations`, B-7501:
+  per-tenant HTTPS and syslog-over-TLS destinations under dual control, one `SiemForwarder` per active destination fed
+  through the chain's listener). The tracer allows the `gen_ai.usage.*` attributes the gateway clients set (B-7403).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

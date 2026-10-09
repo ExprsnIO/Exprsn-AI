@@ -223,6 +223,37 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
   MCP calls; tokens never enter model context.
 
+## The AI inventory, analytics and audit export (1.6.0, Sprint 38a)
+
+- **The inventory is a register, not a new authority.** It reads the objects it lists through the same tables their
+  own screens use and adds owner, oversight role, provenance, lineage note, known issues and impact assessment per
+  system (`inventory_systems`), under `models:manage`. The only enforcement it adds is the publish gate: with the
+  tenant's `requireOwner` setting on, the registry refuses to approve an agent that has no owner (`409`), on top of
+  the registry's own dual control. The gate is off by default so existing tenants keep publishing until their
+  register is filled in; turning it on is audited. Known issues are counted from open flags raised in the system's
+  agent or workflow runs and from failed evaluations; nothing is inferred from message text.
+- **Analytics reads the meter, never the content.** Every figure is a sum over `usage_records` (the rows the quotas
+  count), grouped by workspace, group, model, profile or user; `by=tenant` is for system admins. The group dimension
+  follows group membership, so a user's records count once per group they are in. Costs are computed at read time
+  from the tenant's prices and withheld for a row that mixes priced and unpriced records, so a partial figure never
+  reads as a total. Prices are `tenant:manage`, one currency per tenant, audited. The chargeback export is the same
+  computation and is audited with its total.
+- **Tracing carries token counts only.** `gen_ai.usage.*`, `gen_ai.response.model` and `gen_ai.provider.name` join
+  the allow-listed span attributes; the prompt and the answer still never leave the server.
+- **JSONL exports keep the chain verifiable.** A window holds every event between its bounds, those above the
+  requester's clearance redacted to their hashes (the hash covers all fields, so a redacted row cannot be recomputed,
+  but its `prev_hash` and `hash` still link the chain), and ends with a checkpoint signed by the KMS at the window's
+  last sequence (`AuditCheckpoints.createAt`, the same HMAC key as the scheduled checkpoints). `audit:verify-export`
+  needs nothing but the file; the HMAC is verified online by `audit:verify`. Requests and downloads are on the chain.
+- **Streaming per tenant is dual-controlled and guarded.** A destination is proposed by one tenant admin and approved
+  by another (the proposer cannot approve what they proposed); until then nothing is sent. Bearer tokens are sealed
+  with the tenant key and never shown again; a private CA is kept for the TLS connection. Every delivery dials
+  through the outbound address guard: HTTPS through the policy-checked dispatcher (no redirects), syslog through a
+  policy-checked lookup, so a destination whose name later resolves to a refused address stops working at that call.
+  Cloud metadata addresses are refused at save. Events are filtered per tenant before they reach a forwarder; the
+  platform stream (`SIEM_URL`) stays the operator's. Delivery is at least once with backoff; overflow is counted as
+  dropped on the row, and the chain in the database stays the record of truth.
+
 ## Deployment hardening
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
@@ -231,6 +262,20 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
+  only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
+  Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
+  conversations are not linked to the profile, and models and tools show no issues. The register is a synchronous
+  download (no sealed export job), so it is not kept for later download. Analytics prices are per model or per pool,
+  not per instance: the meter records the pool a request ran on, not the instance. Costs are computed on each read and
+  nothing is stored per request, so a price change changes past months' chargebacks; keep the export if a figure
+  must stand. The group dimension counts a user's records once per group they belong to, so group rows do not sum to
+  the tenant's total. A JSONL export redacts rows above the requester's clearance to their hashes; the offline
+  verifier checks the chain and the checkpoint's hash but not its HMAC (that needs the key: `audit:verify`). Tenant
+  SIEM forwarders buffer in memory on the instance that appended the event (as the platform stream does): on a
+  multi-instance install each instance delivers the events it appended, and a restart drops what was buffered
+  (counted on the row only if the counters were flushed). A syslog destination opens one TLS connection per batch and
+  sends no structured data elements; HTTPS destinations get no retry on a 4xx beyond the forwarder's backoff.
 - HTTP tools and prompt-injection defence (1.6.0, Sprint 37a). The heuristic injection classifier is a set of
   patterns tuned on the corpus it is measured against (detection 100%, false positives 3.3% on it); new phrasings,
   other languages than English, Spanish, French, German and Dutch, and attacks split across chunks are missed, and a

@@ -32,6 +32,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `JOB_POLL_MS`, `JOB_CONCURRENCY`, `WORKERS_ENABLED` | `1000`, `4`, `true` | Job workers on this instance; set `WORKERS_ENABLED=false` for web-only instances |
 | `SMTP_URL` (`_FILE`), `SMTP_FROM` | — | Notification email (`smtp://` or `smtps://`); without it notifications reach the console only |
 | `SIEM_URL`, `SIEM_TOKEN` (`_FILE`) | — | Audit events are POSTed there as NDJSON batches (Splunk HEC raw, Elastic, Vector, Fluent Bit, Logstash) |
+| `SIEM_TENANT_MAX_DESTINATIONS` | `5` | Audit streaming per tenant (1.6.0): how many proposed or active SIEM destinations a tenant may have |
 | `DIRECTORY_SYNC_MINUTES`, `AUDIT_CHECKPOINT_MINUTES` | `60`, `60` | Directory sync and signed audit checkpoints per tenant (0 turns off) |
 | `OLLAMA_POLL_MS`, `OLLAMA_TIMEOUT_MS` | `5000`, `4000` | Instance polling (`/api/version`, `/api/ps`, `/api/tags`) |
 | `OLLAMA_MAX_INFLIGHT`, `OLLAMA_QUEUE_TIMEOUT_MS` | `4`, `120000` | Default parallel requests per instance (instances may set their own) and how long a request waits for a slot |

@@ -4934,3 +4934,54 @@ group. Bookmarks list it for whoever saved it.
 | `GET /api/feed/users/:id?unlisted=true` | On one's own page, adds one's own unlisted posts (nobody else's are ever listed) |
 
 The catalogue events `post.*` carry `visibility` and, for a quote, `quoteOf` (optional fields).
+
+## Sprint 38a (1.6.0): the AI inventory, usage and cost analytics, audit export and streaming (B-7301, B-7302, B-7401 to B-7403, B-7501)
+
+Migration `040_inventory_analytics`. New setting: `SIEM_TENANT_MAX_DESTINATIONS` (5). Job: `export.audit-jsonl`. CLI:
+`exprsn-ai audit:verify-export <file.jsonl>`.
+
+### The AI system inventory (B-7301, B-7302)
+
+Every model, profile, agent, workflow, tool (and skill), MCP server and dataset of the tenant is a system in the
+inventory. The objects stay where they are; `inventory_systems` adds what the register needs. All under `models:manage`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/inventory` | `{items: [InventoryItem], owners: [{id, name}], settings, counts: {total, incomplete, withIssues}}`. An item is `{kind, id, name, version, status, label, lineage: [{kind, id, name}], issues: {flags, failedEvals}, missing: [owner \| oversight role \| data provenance], complete, ownerId, ownerName, oversightRole, provenance, lineageNote, knownIssuesNote, impactAssessment, updatedAt}`. Lineage runs agent → profile (→ aliased profile) → model → base weights (family, parameters, quantization). `issues.flags` counts the open flags raised in the system's agent or workflow runs; `failedEvals` the sets whose latest run failed (profiles). `complete` means an owner is named |
+| `PATCH /api/admin/inventory/:kind/:id` `{ownerId?, oversightRole?, provenance?, lineageNote?, knownIssuesNote?, impactAssessment?}` | The item after the change. `ownerId` must be a user of the tenant (`409` otherwise); null clears a field. Audited `inventory.updated` with what changed and whether the entry became complete |
+| `GET /api/admin/inventory/settings` | `{requireOwner, updatedBy, updatedAt}` |
+| `PUT /api/admin/inventory/settings` `{requireOwner}` | With `requireOwner` on, the registry refuses to publish (`409` at review) an agent that has no owner in the inventory. Off by default, so existing tenants keep publishing until their register is filled in. Audited `inventory.settings.updated` |
+| `GET /api/admin/inventory/register?format=csv\|json` | The register as a download: every system with kind, id, name, version, status, label, owner, oversight role, provenance, lineage (`profile:x > model:y > base:z`), lineage note, open flags, failed evaluations, known issues, impact assessment, completeness and what is missing. Audited `inventory.exported` |
+
+### Usage and cost analytics (B-7401, B-7402)
+
+Everything is a sum over `usage_records`, the rows the quotas count, so a day's totals here equal that day's metering.
+Reads under `usage:read`; prices under `usage:read` and `tenant:manage`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/analytics/summary?by=workspace\|group\|model\|profile\|user\|tenant&from=&to=&days=14&workspace=&group=` | `{by, from, to, currency, rows: [{key, name, requests, messages, runs, users, prompt, output, thinking, tokens, gpuMs, cost, currency}], total}`. Messages are the chat, compare, API and channel records; runs the agent and workflow records; users the distinct users. `by=group` joins group membership (a user in two groups counts in both); `group=` narrows any dimension to one group's members. `by=tenant` is for system admins (`403` otherwise). `cost` is the sum at the tenant's prices and null when a model or pool in the row has no price |
+| `GET /api/admin/analytics/daily?from=&to=&days=&workspace=` | One entry per day, zero-filled: `{day, messages, runs, tokens, gpuSeconds}` |
+| `GET /api/admin/analytics/prices` | `{prices: [{id, scope: model \| pool, ref, currency, inputPerMillion, outputPerMillion, gpuHour, note, updatedBy, updatedAt}]}` |
+| `PUT /api/admin/analytics/prices` `{scope, ref, currency, inputPerMillion?, outputPerMillion?, gpuHour?, note?}` | Creates or replaces the price of a model (`ref` its name) or a pool (`ref` its id). One currency per tenant (`403` for a second). A model price wins over the pool price for the same records; the GPU-hour rate suits local models (energy or a set rate), the token rates metered providers. Audited `analytics.price.set` |
+| `DELETE /api/admin/analytics/prices/:id` | `204`. Audited `analytics.price.removed` |
+| `GET /api/admin/analytics/chargeback?month=YYYYMM&workspace=&format=json\|csv` | The chargeback for a month (default: this one) per workspace and model: `{month, currency, workspace, rows: [{workspaceId, workspace, model, pool, requests, prompt, output, gpuMs, cost}], total: {requests, prompt, output, gpuMs, cost, unpriced}}`; the CSV has the same lines and a `TOTAL` line. The total equals the Analytics screen's figure for the same workspace and month. Audited `analytics.chargeback.exported` |
+
+Tracing (B-7403): the `gateway chat stream` span carries `gen_ai.provider.name` (`ollama` or `openai`),
+`gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`, the
+counts the meter records, so usage is portable to Grafana and other OTLP backends. Never the prompt or the answer.
+
+### Audit export with a chain proof, and streaming per tenant (B-7501)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/audit/exports/jsonl` `{from?, to?}` (epoch ms) | `audit:read`. `202` the export (`kind: audit-jsonl`, `file: audit-<tenant>-<date>-<id>.jsonl`) plus `total` and `redacted`. The job writes one JSON document per line: a `header` (tenant, window, counts, the first event's `prev_hash`, the last event's `hash`), every event of the window as stored (events above the requester's clearance redacted to `{seq, id, ts, prev_hash, hash, redacted: true}`, so the chain stays recomputable), and a `proof` with the checkpoint signed at the window's last sequence (made there if none existed: tenant, seq, hash, ts, key, HMAC signature, canonical payload). Download it from `GET /api/admin/exports/:id/download` (`application/x-ndjson`). Audited `audit.export.requested` and `export.downloaded` |
+| `exprsn-ai audit:verify-export <file.jsonl>` | Offline: recomputes every event's hash over its canonical JSON, checks each `prev_hash` and the sequence, and that the last hash equals the checkpoint's hash whose payload names that sequence. Exit 2 unless `verified`; redacted links are counted. The checkpoint's HMAC is checked online by `audit:verify`, by whoever holds the key |
+| `GET /api/admin/audit/siem` | `audit:read`. `{platform: SiemStatus (SIEM_URL), max, destinations: [SiemDestination]}`. A destination is `{id, name, kind: https \| syslog, url, hasToken, hasCa, state: proposed \| active \| rejected \| disabled, proposedBy, proposedByName, proposedAt, approvedBy, approvedByName, approvedAt, decidedBy, decidedAt, note, delivered, dropped, pending, lastDeliveredAt, lastError, connection: connected \| failing \| idle \| disabled}` |
+| `POST /api/admin/audit/siem` `{name, kind, url, token?, caPem?, note?}` | `tenant:manage`. `201` proposed. `https`: `https://host/path`, NDJSON batches with `Authorization: Bearer <token>`; `syslog`: `host:port`, RFC 5424 lines with RFC 6587 octet counting over TLS (facility 13, severity 6, MSGID the action, the event as JSON), `caPem` for a private CA. The outbound address guard applies at save and on every delivery (metadata addresses refused; internal hosts only as `SERVICE_ALLOWED_HOSTS` names them); `400` for `http://`, credentials in the URL or a port-less syslog address; `409` past `SIEM_TENANT_MAX_DESTINATIONS` proposed or active. The token is sealed with the tenant key and never returned. Audited `audit.siem.proposed` |
+| `POST /api/admin/audit/siem/:id/approve` `{note?}`, `/reject` | `tenant:manage`, by someone other than the proposer (`403` dual control). Approval starts the stream: a forwarder per active destination, fed by the chain's append listener and filtered to the tenant, at-least-once with backoff; the approval event itself is the first delivered. Audited `audit.siem.approved` or `.rejected` |
+| `POST /api/admin/audit/siem/:id/disable` `{note?}` | `tenant:manage`. Stops an active destination (or withdraws a proposed one). Audited `audit.siem.disabled` |
+| `POST /api/admin/audit/siem/:id/test` | `tenant:manage`. Sends one `audit.siem.test` event now; `{ok, error}`; the row keeps the last error. Audited `audit.siem.tested` |
+
+`GET /api/admin/exports` and the download route treat `audit-jsonl` like `audit` for permissions.
+

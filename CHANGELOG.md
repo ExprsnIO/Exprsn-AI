@@ -2,6 +2,40 @@
 
 ## 1.6.0 (in progress)
 
+### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
+
+- Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,
+  `audit_siem_destinations`.
+- The AI system inventory (B-7301): one list of the tenant's models, profiles, agents, workflows, tools, MCP servers
+  and datasets, each with an accountable owner, a human-oversight role, data provenance, model lineage (agent →
+  profile → model → base weights), known issues (open flags raised in its runs, failed evaluations) and whether the
+  entry is complete, on the Models screen's Inventory tab (`models:manage`). With the tenant's "publishing an agent
+  needs an owner" switch on, the registry refuses to approve an agent that has no owner. Audited `inventory.updated`
+  and `inventory.settings.updated`. `server/src/governance/inventory.ts`.
+- The register (B-7302): `GET /api/admin/inventory/register` as CSV or JSON, every system with its lineage and the
+  tenant's impact assessment, for ISO/IEC 42001 and EU AI Act deployer records; audited `inventory.exported`.
+- The Analytics screen (B-7401, `usage:read`): messages, agent and workflow runs, users, tokens, GPU time and cost
+  by workspace, group (through membership), model, profile and user (and tenant for system admins) over a period, a
+  per-day chart, totals, every figure a sum over the metering records so a day's totals equal that day's meter.
+  `server/src/tenancy/analytics.ts`, `/api/admin/analytics/summary` and `/daily`.
+- Prices and chargeback (B-7402): a price per model or per pool (per million input and output tokens and per
+  GPU-hour, energy or a set rate for local models, one currency per tenant, `tenant:manage`, audited); a row whose
+  records a price does not cover shows no cost rather than a partial one; the chargeback per workspace and month as
+  JSON or CSV with a total line that equals the screen's total, audited `analytics.chargeback.exported`.
+- OpenTelemetry GenAI attributes (B-7403): `gen_ai.provider.name`, `gen_ai.response.model`,
+  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` on the `gateway chat stream` span, for Ollama and
+  Chat Completions servers.
+- JSONL audit exports with a chain proof (B-7501): `POST /api/admin/audit/exports/jsonl {from, to}` writes every
+  event of the window (rows above the requester's clearance redacted to their hashes) and a checkpoint signed at the
+  window's last sequence; `exprsn-ai audit:verify-export <file>` and `verifyAuditExport` verify it offline. The Usage
+  and audit export dialog offers it.
+- Audit streaming per tenant (B-7501): HTTPS (NDJSON with a sealed bearer token) or syslog-over-TLS (RFC 5424, octet
+  counting, optional private CA) destinations proposed by a tenant admin and approved by a second one, tested,
+  disabled, with delivery counters, on the Usage and audit screen's Exports tab; the outbound address guard applies;
+  audited `audit.siem.*`. New setting `SIEM_TENANT_MAX_DESTINATIONS` (5). `server/src/audit/siem-destinations.ts`.
+- Prototype boards first (Models inventory tab, Analytics, Usage and audit); `e2e/tests/analytics.spec.ts` and
+  additions to `models.spec.ts` and `usage-audit.spec.ts` with axe-core.
+
 ### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
 
 - Migration `039_tools_injection` (with the items below): `registry_http_calls`, the meter of HTTP tool calls.
