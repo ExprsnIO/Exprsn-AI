@@ -30,7 +30,7 @@ import { InstanceRegistry } from '../server/src/ops/instances.js';
 import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
-import { FakeOllama, TEMPLATE_SYSTEM, templateModel } from '../server/test/fake-ollama.js';
+import { FakeOllama, TEMPLATE_SYSTEM, templateModel, fakeRuleDraft, isRuleDraftPrompt } from '../server/test/fake-ollama.js';
 import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
@@ -89,6 +89,8 @@ async function main() {
       const greeting = /goodbye/i.test(String(last?.content ?? '')) ? 'Goodbye' : 'Hello';
       return { content: `Here is the page.\n\n\`\`\`html index.html\n<!doctype html>\n<html><body><h1 data-greeting>${greeting} from the artifact</h1><script>document.body.dataset.ran = 'yes';</script></body></html>\n\`\`\`\n\nAnd the helper:\n\n\`\`\`js\nexport function greet(name) {\n  return 'Welcome, ' + name;\n}\nexport const helper = true;\n\`\`\`` };
     }
+    // 1.7.0 (B-9601): a guardrail rule drafted from a description on the Guardrails screen.
+    if (isRuleDraftPrompt(messages)) return { content: fakeRuleDraft(messages) };
     // 1.6.0 (B-8301): a data model draft for the Apps screen: a leave-request model with an approval state machine.
     if (/data model of a low-code app/.test(system)) return { content: JSON.stringify({ entities: [{ name: 'employee', title: 'Employee', definition: { fields: [{ name: 'name', type: 'string', required: true, indexed: true, maxLength: 200 }] } }, { name: 'request', title: 'Leave request', definition: { fields: [{ name: 'employee', type: 'reference', entity: 'employee', required: true }, { name: 'from_day', type: 'date', required: true, indexed: true }, { name: 'to_day', type: 'date', required: true }, { name: 'days', type: 'formula', expression: 'days_between(from_day, to_day) + 1' }], states: { initial: 'submitted', states: [{ name: 'submitted' }, { name: 'approved' }, { name: 'rejected' }], transitions: [{ from: ['submitted'], to: 'approved' }, { from: ['submitted'], to: 'rejected' }] } } }], triggers: [{ entity: 'request', events: ['created'], workflow: 'notify-manager' }] }) };
     return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
