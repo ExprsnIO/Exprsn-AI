@@ -22,7 +22,7 @@ export const TEMPLATE_SYSTEM = 'A user will ask you to solve a task. You should 
 /** A Magistral-like model for the fake registry: thinks through <think> blocks, tools listed in the template. */
 export const templateModel = (name = 'magistral:24b', size = 14 * 1_000_000_000): FakeModel => ({ name, size, family: 'llama', capabilities: ['completion', 'tools', 'thinking'], template: '{{ if .System }}[SYSTEM_PROMPT]{{ .System }}[/SYSTEM_PROMPT]{{ end }}[INST]{{ .Prompt }}[/INST]<think>{{ .Thinking }}</think>', system: TEMPLATE_SYSTEM });
 
-interface Msg {
+export interface Msg {
   role: string;
   content: string;
   images?: string[];

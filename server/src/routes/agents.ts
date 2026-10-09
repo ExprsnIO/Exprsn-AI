@@ -72,6 +72,12 @@ export function agentRoutes(s: Services): Router {
     res.status(202).json(await s.agents.replay(principalOf(req), String(req.params.id), b.fromStep));
   });
 
+  // 1.7.0 (B-11703): the person approves, edits or declines a plan-first run's plan.
+  r.post('/runs/:id/plan', anyOf('agents:run', 'agents:manage'), async (req, res) => {
+    const body = parseBody(z.object({ decision: z.enum(['approve', 'decline']), steps: z.array(z.object({ title: z.string().trim().min(1).max(200), tools: z.array(z.string().trim().min(1).max(120)).max(8).default([]), data: z.array(z.string().trim().max(200)).max(8).default([]) })).min(1).max(50).optional() }), req.body);
+    res.json(await s.agents.decidePlan(principalOf(req), String(req.params.id), body));
+  });
+
   r.post('/runs/:id/steps/:n/decision', anyOf('agents:run', 'tools:manage'), async (req, res) => {
     const b = parseBody(z.object({ decision: z.enum(['approve', 'reject']), note: z.string().trim().max(500).nullable().default(null) }), req.body);
     const n = Number.parseInt(String(req.params.n), 10);

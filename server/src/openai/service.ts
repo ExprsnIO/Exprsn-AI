@@ -297,11 +297,15 @@ export class OpenAiService {
     return out;
   }
 
-  /** The thinking level a request asks for, within the profile's ceiling (B-11707: the model's mode shapes the request). */
-  private thinkLevel(r: ResolvedProfile, effort: ChatBody['reasoning_effort']): ThinkLevel {
+  /**
+   * The thinking level a request asks for, within the profile's ceiling (B-11707: the model's mode shapes the request)
+   * and, 1.7.0 (B-11702), within the profile's and the workspace's thinking budgets: a spent budget drops it to `low`.
+   */
+  private async thinkLevel(p: Principal, r: ResolvedProfile, effort: ChatBody['reasoning_effort']): Promise<{ level: ThinkLevel; dropped: boolean }> {
     let want: ThinkLevel = effort ? (effort === 'minimal' ? 'off' : effort) : r.profile.think_default;
     if (thinkRank(want) > thinkRank(r.profile.think_ceiling)) want = r.profile.think_ceiling;
-    return want;
+    const b = await this.s().thinking.budget(p.tenantId, p.workspaceId ?? null, r.profile, want);
+    return { level: b.level, dropped: b.dropped };
   }
 
   /**
@@ -382,6 +386,7 @@ export class OpenAiService {
     let outputTokens = 0;
     let gpuMs = 0;
     let firstTokenMs: number | null = null;
+    let thinkingDropped = false; // 1.7.0 (B-11702)
     let doneReason: string | undefined;
     let counted = false;
     let failed: Error | null = null;
@@ -409,7 +414,9 @@ export class OpenAiService {
       if (body.seed != null) options.seed = body.seed;
       if (body.presence_penalty != null) options.presence_penalty = body.presence_penalty;
       if (body.frequency_penalty != null) options.frequency_penalty = body.frequency_penalty;
-      const thinkLevel = this.thinkLevel(r, body.reasoning_effort);
+      const budgeted = await this.thinkLevel(p, r, body.reasoning_effort);
+      const thinkLevel = budgeted.level;
+      thinkingDropped = budgeted.dropped;
       if (ext.knowledge?.length || ext.memory) ({ items, label: answerLabel } = await this.context(p, id, r, lease, messages, label, ext));
       const server = ext.serverTools ? await this.serverTools(p, r, answerLabel) : null;
       const serverDefs = server ? [...(server.calculate ? [CALCULATE_TOOL] : []), ...server.extra.map((t) => t.def)] : [];
@@ -493,7 +500,7 @@ export class OpenAiService {
       outputTokens = Math.ceil(content.length / 4);
     }
     if (promptTokens + outputTokens > 0) {
-      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs, ...(calcCalls ? { calcCalls } : {}) });
+      await s.quotas.record({ tenantId: p.tenantId, workspaceId: p.workspaceId ?? null, userId: p.userId, apiKeyId: p.apiKeyId, kind: 'api', profileId: r.profile.id, model: r.model.name, poolId: lease?.pool.id ?? null, promptTokens, outputTokens, gpuMs, thinkingDropped, ...(calcCalls ? { calcCalls } : {}) });
     }
     if (failed) {
       if (signal.aborted) throw failed;

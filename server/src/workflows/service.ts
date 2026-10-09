@@ -359,7 +359,7 @@ export class WorkflowService implements WorkflowToolRunner {
       profile: (name: string) => {
         let t = rows.find((x) => x.name === name || x.id === name);
         for (let i = 0; t?.alias_of && i < 5; i++) t = rows.find((x) => x.id === t!.alias_of);
-        return t && !t.alias_of && t.status === 'published' ? { label: t.label } : undefined;
+        return t && !t.alias_of && t.status === 'published' ? { label: t.label, thinkCeiling: t.think_ceiling } : undefined;
       },
       tool: (name: string) => tools.get(name),
       workflow: steps.workflow,
@@ -1406,7 +1406,7 @@ export class WorkflowService implements WorkflowToolRunner {
         throw new StepFailed("The model's answer is not valid JSON.");
       }
     }
-    return { output: value, detail: { profile: r.profile.name, model: r.model.name, instance, tokens: prompt + output, promptTokens: prompt, outputTokens: output, gpuMs: Math.round(gpuMs), ...extra }, tokens: prompt + output };
+    return { output: value, detail: { profile: r.profile.name, model: r.model.name, instance, think, tokens: prompt + output, promptTokens: prompt, outputTokens: output, gpuMs: Math.round(gpuMs), ...extra }, tokens: prompt + output };
   }
 
   // ---------- Sprint 32: what the Workflows 2 step runners use (steps/host.ts) ----------

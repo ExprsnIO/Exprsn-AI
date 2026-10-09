@@ -93,6 +93,11 @@ export const profileView = (p: ProfileRow) => ({
   agents: p.agents ?? [],
   skills: p.skills ?? null,
   trustMarking: p.trust_marking !== false,
+  // 1.7.0 (B-11702 to B-11704): the thinking budget, plan first and reflection.
+  thinkingBudget: p.thinking_budget ?? null,
+  planFirst: p.plan_first === true,
+  reflect: p.reflect === true,
+  reflectProfile: p.reflect_profile ?? null,
   label: p.label,
   status: p.status,
   version: p.version,
@@ -619,6 +624,13 @@ export function gatewayAdminRoutes(s: Services): Router {
     skills: z.array(z.string().trim().min(1).max(120)).max(32).nullable(),
     // B-6901: datamark untrusted content for this profile's model (on by default)
     trustMarking: z.boolean(),
+    // 1.7.0 (B-11702): thinking tokens per UTC day; null for no budget
+    thinkingBudget: z.number().int().min(100).max(1_000_000_000).nullable(),
+    // 1.7.0 (B-11703): the model drafts a plan the person approves before any tool runs
+    planFirst: z.boolean(),
+    // 1.7.0 (B-11704): a second pass checks every answer; reflectProfile names another profile for it (null: this one)
+    reflect: z.boolean(),
+    reflectProfile: z.string().trim().min(1).max(63).nullable(),
     label: z.enum(LABELS)
   });
 
@@ -707,6 +719,10 @@ export function gatewayAdminRoutes(s: Services): Router {
       agents: body.agents ?? [],
       skills: body.skills ?? null,
       trust_marking: body.trustMarking ?? true,
+      thinking_budget: body.thinkingBudget ?? null,
+      plan_first: body.planFirst ?? false,
+      reflect: body.reflect ?? false,
+      reflect_profile: body.reflectProfile ?? null,
       label: body.label ?? 'internal',
       status: body.aliasOf ? 'published' : 'draft',
       version: 1,
@@ -761,7 +777,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       if (!target || target.alias_of || target.id === before.id) throw badRequest('An alias must point at a real profile.');
     }
     const patch: Partial<ProfileRow> = {};
-    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['agents', 'agents'], ['skills', 'skills'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['trustMarking', 'trust_marking'], ['label', 'label'], ['aliasOf', 'alias_of']];
+    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['agents', 'agents'], ['skills', 'skills'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['trustMarking', 'trust_marking'], ['thinkingBudget', 'thinking_budget'], ['planFirst', 'plan_first'], ['reflect', 'reflect'], ['reflectProfile', 'reflect_profile'], ['label', 'label'], ['aliasOf', 'alias_of']];
     for (const [a, b] of map) if (body[a] !== undefined) (patch as Record<string, unknown>)[b] = body[a];
     if (patch.model_id && patch.model_id !== before.model_id) {
       const m = await g.repo.model(patch.model_id);

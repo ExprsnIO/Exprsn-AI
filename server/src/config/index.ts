@@ -483,6 +483,12 @@ const base = z.object({
     CHAT_AGENT_WAIT_SECONDS: z.coerce.number().int().min(1).max(600).default(45),
     /** 1.7.0 (B-4004): how many recent turns `@agent` may pass along when the person allows it. */
     CHAT_AGENT_CONTEXT_TURNS: z.coerce.number().int().min(0).max(50).default(8),
+    /** 1.7.0 (B-11702): the share of a thinking-token budget spent at which a turn carries a notice. */
+    THINKING_BUDGET_NOTICE_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
+    /** 1.7.0 (B-11703): the most steps a plan may hold (longer plans are cut). */
+    THINKING_PLAN_MAX_STEPS: z.coerce.number().int().min(1).max(50).default(12),
+    /** 1.7.0 (B-11704): how much of the question, answer, citations and tool results the reflection pass reads, in characters each. */
+    THINKING_REFLECTION_MAX_CHARS: z.coerce.number().int().min(1000).max(200_000).default(12_000),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and

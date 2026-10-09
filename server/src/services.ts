@@ -88,6 +88,7 @@ import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
 import { ChatArtifacts } from './chat/artifacts.js';
 import { ChatInvocations } from './chat/invocations.js';
+import { ThinkingService } from './thinking/service.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -222,6 +223,8 @@ export interface Services {
   chatArtifacts: ChatArtifacts;
   /** 1.7.0 (B-40): agents, tools, skills and workflows called from a conversation. */
   chatInvocations: ChatInvocations;
+  /** 1.7.0 (B-117): the thinking policy, budgets, plans and reflection. */
+  thinking: ThinkingService;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -623,6 +626,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     sharing: new ConversationSharing(() => s),
     chatArtifacts: new ChatArtifacts(() => s),
     chatInvocations: new ChatInvocations(() => s),
+    thinking: new ThinkingService(() => s),
     contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
@@ -746,6 +750,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     }
   };
   chat.invocations = s.chatInvocations; // 1.7.0 (B-40): write-tool cards, agents handed a turn, the conversation's skills
+  chat.thinking = s.thinking; // 1.7.0 (B-117): the thinking policy, budgets, plans and reflection
+  agents.thinking = s.thinking;
   registerPlatformJobs(s);
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
@@ -889,6 +895,7 @@ function registerPlatformJobs(s: Services): void {
   s.jobs.register('chat.sweep', async (p, ctx) => {
     const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
     await s.chatInvocations.expireCards(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-4003): cards past their expiry
+    await s.thinking.purgeThinking(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-11701): thinking past the policy's retention
     await s.chat.store.expire(24 * 3_600_000);
     return { interrupted };
   });

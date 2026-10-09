@@ -36,16 +36,16 @@ An admin permission is any permission outside the member baseline: a custom role
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 13 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 32 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
 | `models:manage` | yes | 11 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `profiles:manage` | yes | 27 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `profiles:manage` | yes | 29 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 35 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 36 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `workflows:manage` | yes | 22 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -259,6 +259,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
 - `POST /api/runs/{id}/steps/{n}/decision` (or another permission)
+- `POST /api/runs/{id}/plan` (or another permission)
 - `GET /api/chains/{id}` (or another permission)
 - `POST /api/chains/{id}/held/{node}/decision` (or another permission)
 - `POST /api/chains/{id}/nodes/{node}/replay` (or another permission)
@@ -383,6 +384,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/profiles/{id}/evaluations/overrides/{oid}/decide`
 - `POST /api/admin/profiles/{id}/evaluations/run`
 - `POST /api/admin/profiles/{id}/publish`
+- `GET /api/admin/thinking/policy`
+- `PUT /api/admin/thinking/policy`
 - `POST /api/admin/profiles/{id}/rollback`
 - `PUT /api/admin/profiles/{id}/canary`
 - `DELETE /api/admin/red-team/suites/{id}` (or another permission)
@@ -447,6 +450,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/runs/{id}/cancel` (or another permission)
 - `POST /api/runs/{id}/replay` (or another permission)
 - `POST /api/runs/{id}/resume` (or another permission)
+- `POST /api/runs/{id}/plan` (or another permission)
 - `GET /api/admin/registry/{id}/used-by` (or another permission)
 - `GET /api/chains/{id}` (or another permission)
 - `POST /api/chains/{id}/held/{node}/decision` (or another permission)

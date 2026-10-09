@@ -23758,6 +23758,43 @@
         }
       }
     },
+    "/api/admin/thinking/policy": {
+      "get": {
+        "tags": [
+          "admin/thinking"
+        ],
+        "summary": "profiles:manage. B-11701: the thinking policy in force (the tenant's, the workspace's own row when it has one, and the effective one).",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "a workspace id (default: the caller's current workspace)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-exprsn-since": "1.7.0"
+      },
+      "put": {
+        "tags": [
+          "admin/thinking"
+        ],
+        "summary": "profiles:manage. B-11701, B-11702: sets the tenant's policy (workspace null) or a workspace's: visibility (author, reviewers, nobody), retentionDays, exports, budgetTokensPerDay; reset: true removes a workspace's row so it inherits. Audited thinking.policy.updated.",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
+      }
+    },
     "/api/admin/usage/daily": {
       "get": {
         "tags": [
@@ -51677,6 +51714,30 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/runs/{id}/plan": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "agents:run or agents:manage. B-11703: the person's decision on a plan-first run's plan: {decision: approve | decline, steps?: [{title, tools, data}]}; approved (as drafted or edited) the plan becomes the run's step list, declined the run ends. Audited agent.plan.approved or agent.plan.declined.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.7.0"
       }
     },
     "/api/runs/{id}/replay": {

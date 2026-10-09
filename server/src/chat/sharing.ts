@@ -98,6 +98,8 @@ interface MessageRow {
   error: string | null;
   created_at: number;
   completed_at: number | null;
+  /** 1.7.0 (B-11701): sealed thinking, carried by exports the policy allows. */
+  thinking?: string | null;
 }
 
 export interface TranscriptMessage {
@@ -112,6 +114,8 @@ export interface TranscriptMessage {
   tools: Record<string, unknown>[];
   createdAt: number;
   completedAt: number | null;
+  /** 1.7.0 (B-11701): the thinking, only in exports the policy lets carry it. */
+  thinking?: string | null;
 }
 
 export interface Transcript {
@@ -317,7 +321,7 @@ export class ConversationSharing {
   }
 
   /** The active branch (root to head), opened, with citations the reader is cleared for. */
-  async transcript(c: ConversationRow, clearance: Label): Promise<Transcript> {
+  async transcript(c: ConversationRow, clearance: Label, opts: { thinking?: boolean } = {}): Promise<Transcript> {
     const keys = this.s().keys;
     const rows = (await this.db('messages').where({ conversation_id: c.id })) as MessageRow[];
     const byId = new Map(rows.map((m) => [m.id, m]));
@@ -331,7 +335,9 @@ export class ConversationSharing {
       const content = shown && m.content ? await keys.open(c.tenant_id, m.content, `content:${m.id}`) : '';
       const citations = shown && m.citations ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.citations, `citations:${m.id}`), []) : [];
       const tools = shown && m.tools ? json<Record<string, unknown>[]>(await keys.open(c.tenant_id, m.tools, `tools:${m.id}`), []) : [];
+      const thinking = opts.thinking && shown && m.thinking ? await keys.open(c.tenant_id, m.thinking, `thinking:${m.id}`) : null;
       messages.push({
+        ...(opts.thinking ? { thinking } : {}),
         id: m.id,
         role: m.role,
         content,
@@ -402,7 +408,9 @@ export class ConversationSharing {
       p.workspaceId = (await workspacesFor(s, p))[0]?.id ?? null;
       // Access is checked again when the job runs: a share revoked in between ends the export.
       const { c } = await this.readable(p, e.conversation_id);
-      const t = await this.transcript(c, p.clearance);
+      // 1.7.0 (B-11701): the thinking rides in the export only when the policy says so and the exporter may see it.
+      const policy = await s.thinking.policyFor(c.tenant_id, c.workspace_id);
+      const t = await this.transcript(c, p.clearance, { thinking: policy.exports && s.thinking.visibleTo(policy, p, c.user_id) });
       await progress(40, `${t.messages.length} messages`);
       const exportedAt = new Date().toISOString();
       let text = e.format === 'json' ? JSON.stringify({ format: 'exprsn-ai.conversation.v1', exportedAt, exportedBy: p.username, conversation: t }, null, 2) : toMarkdown(t, p.username, exportedAt);

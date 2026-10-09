@@ -1,5 +1,6 @@
 import { ulid } from 'ulid';
 import { splitThink, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
+import { capLevel, normalizePlan, parsePlan, planInstruction, type Plan, type ThinkingService } from '../thinking/service.js';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
@@ -55,6 +56,9 @@ interface RunRow {
   replay_from: number | null;
   /** Sprint 21: the schedule that started the run (B-1306). */
   schedule_id?: string | null;
+  /** 1.7.0 (B-11703): a plan-first run's plan (sealed JSON) and its state: awaiting, approved or declined. */
+  plan?: string | null;
+  plan_state?: 'awaiting' | 'approved' | 'declined' | null;
   /** Sprint 32 (B-4101): the run's node in its chain; (B-3902) the workflow step that awaits it. */
   chain_id?: string | null;
   chain_node?: string | null;
@@ -158,6 +162,8 @@ export class AgentService {
   memoryExtract: RunFinishedForMemory | null = null;
   /** B-4101: the chain context; unset, runs keep only their own budgets. */
   chains: ChainService | null = null;
+  /** 1.7.0 (B-117): the thinking policy, budgets, plans and reflection (set by `services.ts`). */
+  thinking: ThinkingService | null = null;
   /** B-3902: a run a workflow step awaits ended (or stopped at its budget); the workflow run is resumed. */
   onCallerDone: ((tenantId: string, kind: string, id: string) => Promise<void>) | null = null;
   /** 1.6.0 (B-7701): the principal a run acts as, narrowed to the agent's identity; unset, runs act as their owner. */
@@ -291,6 +297,8 @@ export class AgentService {
       steps,
       lanes,
       checkpoints,
+      // 1.7.0 (B-11703): the plan a plan-first run drafted, and whether it waits, was approved or declined.
+      plan: r.plan ? { ...(await this.open<Plan>(r.tenant_id, `agent-run-plan:${r.id}`, r.plan, { steps: [], tools: [] })), state: r.plan_state ?? null } : null,
       // Sprint 34: what this run delegated to or started and awaited (B-4102, B-4104).
       children: await this.children(p, r.id)
     };
@@ -574,6 +582,40 @@ export class AgentService {
   }
 
   /**
+   * 1.7.0 (B-11703): the person's decision on a plan-first run's plan. Approved (as drafted or edited), the plan
+   * becomes the step list the run follows: it is told to follow it and call only the tools it names, and a call
+   * outside it pauses for a new approval. Declined, the run ends and nothing ran.
+   */
+  async decidePlan(p: Principal, id: string, input: { decision: 'approve' | 'decline'; steps?: { title: string; tools?: string[]; data?: string[] }[] }) {
+    const r = await this.get(p, id);
+    if (r.user_id !== p.userId && !effectivePermissions(p).has('agents:manage')) throw forbidden('Only the run\'s owner or an agent admin decides its plan.', { step: 'role' });
+    if (r.state !== 'waiting' || r.plan_state !== 'awaiting') throw conflict('The run is not waiting on its plan.');
+    const step = (await this.db('agent_steps').where({ run_id: r.id, title: 'Plan', state: 'waiting' }).orderBy('n', 'desc').first()) as StepRow | undefined;
+    const t = Date.now();
+    if (input.decision === 'decline') {
+      await this.db('agent_runs').where({ id: r.id }).update({ plan_state: 'declined', updated_at: t });
+      if (step) await this.db('agent_steps').where({ id: step.id }).update({ state: 'rejected', meta: JSON.stringify({ ...json<Record<string, unknown>>(step.meta, {}), approval: { decision: 'rejected', by: p.displayName, byId: p.userId, at: t } }) });
+      await this.audit.append({ tenantId: r.tenant_id, action: 'agent.plan.declined', kind: 'decision', actor: actorFrom(p), target: { run: r.id, agent: r.agent_name }, label: r.label });
+      await this.finish({ ...r, plan_state: 'declined' }, 'cancelled', { error: `The plan was declined by ${p.displayName}; nothing ran.` });
+      return { decision: 'declined' as const };
+    }
+    const stored = r.plan ? await this.open<Plan>(r.tenant_id, `agent-run-plan:${r.id}`, r.plan, { steps: [], tools: [] }) : null;
+    const edited = !!input.steps;
+    const plan: Plan = input.steps ? normalizePlan({ steps: input.steps }, this.thinking?.planMaxSteps() ?? 12) : (stored ?? { steps: [], tools: [] });
+    if (!plan.steps.length) throw conflict('This plan has no steps to approve.');
+    const cp = await this.latestCheckpoint(r);
+    cp.state.messages.push({ role: 'system', content: planInstruction(plan) });
+    await this.checkpoint(r, cp.n, cp.state, json<RunUsage>(r.usage, EMPTY_USAGE));
+    await this.db('agent_runs').where({ id: r.id }).update({ plan: await this.seal(r.tenant_id, `agent-run-plan:${r.id}`, plan), plan_state: 'approved', updated_at: t });
+    if (step) await this.db('agent_steps').where({ id: step.id }).update({ state: 'ok', meta: JSON.stringify({ ...json<Record<string, unknown>>(step.meta, {}), steps: plan.steps.map((s) => s.title), tools: plan.tools, approval: { decision: 'approved', by: p.displayName, byId: p.userId, at: t, edited } }) });
+    const ref = chainRefOfRun(r);
+    if (ref && this.chains) await this.chains.note(ref, { plan: { steps: plan.steps.map((s) => ({ title: s.title, tools: s.tools })), approvedBy: p.displayName } }).catch(() => undefined);
+    await this.audit.append({ tenantId: r.tenant_id, action: 'agent.plan.approved', kind: 'decision', actor: actorFrom(p), target: { run: r.id, agent: r.agent_name }, label: r.label, detail: { edited, steps: plan.steps.length, tools: plan.tools } });
+    await this.enqueue({ ...r, plan_state: 'approved' });
+    return { decision: 'approved' as const, plan };
+  }
+
+  /**
    * B-1006: a pending tool result this run awaits is ready (the workflow run finished). The run is queued again once,
    * and picks the result up from where it paused.
    */
@@ -712,7 +754,7 @@ export class AgentService {
       const chain = this.chains ? chainRefOfRun(run) : null;
       if (chain) await this.chains!.finish(chain, 'running');
       // What the run uses is charged to its chain's root; a used-up root stops the run before its next step.
-      const charge = async (u: { tokens?: number; steps?: number; wallMs?: number; gpuMs?: number }) => {
+      const charge = async (u: { tokens?: number; steps?: number; wallMs?: number; gpuMs?: number; thinkingTokens?: number }) => {
         if (chain) await this.chains!.charge(chain, u);
       };
       const perm = authorize(p, 'agents:run', { tenantId: run.tenant_id, label: run.label });
@@ -750,6 +792,56 @@ export class AgentService {
       let n = Math.max(cp.n, Number((await this.db('agent_steps').where({ run_id: run.id }).max({ m: 'n' }).first())?.m ?? 0));
       const { messages } = cp.state;
       let pending = cp.state.pending;
+      // 1.7.0 (B-11705): the run's thinking level, within the profile's ceiling, noted on its chain node.
+      const level = capLevel(def.think ?? resolved.profile.think_default, resolved.profile.think_ceiling);
+      if (chain && this.chains) await this.chains.note(chain, { think: level }).catch(() => undefined);
+      // 1.7.0 (B-11703): a plan-first run drafts its plan before anything runs and waits for the person's decision;
+      // an approved plan bounds the tools the run may call without a new approval.
+      let plan: Plan | null = run.plan ? await this.open<Plan>(run.tenant_id, `agent-run-plan:${run.id}`, run.plan, { steps: [], tools: [] }) : null;
+      if (def.planFirst && this.thinking && !run.plan_state) {
+        await this.quotas.admit(run.tenant_id, run.workspace_id);
+        const started = Date.now();
+        const planMessages = this.thinking.planMessages(null, messages, tools.map((t) => ({ name: t.fn, description: t.entry.description })));
+        const lease = await this.gateway.acquire(resolved.profile, resolved.model, run.label, { signal });
+        let text = '';
+        let tokens = 0;
+        try {
+          const options: Record<string, unknown> = {};
+          if (resolved.profile.num_ctx) options.num_ctx = resolved.profile.num_ctx;
+          const thinkReq = thinkingRequest(resolved.model, 'off', planMessages);
+          for await (const chunk of lease.client.chat({ model: resolved.model.name, messages: planMessages, ...thinkReq, options }, signal)) {
+            if (chunk.message?.content) text += chunk.message.content;
+            if (chunk.done) tokens = (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0);
+          }
+          if (thinkingMode(resolved.model) === 'template') text = splitThink(text).content;
+        } finally {
+          lease.release(null);
+        }
+        if (!tokens) tokens = Math.ceil((planMessages.reduce((a, m) => a + m.content.length, 0) + text.length) / 4);
+        usage.tokens += tokens;
+        await this.quotas.record({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, kind: 'agent', profileId: resolved.profile.id, model: resolved.model.name, poolId: lease.pool.id, promptTokens: Math.round(tokens / 2), outputTokens: tokens - Math.round(tokens / 2) });
+        plan = parsePlan(text, this.thinking.planMaxSteps());
+        n++;
+        usage.steps++;
+        const t = Date.now();
+        if (plan) {
+          await this.db('agent_runs').where({ id: run.id }).update({ plan: await this.seal(run.tenant_id, `agent-run-plan:${run.id}`, plan), plan_state: 'awaiting', usage: JSON.stringify(usage), updated_at: t });
+          await this.addStep(run, n, { lane: 'think', title: 'Plan', state: 'waiting', meta: { plan: true, steps: plan.steps.map((s) => s.title), tools: plan.tools, tokens, waitingSince: t, approvers: "the run's owner", durationMs: t - started }, detail: { plan, text } });
+          tick();
+          await this.checkpoint(run, n, { messages, pending }, usage);
+          await charge({ tokens, steps: 1, wallMs: t - started });
+          await this.audit.append({ tenantId: run.tenant_id, action: 'agent.plan.drafted', kind: 'system', actor: { service: 'agents', user: run.user_id, agent: run.agent_name }, target: { run: run.id, agent: run.agent_name }, label: run.label, detail: { steps: plan.steps.length, tools: plan.tools } });
+          throw new Pause('waiting', 'Waiting for the plan to be approved.');
+        }
+        // No readable plan: the run goes on without one, and says so in its first step.
+        await this.db('agent_runs').where({ id: run.id }).update({ plan_state: 'declined', usage: JSON.stringify(usage), updated_at: t });
+        await this.addStep(run, n, { lane: 'think', title: 'Plan', state: 'failed', meta: { plan: true, tokens, durationMs: t - started }, detail: { plan: null, text, note: 'The model gave no readable plan; the run continues without one.' } });
+        tick();
+        await this.checkpoint(run, n, { messages, pending }, usage);
+        await charge({ tokens, steps: 1, wallMs: t - started });
+        plan = null;
+      }
+      const planTools = run.plan_state === 'approved' && plan ? new Set(plan.tools) : null;
 
       const budgetStop = async (what: string) => {
         tick();
@@ -797,6 +889,16 @@ export class AgentService {
           if (isNew && usage.steps >= budgets.steps) await budgetStop(`Stopped at ${usage.steps} of ${budgets.steps} steps.`);
           if (isNew && tool && usage.toolCalls >= budgets.toolCalls) await budgetStop(`Stopped at ${usage.toolCalls} of ${budgets.toolCalls} tool calls.`);
           const awaited = !!call.awaiting;
+          // 1.7.0 (B-11703): a call outside the approved plan pauses for a new approval (a decided call goes on).
+          if (tool && planTools && isNew && !call.decision && !planTools.has(tool.fn) && !planTools.has(tool.entry.name)) {
+            usage.steps++;
+            n = Math.max(n, stepN);
+            call.step = stepN;
+            await this.addStep(run, stepN, { lane: 'do', title: tool.entry.name, state: 'waiting', meta: { tool: tool.entry.name, version: tool.entry.version, impl: tool.entry.impl, sideEffect: tool.sideEffect, ceiling: tool.entry.label, deviation: true, waitingSince: Date.now(), approvers: "the run's owner" }, detail: { arguments: call.arguments, note: `${tool.entry.name} is not in the approved plan.` } });
+            tick();
+            await this.checkpoint(run, stepN, { messages, pending }, usage);
+            throw new Pause('waiting', `${tool.entry.name} is not in the approved plan; it needs a new approval.`);
+          }
           let outcome: ToolOutcome;
           if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: acting, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, chain }, tool, call.arguments, call.awaiting);
           else if (!tool) outcome = { name: call.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `tool_unavailable: ${call.name} is not one of this agent's tools${hidden.length ? ` (hidden: ${hidden.map((h) => `${h.name}, ${h.reason}`).join('; ')})` : ''}.` };
@@ -900,7 +1002,7 @@ export class AgentService {
           const options: Record<string, unknown> = {};
           if (resolved.profile.num_ctx) options.num_ctx = resolved.profile.num_ctx;
           if (resolved.profile.temperature != null) options.temperature = resolved.profile.temperature;
-          const thinkReq = thinkingRequest(resolved.model, resolved.profile.think_default, messages); // B-11707: by the model's thinking mode
+          const thinkReq = thinkingRequest(resolved.model, level, messages); // B-11707: by the model's thinking mode; B-11705: the run's level
           for await (const chunk of lease.client.chat({ model: resolved.model.name, messages, ...thinkReq, ...(toolsOn ? { tools: [...tools.map((t) => t.def), ...(policy ? [REMEMBER_TOOL] : [])] } : {}), options }, stepSignal)) {
             if (chunk.message?.content) content += chunk.message.content;
             if (chunk.message?.thinking) thinking += chunk.message.thinking;
@@ -910,7 +1012,7 @@ export class AgentService {
               gpuNs = (chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0);
             }
           }
-          if (thinkingMode(resolved.model) === 'template' && resolved.profile.think_default !== 'off') {
+          if (thinkingMode(resolved.model) === 'template' && level !== 'off') {
             const sp = splitThink(content); // B-11707: a template model's <think> block is its thinking
             if (sp.thinking) thinking += sp.thinking;
             content = sp.content;
@@ -922,6 +1024,7 @@ export class AgentService {
           lease.release(null);
         }
         if (!tokens) tokens = Math.ceil((messages.reduce((a, m) => a + m.content.length, 0) + content.length + thinking.length) / 4);
+        const thinkingTokens = thinking ? Math.round((tokens * thinking.length) / (thinking.length + content.length || 1)) : 0; // 1.7.0 (B-11705)
         n++;
         usage.steps++;
         usage.tokens += tokens;
@@ -932,7 +1035,7 @@ export class AgentService {
           lane: 'think',
           title: toolCalls.length ? 'Plan' : 'Answer',
           state: 'ok',
-          meta: { tokens, profile: resolved.profile.name, model: resolved.model.name, durationMs: Date.now() - started, proposal: toolCalls.map((c) => c.function.name) },
+          meta: { tokens, think: level, thinkingTokens, profile: resolved.profile.name, model: resolved.model.name, durationMs: Date.now() - started, proposal: toolCalls.map((c) => c.function.name) },
           detail: { content, thinking: thinking || null, toolCalls: toolCalls.map((c) => ({ name: c.function.name, arguments: c.function.arguments })) }
         });
         messages.push({ role: 'assistant', content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
@@ -940,7 +1043,7 @@ export class AgentService {
         tick();
         await this.checkpoint(run, n, { messages, pending }, usage);
         await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
-        await charge({ tokens, steps: 1, wallMs: Date.now() - started, gpuMs: gpuNs / 1e6 });
+        await charge({ tokens, steps: 1, wallMs: Date.now() - started, gpuMs: gpuNs / 1e6, thinkingTokens });
         if (!pending.length) {
           // 1.6.0 (B-7601): DLP on the run's answer. A raised label is the run's; a hold ends the run with the reason
           // (a reviewer reads the step's detail); a redaction is the stored output.
