@@ -18,7 +18,8 @@ import type { AttachmentRow, AttachmentService } from './attachments.js';
 import { allowAll, type GuardDecision, type GuardFinding, type Guardrails } from '../guardrails/types.js';
 import type { DlpInspector } from '../compliance/dlp-types.js';
 import type { HoldLookup } from '../compliance/holds.js';
-import type { ResolvedTool, ToolDispatcher } from '../registry/dispatch.js';
+import type { ResolvedTool, ToolDispatcher, ToolOutcome } from '../registry/dispatch.js';
+import type { ChatInvocations } from './invocations.js';
 import { formatContext, passageSpan, type AnswerEvent, type ContextItem, type ContextProvider } from './context.js';
 import { toolResultContent, type UntrustedVerdict } from '../guardrails/injection.js';
 import { StreamGuard, type CheckLimiter, type Release, type Screen } from '../guardrails/stream.js';
@@ -50,6 +51,8 @@ export interface ConversationRow {
   created_at: number;
   updated_at: number;
   archived_at: number | null;
+  /** 1.7.0 (B-4005): JSON [{name, mode}], the skills added with +skill. */
+  skills?: string | null;
 }
 
 interface MessageRow {
@@ -86,6 +89,9 @@ interface MessageRow {
   citations?: string | null;
   generator?: string | null;
   heartbeat_at?: number | null;
+  /** 1.7.0 (B-4002, B-4004, B-4009): a tool turn, an answer attributed to an agent, or a workflow run's outcome. */
+  turn?: 'tool' | 'agent' | 'workflow' | null;
+  invocation_id?: string | null;
 }
 
 interface Stream {
@@ -157,6 +163,8 @@ export interface ChatOptions {
   dlp?: DlpInspector;
   /** 1.6.0 (B-7602): users and workspaces under a legal hold, whose conversations retention leaves alone. */
   legalHolds?: HoldLookup;
+  /** 1.7.0 (B-4006): how long an answer waits for an agent the model handed the turn to before it carries on without it. */
+  agentWaitMs?: number;
 }
 
 const LIVE: MessageState[] = ['queued', 'streaming'];
@@ -194,6 +202,8 @@ export class ChatService {
   readonly contextProviders: ContextProvider[] = [];
   /** Called when an answer finishes (memory proposals). */
   readonly answerListeners: ((e: AnswerEvent) => void)[] = [];
+  /** 1.7.0 (B-40): cards for write tools the model proposes, agents it hands turns to, and the conversation's skills. */
+  invocations: ChatInvocations | null = null;
 
   constructor(
     private readonly db: Db,
@@ -219,6 +229,94 @@ export class ChatService {
   /** Registry and MCP tools on a profile's tool list are offered and called through the dispatcher (Sprint 7). */
   useTools(d: ToolDispatcher): void {
     this.toolDispatch = d;
+  }
+
+  // ---------- 1.7.0 (B-40): what the invocations service needs of a conversation ----------
+
+  /** A profile resolved for a conversation's label, with the same checks a send makes. */
+  resolveProfileFor(p: Principal, profile: string, label: Label): Promise<ResolvedProfile> {
+    return this.resolveFor(p, profile, label);
+  }
+
+  /** A conversation row by id, for work the server does on the owner's behalf (a run ending, a reviewer's decision). */
+  async conversationRow(tenantId: string, id: string): Promise<ConversationRow | null> {
+    return ((await this.db('conversations').where({ tenant_id: tenantId, id }).first()) as ConversationRow | undefined) ?? null;
+  }
+
+  /** The owner as a principal (null when the option is not installed). */
+  principalForOwner(tenantId: string, userId: string, workspaceId: string | null): Promise<Principal | null> {
+    return this.opts.principalFor ? this.opts.principalFor(tenantId, userId, workspaceId) : Promise.resolve(null);
+  }
+
+  /**
+   * Appends a turn under `parentId` (the head when null) and makes it the head: a tool turn with its call and
+   * result, a queued placeholder for an agent's or a workflow's answer, or the person's request that started one.
+   */
+  async appendTurn(c: ConversationRow, t: { parentId: string | null; role?: 'user' | 'assistant'; turn: 'tool' | 'agent' | 'workflow' | null; name: string | null; invocationId: string; content: string; tools?: NonNullable<Chunk['tool']>[]; label: Label; state: 'complete' | 'queued' }): Promise<MessageRow> {
+    const now = Date.now();
+    const role = t.role ?? 'assistant';
+    const row = await this.insertMessage(c, { parent_id: t.parentId, role, content: t.content, label: t.label, created_at: now, state: role === 'user' ? 'complete' : t.state });
+    const upd: Record<string, unknown> = { turn: t.turn, invocation_id: t.invocationId, profile_name: t.name, generator: null, heartbeat_at: null };
+    if (t.tools?.length) upd.tools = await this.seal(c.tenant_id, row.id, 'tools', JSON.stringify(t.tools));
+    if (role === 'assistant' && t.state === 'complete') Object.assign(upd, { completed_at: now, seq: 1 });
+    await this.db('messages').where({ id: row.id }).update(upd);
+    await this.db('conversations').where({ id: c.id }).update({ head_id: row.id, updated_at: now });
+    const out = { ...row, ...upd } as MessageRow;
+    if (role === 'assistant') this.emit({ userId: c.user_id, tenantId: c.tenant_id }, 'chat.done', { conversationId: c.id, messageId: row.id, state: out.state, seq: 1, usage: null, error: null, profile: t.name, model: null, turn: t.turn });
+    else this.emit({ userId: c.user_id, tenantId: c.tenant_id }, 'chat.status', { conversationId: c.id, messageId: row.id, state: 'queued', turn: t.turn });
+    return out;
+  }
+
+  /** A placeholder turn gets its answer (an agent's, a workflow's) and the listeners hear of it like any answer. */
+  async completeTurn(c: ConversationRow, messageId: string, r: { content: string; state: 'complete' | 'failed' | 'stopped'; error: string | null; label?: Label }): Promise<void> {
+    const m = (await this.db('messages').where({ conversation_id: c.id, id: messageId }).first()) as MessageRow | undefined;
+    if (!m || m.state !== 'queued') return;
+    const now = Date.now();
+    const label = r.label && labelRank(r.label) > labelRank(m.label) ? r.label : m.label;
+    await this.db('messages').where({ id: m.id }).update({ content: await this.seal(c.tenant_id, m.id, 'content', r.content), state: r.state, error: r.error?.slice(0, 500) ?? null, completed_at: now, seq: 1, label });
+    if (labelRank(label) > labelRank(c.label)) await this.db('conversations').where({ id: c.id }).update({ label, updated_at: now });
+    const p = await this.principalForOwner(c.tenant_id, c.user_id, c.workspace_id);
+    this.emit({ userId: c.user_id, tenantId: c.tenant_id }, 'chat.done', { conversationId: c.id, messageId: m.id, state: r.state, seq: 1, usage: null, error: r.error, profile: m.profile_name, model: null, turn: m.turn ?? null });
+    if (p && r.state === 'complete') {
+      for (const fn of this.answerListeners) {
+        try {
+          fn({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, userMessageId: m.parent_id, messageId: m.id, state: 'complete', label });
+        } catch (err) {
+          this.log.warn({ err, message: m.id }, 'answer listener failed');
+        }
+      }
+    }
+  }
+
+  /** The texts on the path to `headId` (opened), for the context a person lets an agent see (B-4004). */
+  async pathTexts(c: ConversationRow, headId: string): Promise<{ role: 'user' | 'assistant'; content: string; name: string | null; label: Label }[]> {
+    const rows = await this.historyRows(c, headId, false);
+    return rows.filter((x) => x.message.role === 'user' || x.message.role === 'assistant').map((x) => ({ role: x.row.role, content: x.message.content, name: x.row.turn === 'agent' ? x.row.profile_name : null, label: x.row.label }));
+  }
+
+  /**
+   * B-4002: the profile's model turns free text into a tool's arguments: one gateway turn with only that tool
+   * offered; the first call's arguments are taken, or null when the model made none.
+   */
+  async toolArgumentsFromText(p: Principal, c: ConversationRow, r: ResolvedProfile, tool: ResolvedTool, text: string): Promise<Record<string, unknown> | null> {
+    if (!r.model.capabilities.includes('tools')) return null;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(new Error('timed out')), 60_000);
+    const lease = await this.gateway.acquire(r.profile, r.model, c.label, { signal: ac.signal });
+    try {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: `Call the tool ${tool.fn} with arguments taken from the person's text. Call it exactly once and say nothing else.` },
+        { role: 'user', content: text }
+      ];
+      for await (const chunk of lease.client.chat({ model: r.model.name, messages, tools: [tool.def], options: {} }, ac.signal)) {
+        const call = chunk.message?.tool_calls?.find((x) => x.function.name === tool.fn);
+        if (call) return (call.function.arguments ?? {}) as Record<string, unknown>;
+      }
+      return null;
+    } finally {
+      clearTimeout(timer);
+      lease.release(null);
+    }
   }
 
   close(): void {
@@ -352,7 +450,7 @@ export class ChatService {
     await this.interruptStale(c.id);
     const rows = (await this.db('messages').where({ conversation_id: c.id }).orderBy([{ column: 'created_at' }, { column: 'id' }])) as MessageRow[];
     const messages = await Promise.all(rows.map((m) => this.messageView(m, p)));
-    return { id: c.id, kind: c.kind, title: await this.open(c.tenant_id, c.id, 'title', c.title), label: c.label, profileId: c.profile_id, workspaceId: c.workspace_id, headId: c.head_id, createdAt: c.created_at, updatedAt: c.updated_at, archived: c.archived_at != null, messages };
+    return { id: c.id, kind: c.kind, title: await this.open(c.tenant_id, c.id, 'title', c.title), label: c.label, profileId: c.profile_id, workspaceId: c.workspace_id, headId: c.head_id, skills: json<{ name: string; mode: string }[]>(c.skills ?? null, []), createdAt: c.created_at, updatedAt: c.updated_at, archived: c.archived_at != null, messages };
   }
 
   /**
@@ -386,7 +484,9 @@ export class ChatService {
       usage: m.role === 'assistant' && m.completed_at ? { promptTokens: Number(m.prompt_tokens ?? 0), outputTokens: Number(m.output_tokens ?? 0), thinkingTokens: Number(m.thinking_tokens ?? 0), calcCalls: Number(m.calc_calls ?? 0), gpuMs: Number(m.gpu_ms ?? 0), firstTokenMs: m.first_token_ms == null ? null : Number(m.first_token_ms) } : null,
       createdAt: Number(m.created_at),
       completedAt: m.completed_at == null ? null : Number(m.completed_at),
-      guard: json<Record<string, unknown> | null>(m.guard ?? null, null)
+      guard: json<Record<string, unknown> | null>(m.guard ?? null, null),
+      turn: m.turn ?? null,
+      invocationId: m.invocation_id ?? null
     };
   }
 
@@ -1024,7 +1124,22 @@ export class ChatService {
           content += `\n\n<attachment name="${a.name.replace(/"/g, "'")}" label="${a.label}">\n${text.slice(0, ATTACHMENT_TEXT_LIMIT)}${text.length > ATTACHMENT_TEXT_LIMIT ? '\n[truncated]' : ''}\n</attachment>`;
         }
       }
-      out.push({ row: m, message: { role: m.role, content, ...(images.length ? { images } : {}) } });
+      // 1.7.0 (B-4002): a tool turn is the call and its result, which the model sees as its own call's outcome.
+      if (m.turn === 'tool') {
+        const calls = json<NonNullable<Chunk['tool']>[]>(await this.open(m.tenant_id, m.id, 'tools', m.tools), []);
+        for (const t of calls) {
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(t.expression) as Record<string, unknown>;
+          } catch {
+            args = { expression: t.expression };
+          }
+          out.push({ row: m, message: { role: 'assistant', content: '', tool_calls: [{ function: { name: t.name, arguments: args } }] } });
+          out.push({ row: m, message: { role: 'tool', tool_name: t.name, content: toolResultContent(t.output ?? t.result ?? { error: t.error }, { name: t.name, untrusted: null, marking: true }) } });
+        }
+        continue;
+      }
+      out.push({ row: m, message: { role: m.role, content: m.turn === 'agent' && m.profile_name ? `[Answer by agent ${m.profile_name}]\n${content}` : content, ...(images.length ? { images } : {}) } });
     }
     return out;
   }
@@ -1308,7 +1423,10 @@ export class ChatService {
       // The prompt and its retrieved context are built before the lease (see gatherContext), again for a fallback.
       const prepare = async (rp: ResolvedProfile) => {
         const msgs: ChatMessage[] = [];
-        if (rp.profile.system_prompt) msgs.push({ role: 'system', content: rp.profile.system_prompt });
+        // 1.7.0 (B-4005): the conversation's skills (their closure) follow the profile's own instructions.
+        const skills = this.invocations && kind === 'chat' ? await this.invocations.skillPrompt(p, c) : null;
+        const system = [rp.profile.system_prompt, skills?.text].filter((x): x is string => !!x).join('\n\n');
+        if (system) msgs.push({ role: 'system', content: system });
         msgs.push(...(await this.history(c, m.parent_id!, rp.model.capabilities.includes('vision'))));
         return { r: rp, messages: msgs, items: await this.gatherContext(p, c, m, rp, msgs) };
       };
@@ -1341,7 +1459,13 @@ export class ChatService {
       const modelTools = r.model.capabilities.includes('tools') && !r.model.evaluation?.toolsWithheld;
       // Beyond calculate: published registry and MCP tools, read-only in chat (write and destructive calls need an
       // approval, which agent runs provide).
-      const extra: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never') : [];
+      // 1.7.0 (B-4003): write and destructive tools are offered too; a call the dispatcher holds becomes an in-chat
+      // approval card when the invocations service is installed, else only read-only tools are offered as before.
+      const resolvedTools: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools : [];
+      const extra: ResolvedTool[] = this.invocations && kind === 'chat' ? resolvedTools : resolvedTools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never');
+      // 1.7.0 (B-4006): the agents on the profile's list, as `agent:<name>` tools within the chain's depth and budgets.
+      const callees: ResolvedTool[] = modelTools && this.toolDispatch && this.invocations && kind === 'chat' && (r.profile.agents ?? []).length ? (await this.toolDispatch.resolveCallees(p, { agents: r.profile.agents ?? [] }, c.label, extra.map((t) => t.fn))).tools : [];
+      extra.push(...callees);
       const toolsOn = (r.profile.tools.includes('calculate') || extra.length > 0) && modelTools;
       const toolDefs = [...(r.profile.tools.includes('calculate') ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
       const thinkParam = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
@@ -1389,8 +1513,15 @@ export class ChatService {
           let untrusted: UntrustedVerdict | undefined;
           const ext = extra.find((t) => t.fn === call.function.name);
           if (ext) {
-            const o = await this.toolDispatch!.call({ principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal, chainRoot: { kind: 'chat-turn', ref: m.id } }, ext, (call.function.arguments ?? {}) as Record<string, unknown>);
-            tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
+            const args = (call.function.arguments ?? {}) as Record<string, unknown>;
+            const ctx = { principal: p, label: c.label, source: { kind: 'message', id: m.id }, signal: st.ac.signal, chainRoot: { kind: 'chat-turn' as const, ref: m.id } };
+            let o = await this.toolDispatch!.call(ctx, ext, args);
+            if (o.pending && ext.entry.kind === 'agent') o = await this.awaitHandedRun(c, m, ext, args, o, ctx);
+            if (o.needsApproval && this.invocations && kind === 'chat') {
+              // B-4003: the person decides on a card; the model carries on without the result.
+              const card = await this.invocations.proposeFromModel(p, c, m.id, ext, o.arguments, o);
+              tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), error: `${ext.entry.name} needs the person's approval before it runs (card ${card.id}). Tell them what it would do and finish your answer; the result arrives as its own turn once they approve.` };
+            } else tool = { name: ext.entry.name, expression: JSON.stringify(o.arguments), ...(o.ok ? { output: o.result } : { error: o.error ?? 'The tool failed.' }) };
             if (o.ok) untrusted = o.untrusted;
           } else if (call.function.name !== 'calculate' || !r.profile.tools.includes('calculate')) tool = { name: call.function.name, expression, error: 'Unknown tool' };
           else {
@@ -1483,6 +1614,7 @@ export class ChatService {
     if (guard?.held) await this.fileHold(p, c, m, st, guard.decision);
     const error = st.state === 'failed' ? ((await this.db('messages').where({ id: m.id }).first('error')) as { error: string | null } | undefined)?.error : null;
     this.emit(st, 'chat.done', { conversationId: c.id, messageId: m.id, state: st.state, seq: st.seq, usage, error: error ?? null, profile: r.profile.name, model: r.model.name, ...(guard ? { guard: guard.summary } : {}) });
+    if (this.invocations && kind === 'chat' && (st.state === 'complete' || st.state === 'stopped')) await this.invocations.dropOnceSkills(c).catch(() => undefined);
     for (const fn of this.answerListeners) {
       try {
         fn({ principal: p, tenantId: c.tenant_id, workspaceId: c.workspace_id, conversationId: c.id, userMessageId: m.parent_id, messageId: m.id, state: st.state, label: c.label });
@@ -1493,6 +1625,24 @@ export class ChatService {
     if (st.state === 'failed') {
       await this.audit.append({ tenantId: c.tenant_id, action: 'chat.failed', kind: 'system', actor: actorFrom(p), target: { conversation: c.id, message: m.id, profile: r.profile.name, model: r.model.name }, label: c.label, detail: { state: st.state, error: error ?? null } });
     }
+  }
+
+  /**
+   * 1.7.0 (B-4006): the model handed the turn to an agent (`agent:<name>`): the answer waits a while for the run's
+   * answer; a run still going after that becomes a turn of its own (`adoptModelRun`) and the model is told so.
+   */
+  private async awaitHandedRun(c: ConversationRow, m: MessageRow, ext: ResolvedTool, args: Record<string, unknown>, first: ToolOutcome, ctx: { principal: Principal; label: Label; source: { kind: string; id: string }; signal: AbortSignal }): Promise<ToolOutcome> {
+    const pending = first.pending!;
+    const end = Date.now() + (this.opts.agentWaitMs ?? 45_000);
+    let o = first;
+    while (o.pending && Date.now() < end && !ctx.signal.aborted) {
+      await new Promise((r) => setTimeout(r, 250));
+      o = await this.toolDispatch!.awaitResult(ctx, ext, args, pending);
+    }
+    if (!o.pending || !this.invocations || pending.kind !== 'agent-run') return o;
+    const chain = (await this.db('agent_runs').where({ id: pending.id }).first('chain_id')) as { chain_id: string | null } | undefined;
+    const row = await this.invocations.adoptModelRun(c, m.id, ext.entry, pending.id, chain?.chain_id ?? null);
+    return { ...o, ok: true, pending: undefined, result: { run: pending.id, agent: ext.entry.name, note: `${ext.entry.name} is still working (card ${row.id}); its answer will appear as its own turn in this conversation. Tell the person and finish your answer.` } } as ToolOutcome;
   }
 
   /** Files a held answer in the flag queue, where a reviewer cleared for its label approves or rejects it. */

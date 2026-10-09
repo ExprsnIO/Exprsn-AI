@@ -177,7 +177,7 @@
         }
       } else if (st.tab === 'datasets') {
         const list = datasets.filter((d) => !q || (d.name + ' ' + d.source).toLowerCase().includes(q));
-        body = '<div class="toolbar">' + UI.search('Filter datasets', 'data-search', st.query) + '<span class="right">' + UI.btn('Register dataset version', { attrs: 'data-newds' }) + '</span></div>'
+        body = '<div class="toolbar">' + UI.search('Filter datasets', 'data-search', st.query) + '<span class="right">' + (App.canOpen('import') ? UI.btn('Import a dataset', { attrs: 'data-goimport' }) : '') + UI.btn('Register dataset version', { attrs: 'data-newds' }) + '</span></div>'
           + UI.table(['Dataset', 'Version', 'Rows', 'Label', 'Source', 'PII scrub', 'Hash', 'Used by'], list.map((d) => ({ cells: ['<b>' + esc(d.name) + '</b>', esc(d.ver), num(d.rows), UI.label(d.label, { sm: true }), esc(d.source) + (d.conversationData && d.optIn ? ', conversation opt-in' + (d.optIn.scope ? ' (' + esc(d.optIn.scope) + ')' : '') : ''), d.withdrawn || d.state === 'failed' ? '<span style="color:var(--danger-fg)">' + esc(d.pii) + '</span>' : esc(d.pii), '<span class="mono">' + esc(d.hash ? d.hash.slice(0, 13) + '…' : '') + '</span>', esc(d.usedBy.join(', '))], attrs: 'data-ds="' + esc(d.id) + '"' })), { emptyTitle: 'No dataset versions', emptyText: 'Register one from a staging path.' })
           + UI.notice('Datasets are versioned in the blob store with a manifest: row count, hash, label, source and PII-scrub report, sealed with the tenant key. Conversation data enters only with tenant opt-in and at or below the target model\'s label ceiling.', 'info');
       } else if (st.tab === 'schedules') {
@@ -323,6 +323,7 @@
           });
         } });
       });
+      ctx.on('click', '[data-goimport]', () => ctx.navigate('import', { kind: 'dataset', target: 'training' }));
       ctx.on('click', '[data-newds]', () => {
         const names = Array.from(new Set(datasets.map((d) => d.name)));
         const nextVer = (n) => { const v = datasets.filter((d) => d.name === n).map((d) => d.version); return 'v' + ((v.length ? Math.max.apply(null, v) : 0) + 1); };

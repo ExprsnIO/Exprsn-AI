@@ -61,7 +61,7 @@
       };
       if (!st.loaded && !st.loadError) load();
       if (st.loadError || !st.loaded) {
-        root.innerHTML = '<div class="page">' + UI.pagehead('Classifiers', 'One registry for auto-labelling and guardrails', '') + (st.loadError ? UI.problem('Classifiers could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
+        root.innerHTML = '<div class="page">' + UI.pagehead('Classifiers', 'One registry for auto-labelling and guardrails', App.canOpen('import') ? UI.btn('Import an eval set', { attrs: 'data-goimport' }) : '') + (st.loadError ? UI.problem('Classifiers could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { attrs: 'data-reload' }) + '</div>' : UI.notice('Loading…', 'info')) + '</div>';
         ctx.on('click', '[data-reload]', () => { st.loadError = null; ctx.rerender(); });
         return;
       }
@@ -146,7 +146,7 @@
         + '<div class="cls-list">' + st.list.map((x) => UI.listItem(esc(x.name), esc(SUB[x.engine] + (x.platform ? ', platform' : '')), { active: x.id === c.id, attrs: 'data-cls="' + x.id + '"', right: UI.pill(x.status, x.status === 'published' ? 'ok' : '') })).join('') + '</div>'
         + '<div class="divider"></div><div class="muted" style="font-size:12px">Five engines behind one registry. The same classifiers drive auto-labelling and guardrails; vision classifiers label the images in knowledge bases.</div></div>'
         + '<div class="page">'
-        + UI.pagehead(c.name, esc(c.description || ''), UI.btn('Run batch classification', { attrs: 'data-batch', disabled: running }) + UI.btn(c.engine === 'vision' ? 'Test image' : 'Test text', { kind: 'primary', attrs: 'data-test' }))
+        + UI.pagehead(c.name, esc(c.description || ''), (App.canOpen('import') ? UI.btn('Import an eval set', { attrs: 'data-goimport' }) : '') + UI.btn('Run batch classification', { attrs: 'data-batch', disabled: running }) + UI.btn(c.engine === 'vision' ? 'Test image' : 'Test text', { kind: 'primary', attrs: 'data-test' }))
         + batchPanel
         + UI.tabs([{ id: 'definition', label: 'Definition' }, { id: 'thresholds', label: 'Thresholds' }, { id: 'evaluation', label: 'Evaluation' }, { id: 'usage', label: 'Usage', count: (c.usage || []).length }], st.tab)
         + (st.tab === 'definition' ? definition : st.tab === 'thresholds' ? thresholds : st.tab === 'usage' ? usage : evalTab)
@@ -212,6 +212,7 @@
         App.post('/api/admin/classifiers/' + enc(c.id) + '/publish').then(() => { toast(esc(c.name) + ' v' + c.version + ' is published.', 'ok'); load(true); }).catch((err) => { if (err.problem && err.problem.title === 'Eval set too small') { st.smallWarn = true; st.tab = 'evaluation'; ctx.rerender(); } App.fail(err, 'Not published'); });
       });
       ctx.on('click', '[data-addsamples]', (e) => { e.preventDefault(); addSamples(ctx, c, load); });
+      ctx.on('click', '[data-goimport]', () => ctx.navigate('import', { kind: 'dataset', target: 'classifiers' }));
       ctx.on('click', '[data-new]', () => ctx.modal({ title: 'New classifier', body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'for example Supplier risk', attrs: 'data-n' })) + UI.field('Engine', UI.select([{ value: 'linear', label: 'Word features plus trained linear head, very low cost' }, { value: 'guard', label: 'Guard model (llama-guard3, shieldgemma, granite3-guardian), medium cost' }, { value: 'llm', label: 'General LLM with JSON output, high cost' }, { value: 'vision', label: 'Vision model scoring images, high cost' }], 'linear', 'data-e')) + UI.field('Labels', UI.input('', { placeholder: 'comma separated', attrs: 'data-l' })) + UI.field('Profile (guard, LLM and vision engines)', UI.input('', { placeholder: 'the profile that routes to the model', attrs: 'data-p' }), 'A vision classifier needs a profile whose model reads images.') + '</div>' + UI.notice('New classifiers start as drafts. They publish only after an eval run with at least ' + MIN + ' samples per label; a vision classifier\'s samples are images.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create draft', { kind: 'primary', attrs: 'data-create' }),
         onMount(m) {
           m.querySelector('[data-create]').addEventListener('click', () => {

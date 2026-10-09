@@ -458,6 +458,34 @@ dialogs.
   override as one platform admin and approves it as another in a second browser.
 
 
+## Screens changed in 1.7.0
+
+- **Chat: tools, agents, skills and workflows from the composer (Sprint 40a, B-4008).** The composer is a
+  `combobox` with `aria-autocomplete="list"`; typing `/`, `@` or `+` as the first character opens a `listbox`
+  picker (`aria-controls` and `aria-activedescendant` set only while it is open, `aria-expanded` otherwise false)
+  that arrow keys move through, Enter picks and Escape closes; a hidden description names the keys. A tool's or
+  workflow's form is a dialog with one labelled field per schema property (required ones marked), submitted by
+  Enter or its button. Skill chips are pressed `chip` buttons with an accessible name that says they remove the
+  skill. Cards are plain regions with a pill for the state (never colour alone: awaiting, held, done, denied,
+  expired), the side-effect class as a pill, and Approve and Deny as buttons; a run card lists steps as numbered
+  rows and its links (the run, the chain tree) as links. An agent's answer is a normal answer with the agent named
+  in the card above it. axe-core (WCAG 2.2 AA) passes with a tool turn, an approval card and an agent turn on
+  screen (`e2e/tests/chat.spec.ts`), and the chat and runs reflow sweeps pass at 320 and 640 px.
+
+## Screens made live in 1.7.0
+
+- **Import** (B-3807, Sprint 40b): a six-step wizard whose stepper is a list of buttons with `aria-current="step"` on
+  the current one and the later ones disabled; the kind and destination are segmented controls with `aria-pressed`;
+  repositories are cards that are buttons with `aria-pressed`; the catalogue and the Imports and Repositories tables
+  are rows with `tabindex` that take Enter and Space; facet filters are list links and active filters are chips with
+  an accessible remove label; every control of the review and destination forms has a label (licence, label,
+  attribution, justification, sample, dataset name, columns, eval set, classifier, knowledge base, embedding model,
+  schedule, drop PII), checkboxes carry their text, and the checks, schema preview and log are tables. Progress is a
+  meter with its percentage in text; the running import's log is a timeline in text; the step badge keeps 4.5:1 in
+  dark mode. The log drawer's table goes through the accessibility pass. `e2e/tests/import.spec.ts` runs axe-core on
+  the repositories, review, destination, done and log views, and the accessibility and reflow sweeps cover the screen
+  and its states. The entry points on Models, Training, Classifiers and Knowledge are text buttons.
+
 ## How it was checked
 
 - **Contrast** of every token pair the console uses, computed with the WCAG relative-luminance formula from the values

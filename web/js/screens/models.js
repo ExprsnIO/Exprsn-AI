@@ -296,7 +296,7 @@
         + '</style>'
         + '<div class="page">'
         + UI.pagehead('Model catalog', 'Weights enter only through the import path: GGUF or safetensors, verified by digest, approved by a second person; models a server holds are registered without a pull',
-          UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
+          UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + (App.canOpen('import') ? UI.btn('Import from a repository', { attrs: 'data-goimport' }) : '') + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
         + tabs + (st.view === 'inventory' ? invBody : problem + body)
         + '</div>' + (st.view === 'inventory' ? invInspector : inspector);
 
@@ -310,6 +310,7 @@
       });
       ctx.on('click', '[data-reveal]', (e) => { e.preventDefault(); st.reveal[sel.id] = !st.reveal[sel.id]; ctx.rerender(); });
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
+      ctx.on('click', '[data-goimport]', () => ctx.navigate('import', { kind: 'model', target: 'models' }));
       ctx.on('click', '[data-dismiss]', () => { st.showImportProblem = null; ctx.rerender(); });
       ctx.on('click', '[data-reload]', () => reload());
       ctx.on('click', '[data-tab]', (e, t) => { st.view = t.dataset.tab; ctx.rerender(); });

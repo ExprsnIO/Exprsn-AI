@@ -40,8 +40,10 @@ export interface DatasetRow {
   version: number;
   label: Label;
   source: string;
-  source_kind: 'inline' | 'staging';
+  /** inline | staging | import (B-3804: registered by a dataset import, whose id is `import_id`). */
+  source_kind: 'inline' | 'staging' | 'import';
   staging_key: string | null;
+  import_id?: string | null;
   conversation_data: boolean;
   opt_in: { by: string; byName: string; at: number; scope: string | null } | null;
   state: 'scrubbing' | 'ready' | 'failed' | 'withdrawn';
@@ -495,6 +497,32 @@ export class TrainingService {
     const row: DatasetRow = { id, tenant_id: p.tenantId, name: input.name, version, label: input.label, source: input.source, source_kind: stagingKey ? 'staging' : 'inline', staging_key: stagingKey, conversation_data: input.conversationData, opt_in: optIn, state: 'scrubbing', rows: 0, hash: null, splits: { pct: input.splits, rows: null }, scrub: null, blob_key: null, report_key: null, error: null, withdrawn_reason: null, withdrawn_by: null, withdrawn_at: null, created_by: p.userId, created_at: Date.now() };
     await this.db('training_datasets').insert(serialise({ ...row }));
     await s.jobs.enqueue({ tenantId: p.tenantId, type: 'training.dataset', payload: { id }, createdBy: p.userId, maxAttempts: 2 });
+    return row;
+  }
+
+  /**
+   * B-3804: a version registered by a dataset import (the import's job acts for its requester, whose clearance and
+   * the tenant's opt-in the import checked). The staged JSON Lines are scrubbed, sealed and hashed exactly as an
+   * inline or pipeline version's rows are; `source_kind` is `import` and the version keeps the import's id.
+   */
+  async registerImported(input: { tenantId: string; by: string; importId: string; name: string; label: Label; source: string; stagingPath: string; conversationData: boolean; splits: { train: number; val: number; test: number }; columns?: { text: string | null; label: string | null } }): Promise<DatasetRow> {
+    const s = this.s();
+    if (input.splits.train + input.splits.val + input.splits.test !== 100) throw badRequest('The splits must add up to 100.');
+    let optIn: DatasetRow['opt_in'] = null;
+    if (input.conversationData) {
+      const st = await this.settings(input.tenantId);
+      if (!st.conversationOptIn) throw conflict('Conversation data enters training only with the tenant\'s opt-in.');
+      optIn = { by: st.optInBy ?? input.by, byName: (await this.names([st.optInBy])).get(st.optInBy ?? '') ?? '', at: st.optInAt ?? Date.now(), scope: st.optInScope };
+    }
+    const latest = (await this.db('training_datasets').where({ tenant_id: input.tenantId, name: input.name }).max({ v: 'version' }))[0] as { v: unknown } | undefined;
+    const version = Number(latest?.v ?? 0) + 1;
+    const stagingKey = `training/staging/${input.tenantId}/${input.stagingPath.replace(/^\/+/, '')}`;
+    if (!(await s.blobs.get(stagingKey))) throw badRequest(`Nothing is staged at ${input.stagingPath}.`);
+    const id = ulid();
+    const row: DatasetRow = { id, tenant_id: input.tenantId, name: input.name, version, label: input.label, source: input.source, source_kind: 'import', staging_key: stagingKey, import_id: input.importId, conversation_data: input.conversationData, opt_in: optIn, state: 'scrubbing', rows: 0, hash: null, splits: { pct: input.splits, rows: null }, scrub: null, blob_key: null, report_key: null, error: null, withdrawn_reason: null, withdrawn_by: null, withdrawn_at: null, created_by: input.by, created_at: Date.now() };
+    await this.db('training_datasets').insert(serialise({ ...row }));
+    await this.audit(input.tenantId, 'training.dataset.registered', { dataset: id, name: input.name, version }, input.label, { source: input.source, sourceKind: 'import', import: input.importId, columns: input.columns ?? null });
+    await s.jobs.enqueue({ tenantId: input.tenantId, type: 'training.dataset', payload: { id }, createdBy: input.by, maxAttempts: 2 });
     return row;
   }
 

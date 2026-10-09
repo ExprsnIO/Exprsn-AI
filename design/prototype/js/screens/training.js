@@ -13,6 +13,8 @@
   const DATASETS = [
     { id: 'finance-qa', ver: 'v6', rows: '18,420', label: 'confidential', source: 'Finance KB Q&A pairs, conversation opt-in (Finance Ops)', pii: '412 masked, report attached', hash: 'sha256:8e3f2a…', splits: '80 / 10 / 10', used: 'finance-lora-v4' },
     { id: 'finance-qa', ver: 'v5', rows: '16,900', label: 'confidential', source: 'Finance KB Q&A pairs', pii: '380 masked', hash: 'sha256:51c0d9…', splits: '80 / 10 / 10', used: 'finance-lora-v3' },
+    // 1.7.0, Sprint 40b (B-3804): a version registered by a dataset import keeps the import's reference.
+    { id: 'complaints', ver: 'v1', rows: '2,500', label: 'confidential', source: 'Imported from data.gov: Consumer Complaint Database (IMP-2026-40)', pii: '2,500 masked, report attached', hash: 'sha256:4d71a0…', splits: '80 / 10 / 10', used: '' },
     { id: 'feedback-approved', ver: 'v12', rows: '4,210', label: 'internal', source: 'Ratings and corrections approved by reviewers', pii: '12 masked', hash: 'sha256:c7a41e…', splits: '90 / 5 / 5', used: 'weekly refresh' },
     { id: 'code-reviews', ver: 'v2', rows: '9,880', label: 'internal', source: 'gitlab-onprem merge request comments', pii: '0 masked, emails stripped at source', hash: 'sha256:2b9e70…', splits: '80 / 10 / 10', used: 'coder-lora-v1' },
     { id: 'flag-decisions', ver: 'v3', rows: '2,140', label: 'restricted', source: 'Reviewer decisions from the flag queue', pii: '96 masked', hash: 'sha256:f04d88…', splits: '80 / 10 / 10', used: 'guard-tune-v2' },

@@ -71,6 +71,8 @@ import * as m041 from './041_provenance_artifacts.js';
 import * as m041b from './041b_app_packages.js';
 import * as m041c from './041c_model_gen_sync.js';
 import * as m041d from './041d_entity_api_embeds.js';
+import * as m042 from './042_chat_invocation.js';
+import * as m042b from './042b_dataset_import.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -150,7 +152,9 @@ const MIGRATIONS: Record<string, Migration> = {
   '041_provenance_artifacts': m041,
   '041b_app_packages': m041b,
   '041c_model_gen_sync': m041c,
-  '041d_entity_api_embeds': m041d
+  '041d_entity_api_embeds': m041d,
+  '042_chat_invocation': m042,
+  '042b_dataset_import': m042b
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

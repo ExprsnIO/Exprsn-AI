@@ -477,6 +477,12 @@ const base = z.object({
     CHAT_ARTIFACT_MAX_BYTES: z.coerce.number().int().min(1024).max(8 * 1024 * 1024).default(262_144),
     /** 1.6.0 (B-8001): how long a sandboxed artifact render link (the iframe's URL) stays valid. */
     CHAT_ARTIFACT_RAW_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
+    /** 1.7.0 (B-4003): how long an in-chat approval card (a write or destructive tool call) waits before it expires. */
+    CHAT_CARD_TTL_SECONDS: z.coerce.number().int().min(60).max(7 * 86_400).default(86_400),
+    /** 1.7.0 (B-4006): how long a chat turn waits for an agent the model handed the turn to before the answer continues without it. */
+    CHAT_AGENT_WAIT_SECONDS: z.coerce.number().int().min(1).max(600).default(45),
+    /** 1.7.0 (B-4004): how many recent turns `@agent` may pass along when the person allows it. */
+    CHAT_AGENT_CONTEXT_TURNS: z.coerce.number().int().min(0).max(50).default(8),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and
@@ -808,6 +814,14 @@ const base = z.object({
     IMPORT_BUNDLE_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
     IMPORT_BACKOFF_MAX_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(360),
     IMPORT_DATASET_QUOTA_GB: z.coerce.number().int().min(0).max(1_000_000).default(500),
+    /**
+     * 1.7.0, Sprint 40b (B-3804, B-3806): a dataset import keeps at most IMPORT_DATASET_MAX_ROWS rows (a larger dataset is
+     * sampled); imported classifier engines are scored by the classifier worker at CLASSIFIER_WORKER_URL (none: such a
+     * classifier cannot score), each call within CLASSIFIER_WORKER_TIMEOUT_MS.
+     */
+    IMPORT_DATASET_MAX_ROWS: z.coerce.number().int().min(100).max(50_000_000).default(500_000),
+    CLASSIFIER_WORKER_URL: z.string().url().optional(),
+    CLASSIFIER_WORKER_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
     // --- 1.6.0, Sprint 35c: storage and configuration (edit only inside this block) ---
     /**
      * B-4205: settings the Configuration screen may override from the database, each only after a second platform

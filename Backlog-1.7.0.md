@@ -30,10 +30,29 @@ B-29 PDS, and on 1.6.0's HTTP tool kind (B-89), per-post visibility (B-4901), gr
 
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
-| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | Next |
-| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, boot order, hot path, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder | B-9001–B-9002, B-9101–B-9102, B-9201–B-9205, B-9301–B-9302, B-9401–B-9404, B-9501–B-9504, B-9601–B-9602 | 74 | Planned |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | **Done** |
+| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, boot order, hot path, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder | B-9001–B-9002, B-9101–B-9102, B-9201–B-9205, B-9301–B-9302, B-9401–B-9404, B-9501–B-9504, B-9601–B-9602 | 74 | Next |
 | 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, profile fields, search, custom roles, group moderation, event extras, notifications, linked conversations | B-9206–B-9209, B-9701–B-9709 | 72 | Planned |
 | 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9801–B-9805, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 65 | Planned |
+
+### Progress
+
+**Sprint 40: done** (this PR). Agents, tools, skills and workflows in chat (B-4001 to B-4009, migration
+`042_chat_invocation`): the capabilities of a conversation, `/tool` through the dispatcher and the tool-call guardrail
+with held calls in the Flags queue, approval cards for write and destructive tools, `@agent` runs with run cards and
+attributed answers linked from Runs, `+skill` chips, agents as `agent:<name>` tools within the chain, `/workflow` with
+approval cards; the Chat board and live screen. Dataset import, knowledge sets, eval sets and the Import screen
+(B-3804 to B-3807, migration `042b_dataset_import`): streaming readers for CKAN, Socrata, SDMX, e-Stat, OGD, OpenML,
+InvenioRDM and Hugging Face datasets, PII-flagged previews, sampling, scrub and versioning; dataset-backed knowledge
+sources with schedules, citations and a serving refresh; eval sets and the `imported` classifier engine; the Import
+screen with its wizard, queue and repositories, and entry points on four screens. Unit suite 1191 passed; PostgreSQL
+integration passed; prototype smoke 51 of 51; the touched screens' specs passed (21). Choices to know: write tools are
+now offered to the model in chat and always held for the person; a model-proposed card is decided after the answer;
+handoff answers are awaited for `CHAT_AGENT_WAIT_SECONDS`; a licence the requester records counts only when the source
+states none; the `imported` engine is created only through the import path. Known gaps in `docs/security.md`: free
+text becomes arguments through one model turn; Parquet, Excel and archives are not read (Kaggle imports nothing yet);
+no pinned source revision; importing twice doubles an eval set; refresh reads the whole source; the classifier worker
+protocol is this server's own and no reference worker ships.
 
 The order follows the dependencies: what a conversation may call (B-4001) before any call from chat (B-4002 to
 B-4006); the Chat board (B-4007) before the live screen (B-4008); dataset import (B-3804) before knowledge sets and

@@ -87,6 +87,7 @@ import { WebhookService } from './webhooks/service.js';
 import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
 import { ChatArtifacts } from './chat/artifacts.js';
+import { ChatInvocations } from './chat/invocations.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -219,6 +220,8 @@ export interface Services {
   contentCredentials: ContentCredentials;
   /** 1.6.0 (B-8001): versioned artifacts of chat answers. */
   chatArtifacts: ChatArtifacts;
+  /** 1.7.0 (B-40): agents, tools, skills and workflows called from a conversation. */
+  chatInvocations: ChatInvocations;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -384,6 +387,8 @@ export interface ServiceOverrides {
   git?: GitFetcher;
   /** 1.6.0 (B-8204): git options for app packages (tests allow file:// repositories). */
   appGit?: { allowFile: boolean; timeoutMs: number };
+  /** 1.7.0 (B-3806): the fetch the classifier worker is called with (tests use a fake). */
+  classifierWorkerFetch?: typeof fetch;
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
@@ -446,7 +451,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS, policy: servicePolicy(cfg), loadTimeoutMs: cfg.OLLAMA_LOAD_TIMEOUT_MS }, jobs);
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
-  const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
+  // 1.7.0 (B-3806): imported classifier engines are scored by the classifier worker (tests pass a fetch to a fake).
+  const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log, classifierWorker: { url: cfg.CLASSIFIER_WORKER_URL ?? null, timeoutMs: cfg.CLASSIFIER_WORKER_TIMEOUT_MS, ...(overrides.classifierWorkerFetch ? { fetch: overrides.classifierWorkerFetch } : {}) } });
   // 1.6.0, Sprint 38c: DLP and legal holds read their collaborators lazily; chat, uploads, memory and files take them now.
   const dlp = new DlpService(() => s);
   const legalHolds = new LegalHolds(() => s);
@@ -464,10 +470,11 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       if (p) p.workspaceId = workspaceId;
       return p;
     },
-    streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) }
+    streamModel: { holdback: cfg.CHAT_GUARD_HOLDBACK_SENTENCES, limiter: new CheckLimiter(cfg.CHAT_GUARD_STREAM_CONCURRENCY) },
+    agentWaitMs: cfg.CHAT_AGENT_WAIT_SECONDS * 1000 // 1.7.0 (B-4006)
   });
   // Sprint 21: a held /v1 request (B-1301) is shown from the API's store.
-  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : kind === 'app-form-submission' ? s.apps.forms.held.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
+  guard.flags.heldAnswer = (tenantId, messageId, kind) => (kind === 'chat-invocation' ? s.chatInvocations.heldText(tenantId, messageId) : kind === 'api-request' ? s.openai.holds.heldText(tenantId, messageId) : kind === 'channel-message' ? s.channels.heldText(tenantId, messageId) : kind === 'app-form-submission' ? s.apps.forms.held.heldText(tenantId, messageId) : chat.heldText(tenantId, messageId));
   const registry = new RegistryService(db);
   const chainRefs = new ChainRefs(db, registry);
   registry.useRefs(chainRefs);
@@ -492,13 +499,13 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : kind === 'app-deployment' ? await s.apps.pipelines.approvalDone(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : kind === 'app-deployment' ? await s.apps.pipelines.approvalDone(t, id) : kind === 'chat-turn' ? await s.chatInvocations.runDone(t, 'workflow-run', id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
   tools.useWorkflows(workflows);
   // Sprint 34 (B-4102): agents delegate to agents through the dispatcher.
   tools.useAgents(agents);
   // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
   agents.chains = chains;
-  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : kind === 'redteam-run' ? await s.redteam.childDone(t, id) : undefined);
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : kind === 'redteam-run' ? await s.redteam.childDone(t, id) : kind === 'chat-turn' ? await s.chatInvocations.runDone(t, 'agent-run', id) : undefined);
   // 1.6.0 Sprint 38b (B-7701): a run of an agent with an identity acts within the identity's roles and ceiling.
   agents.identity = (p, agentName) => s.agentIdentities.narrow(p, agentName);
   tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
@@ -615,6 +622,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
     chatArtifacts: new ChatArtifacts(() => s),
+    chatInvocations: new ChatInvocations(() => s),
     contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
@@ -737,6 +745,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await tracer.close();
     }
   };
+  chat.invocations = s.chatInvocations; // 1.7.0 (B-40): write-tool cards, agents handed a turn, the conversation's skills
   registerPlatformJobs(s);
   // Sprint 22: jobs join the trace that queued them and wait while this build is older than the schema; guardrail
   // checkpoints are spans (checkpoint and outcome only, never the text).
@@ -796,6 +805,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
   s.files.registerJobs();
   s.knowledge.folders = s.files.folderSource();
+  // 1.7.0 (B-3805): a dataset knowledge source reads its rows through the import service on every refresh.
+  s.knowledge.datasetItems = (src, ctx) => s.imports.datasets.knowledgeItems(src, ctx);
   // Files as moderation objects (B-1902 with B-2401): a takedown trashes the file and revokes its shares; an upheld
   // appeal takes it out of the trash again (if not purged meanwhile).
   if (!s.moderation.registry.get('file')) {
@@ -877,6 +888,7 @@ function registerPlatformJobs(s: Services): void {
   s.jobs.register('chat.retention', async (p, ctx) => s.chat.purgeExpired(String(p.tenantId ?? ctx.job.tenant_id)));
   s.jobs.register('chat.sweep', async (p, ctx) => {
     const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
+    await s.chatInvocations.expireCards(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-4003): cards past their expiry
     await s.chat.store.expire(24 * 3_600_000);
     return { interrupted };
   });

@@ -414,6 +414,66 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
   it ends with its key, with the app's settings turned off, or when the designers end it.
 
+## Tools, agents, skills and workflows called from chat (1.7.0, Sprint 40a)
+
+- **Nothing new decides what may run (B-4001).** The conversation's capabilities are the profile's tool list
+  resolved by the dispatcher at the conversation's label, the published agents the caller holds `agents:run` for,
+  the published skills within the profile's allow-list and the workspace's published workflows; every ceiling check
+  is the one the dispatcher, the agent service and the workflow service already make. What is hidden is named with
+  its reason, and a call by name meets the same refusal, so the list cannot be used to probe for more than it shows.
+- **A person's tool call is a model's tool call (B-4002).** It takes the same path: the input schema, the tool's
+  ceiling against the conversation's label, the tool-call guardrail with the same `meta`, the rate limit, the
+  chain (a `chat-turn` root), the output schema, the context and untrusted-content checkpoints on the result. A
+  held call waits in the Flags queue as a `chat-invocation` hold; the reviewer sees the tool and its arguments and
+  nothing else of the conversation; approving runs it as the owner, with the owner's clearance and workspace.
+- **Write and destructive tools wait for the person (B-4003).** The model is offered them in chat, but the
+  dispatcher holds every such call and the person decides on a card that acts as them and is audited; the model
+  only learns that the call waits. A destructive or `confirm: always` tool a rule also flagged needs the owner and
+  then the reviewer. Cards expire (`CHAT_CARD_TTL_SECONDS`) and a denied or expired card leaves a tool turn saying
+  so, so the model does not retry blindly. Only the owner or a tool admin decides a card.
+- **An agent started from a conversation is a normal run (B-4004, B-4006).** It runs as the owner (narrowed by the
+  agent's identity when it has one, B-7701), at the conversation's label, under a `chat-turn` chain root with the
+  chain's depth and budgets; the recent turns it may see are only those within the agent's label, and only when the
+  person asks. The answer joins the conversation attributed to the agent and is labelled at least at the run's
+  label; the answer listeners (memory, artifacts) treat it as an answer. Cancelling from the chat is the owner's
+  cancel in Runs.
+- **Skills are instructions, not grants (B-4005).** A skill on a conversation adds text to the system prompt; the
+  tools it names are not offered unless the profile lists them. The profile's allow-list bounds what a conversation
+  may add; a skill above the conversation's ceiling is never added.
+- **A workflow started from chat keeps its approvals (B-4009).** Its approvals are the workflow's own, decided by
+  the people the step names; the card only shows them to someone who may decide. Calls held in its chain are
+  decided from the chain root as before.
+
+## Dataset import, knowledge sets and imported classifier engines (1.7.0, Sprint 40b)
+
+- **Rows are read, never trusted (B-3804).** A dataset import reaches only the hosts of confirmed repositories, through
+  the staging proxy when there is one, page by page (the sample or `IMPORT_DATASET_MAX_ROWS` at most, `IMPORT_MAX_BYTES`
+  of JSON Lines) into a staging object in the blob store, never whole in memory; the readers accept CSV, TSV, JSON and
+  JSON Lines and the paged APIs, and refuse the rest (spreadsheets, archives, Parquet) at the review step with nothing
+  written. The same checks a model import runs apply: the licence against the tenant's allow-list with the legal-review
+  exception (a licence the requester records counts only when the source states none), the label against the
+  requester's clearance, the quota, and the destination's own permission, which the plan refuses rather than the job.
+  The first rows go through the PII detectors so the wizard shows which columns to drop or mask before anything is
+  stored; what the training scrub then masks is on the version's report as for any version. The manifest (source,
+  revision, resources, rows, hash, licence, label, attribution, requester, destination) is signed with the KMS key and
+  kept on the import; the staging object is deleted once the destination has it (the scrub deletes a training
+  version's input as it does for pipelines).
+- **A knowledge set stays within the base's rules (B-3805).** The rows become documents of one source of kind `dataset`
+  under the base's label floor (at least the import's label); they are chunked, classified, embedded and labelled like
+  any document, and retrieval filters them by clearance and the base's access list as before. A refresh re-reads the
+  source with the same hosts, cap and columns the import used (the mapping is on the source, not re-chosen), and swaps
+  row by row by content hash, so a changed publisher table never serves half-indexed; PII columns the wizard dropped
+  stay out of every refresh.
+- **An imported engine runs on the worker, not here (B-3806).** The model's files are downloaded through the same
+  resumable, digest-pinned, pickle-refusing path as a draft model, stored content-addressed, and never loaded by this
+  server: the classifier worker (`CLASSIFIER_WORKER_URL`) loads them by their blob keys from the same store and
+  answers scores; the worker is an operator-run service on the internal network, called within
+  `CLASSIFIER_WORKER_TIMEOUT_MS`, and a classifier without a worker cannot score or publish. The labels come from the
+  model's own `config.json` and can be renamed on the Classifiers screen; thresholds, eval sets, publication and the
+  minimum-sample rule apply as to every engine.
+
+## Deployment hardening
+
 ## Model servers and platform administration (1.6.0, Sprint 35)
 
 - **A server's model is the server's word (B-4301 to B-4307).** A `kind: openai` instance answers Chat Completions
@@ -511,6 +571,20 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- Dataset import, knowledge sets and imported engines (1.7.0, Sprint 40b). Parquet, Excel and archives are not read: a
+  dataset published only that way is refused until the publisher offers CSV, JSON or an API; Kaggle therefore imports
+  nothing yet. SDMX is read as one SDMX-CSV stream (the providers page by period, not by row), so a very large flow is
+  cut at the row cap rather than paged. The PII preview looks at the first 200 rows of the first readable resource
+  only; a column that is clean there and dirty later is caught by the training scrub but not by the knowledge or eval
+  set destinations, which store rows as read (drop the column, or raise the label). A sampled import keeps the first
+  rows in the source's order, not a random sample. The hub's `revision` pins a dataset repository's commit, but CKAN,
+  SDMX and the API sources have none: the job reads whatever the source serves now and logs a changed modification
+  stamp rather than refusing. An eval set's cases are added, never replaced: importing twice doubles them. A
+  knowledge set's refresh reads the whole source each time (no watermark) and holds every row's document in memory as
+  text while it builds the listing; a source above a few hundred thousand rows belongs in a database connection. The
+  imported engine's worker protocol is this server's own (one `POST /classify`), with no reference worker shipped; a
+  worker must share the blob store (filesystem or S3) to read the files, and a classifier whose worker is missing
+  scores nothing (its evaluation records errors per case).
 - The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
   only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
   Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
@@ -1629,3 +1703,10 @@ filter, private `/tmp`, only the state directory writable.
   leaf against the active intermediate only (no chain of several intermediates, no OCSP); ended sessions are purged
   by the next exchange's bookkeeping, not a schedule; the embed page lists at most six fields per record and keeps the
   session token in memory, so a reload needs a new host token.
+- Tools, agents, skills and workflows from chat (1.7.0, Sprint 40a). Free text becomes arguments through one model turn
+  and is taken as the model made them (the person sees the arguments on the turn, not before). A model-proposed card
+  waits for the owner only; the answer that proposed it has already finished, so the result lands as a later turn
+  the model sees on the next question. An agent the model handed the turn to is awaited for `CHAT_AGENT_WAIT_SECONDS`
+  with a poll, not a wake-up. The recent turns passed to `@agent` are filtered by message label, not re-screened by the
+  guardrails. A workflow's outcome turn holds the passed steps' outputs as JSON up to 64 KiB. Cards are expired by the
+  chat sweep (every 15 minutes), so a card may outlive its expiry until then; decide refuses it at once.

@@ -180,7 +180,9 @@
       // 1.6.0 (B-4206): Social and messaging, after Channels with the other domain policies (decision Q13: its own icon)
       { id: 'social', label: 'Social and messaging', icon: 'social', perm: 'social:manage', live: true },
       { id: 'connections', label: 'Connections', icon: 'connections', perm: 'connections:manage', live: true },
-      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true }, { id: 'roles', label: 'Roles and access', icon: 'roles', perm: 'roles:manage', live: true },
+      { id: 'training', label: 'Training', icon: 'training', perm: 'training:manage', live: true },
+      // 1.7.0, Sprint 40b (B-3807): the Import screen (models, datasets, knowledge sets, eval sets)
+      { id: 'import', label: 'Import', icon: 'models', perm: 'imports:run', live: true }, { id: 'tenants', label: 'Tenants', icon: 'tenants', perm: 'tenant:manage', live: true }, { id: 'roles', label: 'Roles and access', icon: 'roles', perm: 'roles:manage', live: true },
       { id: 'directories', label: 'User stores', icon: 'identity', perm: 'identity:manage', live: true }, { id: 'identity', label: 'Identity', icon: 'key', perm: 'identity:manage', live: true },
       // Sprint 30 (B-3402 to B-3404): the trust screens
       { id: 'certificates', label: 'Certificates', icon: 'certificates', perm: 'pki:manage', live: true }, { id: 'vault', label: 'Vault', icon: 'vault', perm: 'secrets:admin', live: true }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins', perm: 'plugins:manage', live: true },
@@ -513,7 +515,7 @@
     map() {
       const groups = [
         ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
-        ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
+        ['Models and training', ['models', 'profiles', 'pools', 'training', 'import']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
         ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'directories', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s && App.canOpen(id) ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');

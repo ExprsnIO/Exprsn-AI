@@ -5439,3 +5439,132 @@ and `APP_EMBED_MAX_TTL_SECONDS`, and ends with its key. It acts as the mapped us
 `records:write` when the app allows writes) under `/api/apps/<the app>` only, on the entities the settings list,
 within the user's policies, clearance and workspaces; anything else is `403 step: scope`. Ended sessions are purged
 after a day.
+
+## Sprint 40a (1.7.0): agents, tools, skills and workflows in chat (B-4001 to B-4009)
+
+Migration `042_chat_invocation`. Settings `CHAT_CARD_TTL_SECONDS`, `CHAT_AGENT_WAIT_SECONDS`, `CHAT_AGENT_CONTEXT_TURNS`.
+Profiles gain `agents` (the agents offered to the model as `agent:<name>` tools) and `skills` (the skills a
+conversation on the profile may add; null for any published skill) on `POST`/`PATCH /api/admin/profiles`.
+
+### What a conversation may call (B-4001; `chat:read`)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/conversations/:id/capabilities` | `{label, profile, tools: [{name, version, description, inputSchema, sideEffect, confirm, label, impl, warning}], agents: [{name, version, description, label, inputSchema, offeredToModel}], skills: [{name, version, description, label, active}], workflows: [{id, name, description, label, inputSchema}], hidden: [{name, reason}], active: [{name, mode}]}`. Tools are the profile's list resolved through the dispatcher at the conversation's label (`calculate` when the profile has it); agents are the published agents the caller may run (`agents:run`); skills the published ones within the profile's allow-list; workflows the workspace's published ones. An entry whose ceiling is below the conversation's label is in `hidden` with the reason, and calling it by name is refused the same way (`403`, step `zone`). |
+| `GET /api/conversations/:id/invocations` | The conversation's cards, oldest first: `{id, kind: tool \| agent \| workflow, name, version, sideEffect, proposedBy: user \| model, arguments (within the caller's clearance), state, approval, decidedBy, decidedAt, expiresAt, run: {kind, id}, chain, messageId, answerId, flag, error, label}`; a live run also carries `runState`, `approvals` (the workflow run's pending approvals the caller may decide) and `held` (calls held anywhere in its chain, as the chain root lists them, B-4106). |
+
+### Tool calls and cards (B-4002, B-4003; `chat:write`, `inference:invoke`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/conversations/:id/tool-calls` `{name, arguments?}` or `{name, text}` | The conversation's owner calls a tool of the profile's list. Free `text` is turned into arguments by the profile's model (one gateway turn with only that tool offered; `422` when it makes no call). The call goes through the dispatcher and the tool-call guardrail like a model's call. `202` with the card: `state: done` and `messageId` of the tool turn when it ran; `awaiting` (`approval: owner`) for a write tool, or `owner+reviewer` for a destructive or `confirm: always` tool a rule also flagged; `held` (`approval: reviewer`) when a rule held a read tool, filed in the Flags queue (source kind `chat-invocation`, checkpoint `tool-call`); `denied` or `failed` with `error` when it was refused or failed. |
+| `POST /api/conversations/:id/invocations/:iid/decide` `{decision: approve \| deny}` | The owner (or a tool admin) decides an awaiting card. Approve runs it (`done`) or, for `owner+reviewer`, hands it to the Flags queue (`held`); deny records it (`denied`) and leaves a tool turn saying so. `409` once the card is decided or expired (an expired card is marked `expired`, audited `chat.tool.expired`; the chat sweep expires cards past `CHAT_CARD_TTL_SECONDS`). |
+| `POST /api/flags/:ref/decide` `{decision: approved \| rejected}` | A reviewer's decision on a held call: approved runs it as the owner, rejected records it. Audited `chat.tool.hold.<decision>`. |
+
+A tool turn is a message with `turn: tool`, `invocationId`, the tool's name as `profile`, `tools: [{name, expression (the
+arguments as JSON), output | error}]` and `content` a one-line summary; it is the head after the call. The model sees it
+on the next turn as its own call and the tool's result (an assistant message with `tool_calls` and a `tool` message,
+marked as untrusted content like any tool result). A write tool the model proposes mid-answer becomes a card with
+`answerId` the answer's id and `proposedBy: model`; the model is told the call waits for the person and finishes
+its answer.
+
+Audit actions: `chat.tool.requested`, `chat.tool.proposed`, `chat.tool.called`, `chat.tool.refused`,
+`chat.tool.failed`, `chat.tool.awaiting`, `chat.tool.held`, `chat.tool.approved`, `chat.tool.denied`,
+`chat.tool.rejected`, `chat.tool.expired`.
+
+### Agents from a conversation (B-4004, B-4006; `chat:write`, `agents:run`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/conversations/:id/agent-runs` `{agent, input, includeTurns?}` | `@agent`: starts a run of a published agent bound to the conversation: the request is a user turn (`@<agent>: <input>`), the answer a queued assistant turn with `turn: agent` and the agent's name as `profile`; the run's input is the message and, with `includeTurns`, the last `CHAT_AGENT_CONTEXT_TURNS` turns of the path within the agent's label. The run is the child of a `chat-turn` chain root; its caller is `{kind: chat-turn, id: <the turn>}`, so `GET /api/runs/:id` shows `caller.conversationId` and the Runs screen links back. `202` with the card plus `userMessageId`, `messageId`, `runId`. When the run ends the turn completes with its answer (`complete`), fails with its error, or is `stopped` when cancelled; `chat.done` is emitted and the answer listeners (memory, artifacts) run. |
+| `POST /api/conversations/:id/invocations/:iid/cancel` | Cancels the agent or workflow run a card started (as `POST /api/runs/:id/cancel` would); the turn records it. |
+
+B-4006: the agents on the profile's `agents` list are offered to the model as `agent:<name>` tools (the dispatcher's
+callees, B-4102) when the profile's model can call tools. A call starts a run under the chat turn's chain (the chain's
+depth and budgets apply, so an agent cannot start agents past `AGENT_MAX_DEPTH`); the answer waits
+`CHAT_AGENT_WAIT_SECONDS` for it and continues with the run's answer, or, when the run is still going, with a note
+and a turn of its own that completes when the run ends (`chat.invocation` events, `proposedBy: model`).
+
+Audit actions: `chat.agent.started`, `chat.agent.finished`, `chat.agent.failed`, `chat.agent.cancelled`;
+`agent.run.delegated` with `from: chat-turn` for a run the model started.
+
+### Skills on a conversation (B-4005; `chat:write`)
+
+| Method and path | What it does |
+| --- | --- |
+| `PUT /api/conversations/:id/skills` `{name, mode: sticky \| once}` | `+skill`: adds a published skill (within the conversation's ceiling and the profile's `skills` allow-list). Its instructions, with its closure (B-4103), follow the profile's system prompt on every turn (`sticky`) or the next one (`once`, removed after that answer). `{skills, skill}`. |
+| `DELETE /api/conversations/:id/skills/:name` | Removes it; the very next turn goes without its instructions. |
+
+The conversation view carries `skills: [{name, mode}]`. Audit: `chat.skill.added`, `chat.skill.removed`.
+
+### Workflows from a conversation (B-4009; `chat:write`, `agents:run`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/conversations/:id/workflow-runs` `{workflow (id or name), input}` | `/workflow`: starts a published workflow of the workspace (trigger `chat`), behind a `chat-turn` chain node, with the request as a user turn and a queued `turn: workflow` placeholder. The run's pending approvals are on the card (`approvals`), decided with `POST /api/workflow-approvals/:id` as anywhere; calls held anywhere in the chain are on the card (`held`) and decided from the chain root (B-4106). When the run ends the turn completes with the outputs of its passed steps as JSON (succeeded) or its error. `202` with the card plus `userMessageId`, `messageId`, `runId`. |
+
+Audit actions: `chat.workflow.started`, `chat.workflow.finished`, `chat.workflow.failed`, `chat.workflow.cancelled`.
+
+Socket events to the owner: `chat.invocation {conversationId, invocationId, state, kind, name, runId?, messageId?}` on
+every card change; `chat.status` for a queued placeholder turn and `chat.done` when a turn completes.
+
+## Sprint 40b (1.7.0): dataset import, knowledge sets, classifier eval sets and imported engines (B-3804 to B-3807)
+
+Migration `042b_dataset_import` (`import_jobs.result`, `rows_total`, `sample_rows`, `dataset_id`, `kb_id`, `source_id`,
+`classifier_id`, `eval_set`; `training_datasets.import_id`). Job `imports.dataset`. New settings: `IMPORT_DATASET_MAX_ROWS`
+(500 000), `CLASSIFIER_WORKER_URL` (none) and `CLASSIFIER_WORKER_TIMEOUT_MS` (30 s). No new permissions: every route is
+`imports:run`, and the destination's own permission (`training:submit`, `classifiers:manage`, `knowledge:manage`;
+`models:manage` or `classifiers:manage` for a model import) is checked by the plan and refused as a check.
+
+### Dataset import (B-3804; `imports:run`)
+
+A dataset from a confirmed repository is read page by page from its files (CSV, TSV, JSON, JSON Lines, streamed) or its
+paged API (the CKAN datastore, Socrata, e-Stat and the OGD platform by offset and limit; SDMX as SDMX-CSV), never whole in
+memory, into a staging object, then registered where the wizard's destination says. A dataset above the tenant's import
+quota (`IMPORT_DATASET_QUOTA_GB`) must be sampled (`sample` rows); at most `IMPORT_DATASET_MAX_ROWS` rows are kept.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/repositories/:id/dataset?id=` | The select step: `{itemId, name, revision, licence, licenceSource, publisher, description, frequency, configurations: [{id, name, splits}], resources: [{id, name, format, url, api, bytes, rows, config, split}], landingPage, source: live}`. `api` is `file`, `ckan-datastore`, `socrata`, `sdmx`, `estat` or `ogd`; CKAN (`package_show`), OpenML, InvenioRDM and Hugging Face dataset repositories are read live, DCAT-AP from the snapshot's distributions, Kaggle lists its zip (refused at the format check) |
+| `POST /api/imports/dataset-plan` `{repositoryId, item, configuration?, resources?, splits?, columns?, target, label, licence?, attribution?, notes?, exception?, workspaceId?, sample?, final?, training?, classifiers?, knowledge?}` | The review step, nothing written: `{repository, item, name, revision, detail, selected, schema: {columns: [{name, type, pii, sample, filled}], previewRows, from, piiColumns}, sizeBytes, rowsEstimate, quota: {maxBytes, usedBytes, remainingBytes, overQuota, sample, maxRows}, licence: {id, source, allowed, recorded, needsException}, label, target, frequency, schedule, checks, blocked, waiting}`. The checks: Selection, Format, Quota, Licence (a recorded licence counts only when the source states none), Label, Destination (`info` until `final`, then `refused` when a name or column is missing), PII (the detectors over the first 200 rows) and Columns. `target` is `training`, `classifiers`, `knowledge` or `store` |
+| `POST /api/imports/datasets` (the plan's body) | `201` the import (`kind: dataset`) as `GET /api/imports/:id` shows it; `422 Import refused` with the refused row under `import` and `reason`; `409 Licence not recorded` or `409 Licence exception required`; with `exception: {reason}` the import is `waiting on licence` until `POST /api/imports/exceptions/:id/decision` grants it |
+| `GET /api/imports/:id` | Gains `result` (`{rows, sampled, hash, bytes, resources, columns, piiColumns, warnings, dataset? | evalSet? | knowledge? | stored?}`), `rowsTotal`, `sampleRows`, `datasetId`, `kbId`, `sourceId`, `classifierId`, `evalSet`; the manifest has `kind: dataset`, the resources read, `rows`, `hash`, `sampled` and `destination` |
+
+Destinations: `training: {name, textColumn?, labelColumn?, splits?, conversationData?}` registers a version through
+`TrainingService.registerImported` (`source_kind: import`, `import_id`); the rows are shaped for the trainers (`text`,
+`label`, the other columns beside them) and the PII scrub, sealed rows, hash, splits and report are exactly an inline
+version's. `classifiers: {evalSet, textColumn, labelColumn, classifier?: {mode: none | new | existing, name?, ref?,
+engine?, profile?}, evaluate?}` adds the rows as cases of the eval set, counts them per label (labels under 200 samples
+are `warnings`), optionally makes a classifier on the set (at most 20 labels) or points an existing tenant classifier
+at it, and queues `classifier.train` (a linear engine without a head) or `classifier.evaluate`. `knowledge: {kbId? |
+name + embedModel, titleColumn?, textColumns?, metadataColumns?, groupBy?, schedule?: 15m | hourly | daily | weekly |
+monthly | manual | publisher, dropPii?, labelFloor?}` makes a knowledge set (below). `store` keeps the rows sealed under
+`imports/datasets/<tenant>/<import>.jsonl`.
+
+Audit actions: `import.requested`, `import.refused`, `import.completed`, `import.failed` (with `kind: dataset` and the
+`target`), `import.exception.requested`; `training.dataset.registered`, `knowledge.created`, `knowledge.source.added`
+for what the job made.
+
+### Knowledge sets (B-3805; `knowledge:manage`)
+
+`knowledge_sources.kind = dataset`: `POST /api/knowledge/bases/:id/sources` takes `{kind: dataset, location, schedule?,
+labelFloor?, dataset: {importId, repositoryId, item, configuration, resources, titleColumn, textColumns,
+metadataColumns, groupBy, dropPii, piiColumns, maxRows, columns, frequency}}` (the import makes it; the mapping is what
+the wizard chose). `schedule` gains `weekly` and `monthly`; `publisher` on the import means the schedule the source's
+update frequency maps to (daily, weekly, monthly or quarterly and yearly as monthly; none stated: manual). A sync
+(`POST /api/knowledge/sources/:id/sync`, or the schedule) reads the source again through the import service: one
+document per row, or per group when `groupBy` is set, named `<title> (row n)` or `<column>: <value> (n rows)`, keyed
+by the row's position in its resource, with each row's text, its metadata columns and a `Source:` line naming the
+repository, the dataset, the resource and the row; changed rows re-index, missing ones are removed, the rest keep
+serving, so a refresh swaps row by row with nothing offline. Search hits name the source as `dataset: <repository>
+<item>`.
+
+### Eval sets and imported engines (B-3806; `classifiers:manage`)
+
+`POST /api/imports` takes `target: classifiers`: a text-classification model's files are downloaded and verified like
+any model import (no GGUF conversion, no pool), then `classifiers` gains a tenant classifier with the `imported` engine,
+its labels from the model's `config.json` (`id2label`) and its files named by their content-addressed blob keys
+(`config.model`). The classifier worker scores it: `POST <CLASSIFIER_WORKER_URL>/classify` `{model: {ref, name,
+revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
+classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
+eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.
