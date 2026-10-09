@@ -30,7 +30,7 @@ import { InstanceRegistry } from '../server/src/ops/instances.js';
 import { hashPassword } from '../server/src/identity/passwords.js';
 import type { Label } from '../server/src/authz/labels.js';
 import type { ProfileRow } from '../server/src/gateway/repo.js';
-import { FakeOllama } from '../server/test/fake-ollama.js';
+import { FakeOllama, TEMPLATE_SYSTEM, templateModel } from '../server/test/fake-ollama.js';
 import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
@@ -231,6 +231,16 @@ async function main() {
     await repo.updateModel(m.id, { state: 'approved', import_state: 'pulled', capabilities: [...caps], size_bytes: size });
     await repo.place(m.id, pool.id, 'warm', 'e2e');
     models[name] = m.id;
+  }
+  // B-11707: a Magistral-like model, recorded as a template model (its default system prompt asks for <think> blocks).
+  {
+    const tm = templateModel('magistral:24b', 14 * GB);
+    ollama.addAvailable(tm);
+    ollama.registry.set(tm.name, tm);
+    const m = await repo.createModel({ name: tm.name, source: 'Ollama library', expectedDigest: null, license: { name: 'Apache 2.0' }, label: 'confidential', notes: null, requestedBy: 'e2e', requestedTenant: tenantId });
+    await repo.updateModel(m.id, { state: 'approved', import_state: 'pulled', capabilities: ['completion', 'tools', 'thinking'], size_bytes: 14 * GB, thinking: 'template', thinking_template: TEMPLATE_SYSTEM });
+    await repo.place(m.id, pool.id, 'warm', 'e2e');
+    models[tm.name] = m.id;
   }
   // A model in the registry that nobody has requested yet, for the "request a model" flow.
   ollama.registry.set('mistral:7b', { name: 'mistral:7b', size: 4 * GB, capabilities: ['completion'] });

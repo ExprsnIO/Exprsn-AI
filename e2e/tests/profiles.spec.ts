@@ -1,3 +1,4 @@
+import { expectAxeClean } from './support/axe';
 import { test, expect, open, expectLive, confirmDialog, toast } from './support/fixtures';
 
 test.describe('Profiles', () => {
@@ -18,6 +19,34 @@ test.describe('Profiles', () => {
     await page.locator('[data-status="published"]').click();
     await confirmDialog(page, 'Publish');
     await expect(page.locator('.leftpane')).toContainText(/summariser-8b\s*llama3\.1:8b\s*published/);
+  });
+
+  // B-11707: a profile on a template model inherits how the model thinks: a ceiling above off passes the checks with
+  // no hand-written <think> instructions, and the profile publishes.
+  test('B-11707: a profile on a template model inherits its thinking and publishes', async ({ page }) => {
+    await open(page, 'profiles');
+    await expectLive(page);
+    await page.locator('[data-new]').first().click();
+    const modal = page.locator('#overlay .modal');
+    await modal.locator('[data-nn]').fill('reviewer-24b');
+    await modal.locator('[data-nd]').fill('Reviewer');
+    await modal.locator('[data-nm]').selectOption({ label: 'magistral:24b, confidential' });
+    await modal.locator('[data-nl]').selectOption('internal');
+    await modal.locator('[data-nds]').fill('Reasons through a case before answering');
+    await modal.locator('[data-create]').click();
+    await expect(page.locator('#main h1')).toContainText('Reviewer');
+    await page.locator('[data-f="thinkCeiling"]').selectOption('high');
+    await page.locator('[data-f="thinkDefault"]').selectOption('high');
+    await expect(page.locator('#main')).toContainText('thinks through its own convention (template)');
+    await page.locator('[data-save]').click();
+    await expect(modal).toContainText('Save reviewer-24b as version 2');
+    await modal.locator('[data-ok]').click();
+    await expect(page.locator('[data-status="published"]')).toBeEnabled();
+    await expect(page.locator('.tmsg')).toHaveCount(0, { timeout: 15_000 }); // the toasts fade before the contrast audit
+    await expectAxeClean(page, 'aa', 'the profile editor with an inherited thinking mode');
+    await page.locator('[data-status="published"]').click();
+    await confirmDialog(page, 'Publish');
+    await expect(page.locator('.leftpane')).toContainText(/reviewer-24b\s*magistral:24b\s*published/);
   });
 
   test('B-6901: trust marking is on by default and is switched off as a new version', async ({ page }) => {

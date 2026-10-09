@@ -839,6 +839,7 @@ table.dt .actions{white-space:nowrap}
         ['Source', esc(sel.source) + (/bundle/.test(sel.source) ? ' <a href="#" data-go="platform" style="font-size:12px">bundle</a>' : /training job/.test(sel.source) ? ' <a href="#" data-go="training" style="font-size:12px">open job</a>' : '')],
         ['Licence', licenceMissing ? '<span style="color:var(--warn-fg)">not recorded</span> ' + UI.btn('Record licence', { size: 'xs', attrs: 'data-licence' }) : esc(sel.licence)],
         sel.held ? ['Model server', '<a href="#" data-servers>' + esc(sel.server) + '</a> <span class="muted" style="font-size:12px">model id <span class="mono">' + esc(sel.id) + '</span></span>'] : ['Signed manifest', sel.manifest === 'verified' ? UI.pill('verified', 'ok') : UI.pill(sel.manifest, 'ok')],
+        ['Thinking', sel.thinking === 'template' ? 'template (a convention in the system prompt) <span class="muted">(from the model\'s own prompt)</span>' : (sel.caps || '').indexOf('thinking') >= 0 ? 'native (the server\'s think parameter)' : 'none'],
         ['Tested hardware', esc(sel.hw)],
         ['Tool-calling conformance', sel.confTone ? UI.pill(sel.conf, sel.confTone) : '<span class="fg2">' + esc(sel.conf) + '</span>'],
         ['Allowed pools', sel.pools.map((p) => /^none/.test(p) ? '<span class="fg2">' + esc(p) + '</span>' : '<a href="#" data-go="pools">' + esc(p) + '</a>').join(', ')],

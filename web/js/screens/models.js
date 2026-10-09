@@ -6,6 +6,9 @@
   const LABELS = ['public', 'internal', 'confidential', 'restricted'];
   const TERMINAL = { succeeded: 1, failed: 1, cancelled: 1 };
   const capName = (c) => (c === 'completion' ? 'chat' : c);
+      const THINKING = { native: 'native (the server\'s think parameter)', template: 'template (a convention in the system prompt)', none: 'none' };
+      const thinkingCell = (m) => { const mode = m.thinking || (capsOf(m).indexOf('thinking') >= 0 ? 'native' : 'none'); return '<span data-thinking="' + esc(mode) + '">' + esc(THINKING[mode] || mode) + '</span>'
+        + (mode === 'template' ? ' <span class="muted">' + (m.thinkingTemplate ? '(from the model\'s own prompt)' : '(the built-in convention)') + '</span>' : '') + (mode !== 'none' ? '<div class="muted" style="font-size:12px">Profiles on this model inherit it: their thinking level is sent the way the model understands.</div>' : ''); };
   const capsOf = (m) => (m.capabilities || []).map(capName);
   const gb = (b) => (b ? (b / 1e9).toFixed(1) + ' GB' : '');
   const day = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '');
@@ -190,6 +193,8 @@
           ['Size on disk', held ? '<span class="muted">held by the server</span>' : sel.sizeBytes ? esc(gb(sel.sizeBytes)) : '<span class="muted">known after the pull</span>'],
           ['Context length', sel.contextLength ? esc(Number(sel.contextLength).toLocaleString()) : held ? '<span class="muted">not reported by the server</span>' : '<span class="muted">known after the pull</span>'],
           ['Capabilities', capsOf(sel).length ? esc(capsOf(sel).join(', ')) + (ev && ev.toolsWithheld ? ' <span style="color:var(--warn-fg)">(tools withheld)</span>' : '') : '<span class="muted">known after the pull</span>'],
+          // B-11707: how the model is made to think; profiles inherit it.
+          ['Thinking', thinkingCell(sel)],
           ['Source', esc(sel.source || '')],
           ...(held ? [
             ['Model server', esc((srv && srv.instance) || 'removed') + ' <span class="muted" style="font-size:12px">model id <span class="mono">' + esc(sel.serverModel || sel.name) + '</span>' + (srv && srv.health ? ', ' + esc(srv.health) : '') + '</span>'],
@@ -564,11 +569,13 @@
             + UI.field('Licence URL', UI.input(lic.url || '', { placeholder: 'https://… (optional)', attrs: 'data-f="url"' }))
             + '<div class="span2">' + UI.field('Licence notes', UI.textarea(lic.notes || '', { placeholder: 'Review outcome, conditions of use (optional)', rows: 2, attrs: 'data-f="lnotes"' })) + '</div>'
             + UI.field('Max label', UI.select(LABELS, sel.label, 'data-f="label"'), sel.state === 'approved' ? 'Raising it on an approved model needs a new approval' : '')
-            + '<div class="span2">' + UI.field('Notes', UI.textarea(sel.notes || '', { rows: 2, attrs: 'data-f="notes"' })) + '</div></div>'
+            + '<div class="span2">' + UI.field('Notes', UI.textarea(sel.notes || '', { rows: 2, attrs: 'data-f="notes"' })) + '</div>'
+            + UI.field('Thinking', UI.select([{ value: '', label: 'As the model reports (' + (sel.thinking || 'none') + ')' }, { value: 'native', label: 'native: the server\'s think parameter' }, { value: 'template', label: 'template: a convention in the system prompt' }, { value: 'none', label: 'none' }], sel.thinkingSet || '', 'data-f="thinking" aria-label="Thinking"'), 'Profiles on this model inherit it (B-11707)')
+            + '<div class="span2">' + UI.field('Thinking convention', UI.textarea(sel.thinkingTemplate || '', { rows: 3, placeholder: 'For a template model: the text appended to the system prompt that asks for <think> blocks. Empty: the built-in convention.', attrs: 'data-f="thinkingTemplate" aria-label="Thinking convention"' })) + '</div></div>'
             + UI.notice('The licence is recorded with your name and shown on the model card. Approve becomes available once it is saved.', 'info'),
           read(m) {
             const v = (k) => m.querySelector('[data-f="' + k + '"]').value.trim();
-            const body = { label: v('label'), notes: v('notes') || null };
+            const body = { label: v('label'), notes: v('notes') || null, thinking: v('thinking') || null, thinkingTemplate: v('thinkingTemplate') || null };
             if (v('licence')) { body.license = { name: v('licence') }; if (v('url')) body.license.url = v('url'); if (v('lnotes')) body.license.notes = v('lnotes'); }
             else if (sel.license && sel.license.name) throw new Error('A recorded licence cannot be cleared; enter its name.');
             return body;
