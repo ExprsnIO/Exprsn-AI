@@ -15,6 +15,7 @@ import { ADAPTERS, type AdapterContext, type RepositoryAdapter } from './adapter
 import { bundleAdapter, promotedModelFiles } from './adapters/bundle.js';
 import { readAll } from './adapters/types.js';
 import { CatalogStore } from './catalog.js';
+import { DatasetImports } from './datasets.js';
 import { ImportFetcher } from './fetcher.js';
 import { contentProblem, DEFAULT_ALLOWED_LICENCES, formatOf, normaliseLicence, quantizationOf } from './formats.js';
 import { RepositoryRegistry, type RepositoryRow } from './repositories.js';
@@ -43,7 +44,8 @@ export interface PlanInput {
   revision?: string | null;
   variants?: string[];
   files?: string[];
-  target?: 'models';
+  /** models (a draft tag) or classifiers (B-3806: a text-classification model as an imported classifier engine). */
+  target?: 'models' | 'classifiers';
   label: Label;
   licence?: string | null;
   attribution?: string | null;
@@ -68,6 +70,9 @@ export const importFrom = (r: Record<string, unknown>): ImportRow => ({
   checks: json<Check[]>(r.checks, []),
   log: json<LogEntry[]>(r.log, []),
   manifest: json<Record<string, unknown> | null>(r.manifest, null),
+  result: json<Record<string, unknown> | null>(r.result, null),
+  rows_total: Number(r.rows_total ?? 0),
+  sample_rows: n(r.sample_rows),
   progress: Number(r.progress ?? 0),
   size_bytes: Number(r.size_bytes ?? 0),
   stored_bytes: Number(r.stored_bytes ?? 0),
@@ -128,11 +133,41 @@ export class ImportService {
   readonly fetcher: ImportFetcher;
   readonly repositories: RepositoryRegistry;
   readonly catalog: CatalogStore;
+  /** 1.7.0 (B-3804 to B-3806): dataset imports into Training, Classifiers and Knowledge. */
+  readonly datasets: DatasetImports;
 
   constructor(private readonly s: () => Services, cfg: { IMPORT_ALLOWED_HOSTS: string; IMPORT_PROXY_URL?: string | undefined; IMPORT_TIMEOUT_MS: number }) {
     this.fetcher = new ImportFetcher({ allowedHosts: cfg.IMPORT_ALLOWED_HOSTS, proxyUrl: cfg.IMPORT_PROXY_URL ?? null, timeoutMs: cfg.IMPORT_TIMEOUT_MS });
     this.repositories = new RepositoryRegistry(s, this.fetcher);
     this.catalog = new CatalogStore(s);
+    this.datasets = new DatasetImports(s, this);
+  }
+
+  // ---------- what the dataset imports share with the model imports (B-3804) ----------
+
+  readonly rowFrom = importFrom;
+  insertRef(tenantId: string, table: 'import_jobs' | 'import_exceptions', prefix: string, row: Record<string, unknown>): Promise<string> {
+    return this.insertWithRef(tenantId, table, prefix, row);
+  }
+  patch(id: string, u: Partial<Record<keyof ImportRow, unknown>>): Promise<void> {
+    return this.update(id, u);
+  }
+  log(id: string, e: LogEntry): Promise<void> {
+    return this.appendLog(id, e);
+  }
+  notify(tenantId: string, userIds: string[], title: string, body: string, label: Label): Promise<void> {
+    return this.notifyUsers(tenantId, userIds, title, body, label);
+  }
+  /** A licence outside the allow-list: the exception the legal-review role decides, and the notice to them. */
+  async requestException(p: Principal, importId: string, ref: string, licence: string, reason: string | null, name: string, label: Label, traceId?: string | null): Promise<string> {
+    const s = this.s();
+    const t = Date.now();
+    const excRef = await this.insertWithRef(p.tenantId, 'import_exceptions', 'EXC-', { id: ulid(), tenant_id: p.tenantId, import_id: importId, licence, reason, state: 'pending', requested_by: p.userId, requested_at: t });
+    await this.appendLog(importId, { at: t, title: 'Licence exception requested', meta: `${excRef}: ${licence}`, tone: 'warn' });
+    await this.audit(p, p.tenantId, 'import.exception.requested', { import: importId, ref, exception: excRef }, { licence, reason }, label, traceId);
+    const reviewers = (await s.notifications.usersWithRoles(p.tenantId, rolesGranting('imports:review', p.tenantId).filter((x) => x !== 'system-admin'))).filter((u) => u !== p.userId);
+    await this.notifyUsers(p.tenantId, reviewers, 'Licence exception to decide', `${p.displayName} asks to import ${name} under ${licence}, which is outside the tenant's allow-list (${excRef}, ${ref}).`, label, 'import.exception');
+    return excRef;
   }
 
   private get db() {
@@ -143,6 +178,7 @@ export class ImportService {
     const s = this.s();
     s.jobs.register('imports.harvest', (p, ctx) => this.repositories.harvestJob(String(p.repositoryId), ctx), { timeoutMs: 2 * 3_600_000 });
     s.jobs.register('imports.model', (p, ctx) => this.runModel(String(p.importId), ctx), { timeoutMs: 24 * 3_600_000 });
+    s.jobs.register('imports.dataset', (p, ctx) => this.datasets.run(String(p.importId), ctx), { timeoutMs: 24 * 3_600_000 });
     s.jobs.register('imports.harvest-due', (p, ctx) => this.repositories.harvestDue(String(p.tenantId ?? ctx.job.tenant_id)));
     s.jobs.register('imports.bundle-match', (p, ctx) => this.bundleMatch(String(p.tenantId ?? ctx.job.tenant_id)));
   }
@@ -359,8 +395,9 @@ export class ImportService {
     else if (d.gated) checks.push({ name: 'Access', result: 'passed', detail: `Gate accepted${d.gate ? ` by ${d.gate.account ?? 'the recorded token'} on ${new Date(d.gate.acceptedAt).toISOString().slice(0, 10)}` : ' with the recorded token'}.` });
     else checks.push({ name: 'Access', result: 'passed', detail: 'Open repository.' });
     // ---- serving path and conversion
-    const conversion = { needed: !isOllama && mode === 'direct' && weights.length > 0, quantization: !isOllama && gguf.length ? 'as-is' : !isOllama ? (input.quantization ?? 'Q4_K_M') : null };
-    if (d.classification && NOT_SERVED.has(d.classification)) checks.push({ name: 'Serving path', result: 'refused', detail: `${d.classification} models are not served by the gateway. Classifier engines and media weights are imported with B-3806; only models Ollama serves register as draft tags now.` });
+    const conversion = { needed: input.target !== 'classifiers' && !isOllama && mode === 'direct' && weights.length > 0, quantization: !isOllama && gguf.length ? 'as-is' : !isOllama ? (input.quantization ?? 'Q4_K_M') : null };
+    if (input.target === 'classifiers') checks.push({ name: 'Serving path', result: d.classification && /classification/.test(d.classification) ? 'passed' : 'warning', detail: `Registers in Classifiers as an imported engine served by the classifier worker (${d.classification ?? 'classification unknown'}); nothing is placed on a pool.` });
+    else if (d.classification && NOT_SERVED.has(d.classification)) checks.push({ name: 'Serving path', result: 'refused', detail: `${d.classification} models are not served by the gateway. Classifier engines and media weights are imported with B-3806; only models Ollama serves register as draft tags now.` });
     else checks.push({ name: 'Serving path', result: 'passed', detail: 'Registers in the model catalogue as a draft tag; evaluation, approval and placement follow as for any model.' });
     if (conversion.needed && !s.trainer.available) checks.push({ name: 'Conversion', result: 'refused', detail: `${s.trainer.reason ?? 'No training worker is configured.'} GGUF conversion and packaging run on the training pool.` });
     else if (conversion.needed) checks.push({ name: 'Conversion', result: 'info', detail: conversion.quantization === 'as-is' ? 'The published GGUF is packaged on the training pool and pushed where the pools pull from.' : `Converted to GGUF ${conversion.quantization} on the training pool (llama.cpp convert and quantize).` });
@@ -368,7 +405,7 @@ export class ImportService {
     const quant = conversion.quantization === 'as-is' ? quantizationOf(gguf[0]?.name ?? '') : conversion.quantization;
     const tag = (input.tag ?? this.defaultTag(r, d, variant, quant)).trim();
     if (!TAG.test(tag)) checks.push({ name: 'Destination', result: 'refused', detail: `${tag.slice(0, 80)} is not an Ollama tag (letters, digits, . _ / : -).` });
-    else if (await s.gateway.repo.modelByName(tag)) checks.push({ name: 'Destination', result: 'refused', detail: `${tag} is already in the model catalogue. Choose another tag.` });
+    else if (input.target !== 'classifiers' && (await s.gateway.repo.modelByName(tag))) checks.push({ name: 'Destination', result: 'refused', detail: `${tag} is already in the model catalogue. Choose another tag.` });
     else if (!clears(p.clearance, input.label)) checks.push({ name: 'Destination', result: 'refused', detail: `Your clearance does not reach ${input.label}.` });
     else if (input.poolId) {
       const pool = await s.gateway.repo.pool(input.poolId);
@@ -445,6 +482,7 @@ export class ImportService {
     const s = this.s();
     const target = input.target ?? 'models';
     if (target === 'models' && !effectivePermissions(p).has('models:manage')) throw forbidden('Importing a model into the catalogue needs models:manage as well as imports:run.', { step: 'role', action: 'models:manage' });
+    if (target === 'classifiers' && !effectivePermissions(p).has('classifiers:manage')) throw forbidden('Importing a classifier engine needs classifiers:manage as well as imports:run.', { step: 'role', action: 'classifiers:manage' });
     if (!clears(p.clearance, input.label)) throw forbidden('You cannot import for data above your clearance.', { step: 'clearance' });
     const plan = await this.plan(p, input);
     const r = await this.repositories.get(p.tenantId, input.repositoryId);
@@ -559,6 +597,15 @@ export class ImportService {
       storedBytes: r.stored_bytes,
       jobId: r.job_id,
       model: model ? { id: model.id, name: model.name, state: model.state, expectedDigest: model.expected_digest } : null,
+      // B-3804: what a dataset import made, and where it went.
+      result: r.result,
+      rowsTotal: r.rows_total,
+      sampleRows: r.sample_rows,
+      datasetId: r.dataset_id,
+      kbId: r.kb_id,
+      sourceId: r.source_id,
+      classifierId: r.classifier_id,
+      evalSet: r.eval_set,
       error: r.error,
       requestedBy: r.requested_by,
       requestedByName: (user?.display_name as string | undefined) ?? null,
@@ -606,7 +653,7 @@ export class ImportService {
     const state: ImportState = r.licence_status === 'exception pending' ? 'waiting on licence' : r.mode === 'bundle' && !r.options.manifestDigest && !r.files.length ? 'queued for bundle' : 'queued';
     await this.update(r.id, { state, error: null, note: 'Retried; downloads resume from the parts already stored', finished_at: null });
     await this.appendLog(r.id, { at: Date.now(), title: 'Retried', meta: p.displayName, tone: '' });
-    if (state === 'queued') await this.enqueue(p.tenantId, r.id, p.userId);
+    if (state === 'queued') await (r.kind === 'dataset' ? this.datasets.enqueue(p.tenantId, r.id, p.userId) : this.enqueue(p.tenantId, r.id, p.userId));
     await this.audit(p, p.tenantId, 'import.retried', { import: r.id, ref: r.ref }, { from: r.state }, r.label, traceId);
     return this.view(p.tenantId, (await this.row(p.tenantId, r.id))!);
   }
@@ -643,7 +690,7 @@ export class ImportService {
       const state: ImportState = r.mode === 'bundle' ? 'queued for bundle' : 'queued';
       await this.update(r.id, { licence_status: 'exception granted', state, note: null });
       await this.appendLog(r.id, { at: t, title: 'Licence exception granted', meta: `${e.ref} by ${p.displayName}${note ? `: ${note}` : ''}`, tone: 'ok' });
-      if (state === 'queued' && r.state === 'waiting on licence') await this.enqueue(p.tenantId, r.id, r.requested_by);
+      if (state === 'queued' && r.state === 'waiting on licence') await (r.kind === 'dataset' ? this.datasets.enqueue(p.tenantId, r.id, r.requested_by) : this.enqueue(p.tenantId, r.id, r.requested_by));
     } else {
       await this.update(r.id, { licence_status: 'exception refused', state: 'refused', note: `Licence exception ${e.ref} refused`, finished_at: t, error: `The licence exception for ${e.licence} was refused${note ? `: ${note}` : '.'}` });
       await this.appendLog(r.id, { at: t, title: 'Licence exception refused', meta: `${e.ref} by ${p.displayName}${note ? `: ${note}` : ''}`, tone: 'danger' });
@@ -764,6 +811,11 @@ export class ImportService {
       await this.appendLog(r.id, { at: Date.now(), title: 'Downloaded and verified', meta: `${r.files.length} files, ${stored.toLocaleString('en-US')} bytes; digests matched the pins; no pickle`, tone: 'ok' });
       await ctx.progress(78, 'Registering');
       r = (await this.row(r.tenant_id, r.id))!;
+      if (r.target === 'classifiers') {
+        const c = await this.registerClassifier(r, repo, detail);
+        await ctx.progress(100, `Registered classifier ${c.slug}`);
+        return { classifier: c.id };
+      }
       const model = r.files.some((f) => f.format === 'manifest') ? await this.registerManifest(r, repo, detail) : await this.registerConverted(r, repo, detail, ctx);
       await this.finish(r, repo, detail, model);
       await ctx.progress(100, `Registered ${model.name}`);
@@ -939,6 +991,48 @@ export class ImportService {
     await g.updateModel(model.id, { format: m.format, quantization: m.quantization, family: m.family, parameter_size: m.parameterSize?.slice(0, 40) ?? null, size_bytes: m.sizeBytes, context_length: detail.contextLength, capabilities: r.options.capabilities ?? [] });
     if (m.extra) await this.update(r.id, { manifest: m.extra });
     return (await g.model(model.id))!;
+  }
+
+  /**
+   * B-3806: a text-classification model becomes a classifier with the `imported` engine: its verified files stay in
+   * the blob store (content-addressed, where the classifier worker reads them) and the classifier's config names them.
+   */
+  private async registerClassifier(r: ImportRow, repo: RepositoryRow, detail: ModelDetail): Promise<{ id: string; slug: string }> {
+    const s = this.s();
+    const fresh = (await this.row(r.tenant_id, r.id))!;
+    const files = fresh.files.filter((f) => f.blob).map((f) => ({ name: f.name, key: f.blob!, sha256: f.sha256, bytes: f.size ?? f.done }));
+    const config = files.find((f) => /(^|\/)config\.json$/.test(f.name));
+    let labels: string[] = [];
+    if (config) {
+      try {
+        const cfg = JSON.parse((await this.stagedBytes(config.key, 4 * 1024 * 1024)).toString('utf8')) as { id2label?: Record<string, string> };
+        labels = Object.values(cfg.id2label ?? {}).map((l) => String(l).slice(0, 100));
+      } catch {
+        /* the model's labels are named on the Classifiers screen */
+      }
+    }
+    const user = await this.db('users').where({ id: r.requested_by }).first('username', 'display_name');
+    const slugBase = (r.options.tag ?? r.item_name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 55) || 'imported';
+    const c = await s.guard.classifiers.createImported(r.tenant_id, { name: r.options.tag ?? r.item_name, slug: `${slugBase}-${r.ref.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`.slice(0, 63), labels: labels.length ? labels : ['positive', 'negative'], model: { importId: r.id, ref: r.ref, name: r.item_id, revision: detail.revision, files }, description: `Imported from ${repo.name}: ${r.item_id} (${r.ref})` }, { userId: r.requested_by, name: String(user?.display_name ?? '') });
+    const manifest: Record<string, unknown> = {
+      format: 'exprsn-import-manifest/1',
+      import: r.ref,
+      source: { repository: repo.name, type: repo.type, baseUrl: repo.base_url, item: r.item_id, revision: r.revision ?? detail.revision },
+      files: fresh.files.map((f) => ({ name: f.name, pin: f.pin, sha256: f.sha256, bytes: f.size ?? f.done, format: f.format })),
+      licence: { id: r.licence, source: detail.licenceSource, status: r.licence_status },
+      label: r.label,
+      attribution: r.attribution,
+      requester: { id: r.requested_by, username: user?.username ?? null },
+      classifier: { id: c.id, slug: c.slug, labels: c.config.labels.map((l) => l.label) },
+      registeredAt: new Date().toISOString()
+    };
+    const key = `${s.cfg.OPENBAO_KEY_PREFIX}import-manifests`;
+    manifest.signature = { key, value: await s.kms.hmac(key, canonicalJson(manifest)) };
+    await this.update(r.id, { state: 'complete', stage: null, progress: 100, classifier_id: c.id, manifest, note: `Classifier ${c.slug} (imported engine)`, finished_at: Date.now() } as never);
+    await this.appendLog(r.id, { at: Date.now(), title: 'Registered', meta: `Classifiers: ${c.slug}, engine imported, ${c.config.labels.length} labels from the model's config${s.cfg.CLASSIFIER_WORKER_URL ? '' : '; no classifier worker is configured (CLASSIFIER_WORKER_URL), so it cannot score yet'}`, tone: s.cfg.CLASSIFIER_WORKER_URL ? 'ok' : 'warn' });
+    await this.audit(null, r.tenant_id, 'import.completed', { import: r.id, ref: r.ref, classifier: c.id }, { slug: c.slug, revision: r.revision, licence: r.licence, signature: (manifest.signature as { value: string }).value.slice(0, 16) }, r.label);
+    await this.notifyUsers(r.tenant_id, [r.requested_by], `Import ${r.ref} finished`, `${c.slug} is registered as a classifier with the imported engine; name its eval set and evaluate it under Classifiers.`, r.label);
+    return { id: c.id, slug: c.slug };
   }
 
   private async finish(r: ImportRow, repo: RepositoryRow, detail: ModelDetail, model: ModelRow): Promise<void> {

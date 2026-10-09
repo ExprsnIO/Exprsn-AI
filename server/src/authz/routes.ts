@@ -1213,6 +1213,10 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/imports/{id}/retry', 'imports:run'],
   ['POST /api/imports/exceptions/{id}/decision', 'imports:review'],
   ['POST /api/imports/plan', 'imports:run'],
+  // 1.7.0, Sprint 40b (B-3804 to B-3806): dataset imports (the destination's own permission is checked in the handler)
+  ['GET /api/imports/repositories/{id}/dataset', 'imports:run'],
+  ['POST /api/imports/dataset-plan', 'imports:run'],
+  ['POST /api/imports/datasets', 'imports:run'],
   ['POST /api/imports/repositories', 'imports:repositories'],
   ['POST /api/imports/repositories/{id}/check', 'imports:repositories'],
   ['POST /api/imports/repositories/{id}/confirm', 'imports:repositories'],

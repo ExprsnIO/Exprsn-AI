@@ -1,6 +1,6 @@
 import { formatOf, normaliseLicence, parameterBucket, quantizationOf } from '../formats.js';
 import { SourceError, type CatalogItem, type ModelDetail, type RemoteFile, type Variant } from '../types.js';
-import { join, str, uniq, type RepositoryAdapter } from './types.js';
+import { join, str, uniq, type DatasetDetail, type RepositoryAdapter } from './types.js';
 
 /*
  * A Hugging Face compatible hub (huggingface.co, or a mirror that speaks the same API): `GET /api/models` and
@@ -105,6 +105,25 @@ const nextLink = (link: string | null): string | null => {
 };
 
 export const hfAdapter: RepositoryAdapter = {
+  async datasetDetail(ctx, itemId): Promise<DatasetDetail> {
+    const { body: d } = await ctx.fetcher.json<HfListItem & { sha?: string; siblings?: { rfilename: string; size?: number }[]; cardData?: { configs?: { config_name?: string; data_files?: unknown }[]; license?: string } }>(join(ctx.repo.baseUrl, `/api/datasets/${itemId}`), ctx.access, { signal: ctx.signal });
+    if (!d.id && !(d as { modelId?: string }).modelId) throw new SourceError(`The hub has no dataset ${itemId}.`);
+    const it = datasetItem(d);
+    const rev = d.sha ?? 'main';
+    const configs = (d.cardData?.configs ?? []).map((c) => c.config_name).filter((x): x is string => typeof x === 'string');
+    const resources = (d.siblings ?? [])
+      .map((f) => f.rfilename)
+      .filter((n) => /\.(csv|tsv|json|jsonl|ndjson|parquet|txt)(\.gz)?$/i.test(n) && !/^\.|readme/i.test(n))
+      .map((n) => ({ n, config: configs.find((c) => n.toLowerCase().includes(c.toLowerCase())) ?? (n.includes('/') ? n.split('/')[0]! : null) }))
+      .map(({ n, config }) => {
+        const size = d.siblings?.find((f) => f.rfilename === n)?.size ?? null;
+        return { id: n, name: n, url: join(ctx.repo.baseUrl, `/datasets/${itemId}/resolve/${rev}/${n.split('/').map(encodeURIComponent).join('/')}`), bytes: size, config };
+      });
+    const { resource: mk } = await import('./datasets.js');
+    const rs = resources.map((r: { id: string; name: string; url: string; bytes: number | null; config: string | null }) => mk(r));
+    const confs = configs.length ? configs.map((c) => ({ id: c, name: c, splits: [...new Set(rs.filter((r) => r.config === c).map((r) => r.split).filter((x): x is string => !!x))] })) : [{ id: 'default', name: 'default', splits: [...new Set(rs.map((r) => r.split).filter((x): x is string => !!x))] }];
+    return { itemId: it.itemId, name: it.name, revision: rev, licence: it.licence, licenceSource: 'the dataset card', publisher: it.publisher, description: it.description, frequency: null, configurations: confs, resources: rs, landingPage: join(ctx.repo.baseUrl, `/datasets/${itemId}`), data: it.data };
+  },
   async probe(ctx) {
     const { body } = await ctx.fetcher.json<unknown[]>(join(ctx.repo.baseUrl, '/api/models?limit=1'), ctx.access, { signal: ctx.signal });
     if (!Array.isArray(body)) throw new SourceError('The hub did not answer a model list.');

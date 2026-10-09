@@ -99,6 +99,8 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `APPS_GIT_TIMEOUT_MS`, `APPS_GIT_ALLOW_FILE` | `300000`, `false` | 1.6.0 (B-8204): how long a git export or import waits for the repository, and whether `file://` repositories on this host are accepted beside `https://` (tests and air-gapped mirrors) |
 
 | `APP_EMBED_MAX_TTL_SECONDS`, `APP_EMBED_SESSION_PER_MINUTE` | `3600`, `30` | 1.6.0 (B-8702): the longest an embedded session lives whatever an app's own setting says (60 s to a day), and how many host tokens an address may exchange for sessions a minute |
+| `IMPORT_DATASET_MAX_ROWS` | `500000` | 1.7.0 (B-3804): the most rows a dataset import keeps; a larger dataset is sampled (the wizard asks for the sample) |
+| `CLASSIFIER_WORKER_URL`, `CLASSIFIER_WORKER_TIMEOUT_MS` | none, `30000` | 1.7.0 (B-3806): the classifier worker that scores imported classifier engines (`POST <url>/classify`, on the internal network, sharing the blob store), and how long each call may take; without a worker such a classifier cannot score |
 | `IDENTITY_SCIM_MAX_RESULTS`, `IDENTITY_SCIM_RATE_PER_MINUTE`, `IDENTITY_SCIM_TOKEN_MAX_DAYS` | `200`, `1200`, `365` | 1.6.0 (B-7201): SCIM 2.0 at `/scim/v2`: resources per list page, requests per minute per address, and the longest a SCIM token lives (`0`: until revoked) |
 | `SHARE_ANONYMOUS_PER_MINUTE` | `30` | Sprint 16: anonymous share links opened per client address per minute (anonymous links are off until a tenant admin allows them; set `TRUST_PROXY` correctly so the address is the client's) |
 | `DATA_KEY_PREVIOUS` (`_FILE`), `KMS_PREVIOUS_PROVIDER` | — | Sprint 15: the previous key-encryption key while `kms:rewrap` runs (below). Reads fall back to it; nothing new is wrapped with it |

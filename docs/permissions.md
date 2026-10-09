@@ -107,7 +107,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `contacts:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `contacts:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `pds:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
-| `imports:run` | yes | 15 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
+| `imports:run` | yes | 18 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
 | `imports:repositories` | yes | 9 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `imports:review` | yes | 4 | x |  |  |  |  |  |  |  |  |  |  |  | x |  |
 
@@ -1705,6 +1705,9 @@ No route requires it directly; handlers and services check it.
 - `POST /api/imports/{id}/cancel`
 - `POST /api/imports/{id}/retry`
 - `POST /api/imports/plan`
+- `GET /api/imports/repositories/{id}/dataset`
+- `POST /api/imports/dataset-plan`
+- `POST /api/imports/datasets`
 - `POST /api/imports/repositories/{id}/gate`
 - `GET /api/imports/exceptions` (or another permission)
 - `GET /api/imports/quota` (or another permission)

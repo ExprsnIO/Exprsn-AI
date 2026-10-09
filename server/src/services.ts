@@ -387,6 +387,8 @@ export interface ServiceOverrides {
   git?: GitFetcher;
   /** 1.6.0 (B-8204): git options for app packages (tests allow file:// repositories). */
   appGit?: { allowFile: boolean; timeoutMs: number };
+  /** 1.7.0 (B-3806): the fetch the classifier worker is called with (tests use a fake). */
+  classifierWorkerFetch?: typeof fetch;
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
@@ -449,7 +451,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const gateway = new Gateway(new GatewayRepo(db), bus, log, { pollMs: cfg.OLLAMA_POLL_MS, timeoutMs: cfg.OLLAMA_TIMEOUT_MS, maxInflight: cfg.OLLAMA_MAX_INFLIGHT, maxLoadsPer10Min: cfg.OLLAMA_MAX_LOADS_PER_10_MIN, queueTimeoutMs: cfg.OLLAMA_QUEUE_TIMEOUT_MS, policy: servicePolicy(cfg), loadTimeoutMs: cfg.OLLAMA_LOAD_TIMEOUT_MS }, jobs);
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
-  const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
+  // 1.7.0 (B-3806): imported classifier engines are scored by the classifier worker (tests pass a fetch to a fake).
+  const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log, classifierWorker: { url: cfg.CLASSIFIER_WORKER_URL ?? null, timeoutMs: cfg.CLASSIFIER_WORKER_TIMEOUT_MS, ...(overrides.classifierWorkerFetch ? { fetch: overrides.classifierWorkerFetch } : {}) } });
   // 1.6.0, Sprint 38c: DLP and legal holds read their collaborators lazily; chat, uploads, memory and files take them now.
   const dlp = new DlpService(() => s);
   const legalHolds = new LegalHolds(() => s);
@@ -802,6 +805,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 26d (B-2401 to B-2405): quarantine scans, previews and the trash purge; folders as knowledge sources.
   s.files.registerJobs();
   s.knowledge.folders = s.files.folderSource();
+  // 1.7.0 (B-3805): a dataset knowledge source reads its rows through the import service on every refresh.
+  s.knowledge.datasetItems = (src, ctx) => s.imports.datasets.knowledgeItems(src, ctx);
   // Files as moderation objects (B-1902 with B-2401): a takedown trashes the file and revokes its shares; an upheld
   // appeal takes it out of the trash again (if not purged meanwhile).
   if (!s.moderation.registry.get('file')) {

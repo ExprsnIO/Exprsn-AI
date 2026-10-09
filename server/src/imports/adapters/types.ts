@@ -1,5 +1,6 @@
 import type { Services } from '../../services.js';
 import type { ImportFetcher, RepoAccess } from '../fetcher.js';
+import type { DatasetResource } from '../rows.js';
 import type { CatalogItem, ImportKind, ModelDetail, PinnedFile, RepoType } from '../types.js';
 
 export interface AdapterRepo {
@@ -41,6 +42,31 @@ export interface RepositoryAdapter {
   inspect?(ctx: AdapterContext, itemId: string, revision?: string | null): Promise<ModelDetail>;
   acceptGate?(ctx: AdapterContext, itemId: string): Promise<{ account: string | null }>;
   open?(ctx: AdapterContext, itemId: string, revision: string, file: PinnedFile, from: number): Promise<OpenedFile>;
+  /**
+   * B-3804: what a dataset can be read from: its configurations, splits and resources (files or paged APIs), the
+   * licence as the source states it now, and the update frequency a knowledge set's refresh follows. `cached` is the
+   * catalogue snapshot's data for the item, when there is one.
+   */
+  datasetDetail?(ctx: AdapterContext, itemId: string, cached: Record<string, unknown> | null): Promise<DatasetDetail>;
+}
+
+/** B-3804: one dataset as the select step shows it. */
+export interface DatasetDetail {
+  itemId: string;
+  name: string;
+  /** The source's revision or modification stamp, pinned on the manifest. */
+  revision: string | null;
+  licence: string | null;
+  licenceSource: string;
+  publisher: string | null;
+  description: string | null;
+  /** daily | weekly | monthly | quarterly | yearly | null, as the publisher states it. */
+  frequency: string | null;
+  configurations: { id: string; name: string; splits: string[] }[];
+  resources: DatasetResource[];
+  /** A link to the dataset's page on the source. */
+  landingPage: string | null;
+  data: Record<string, unknown>;
 }
 
 /** Joins a base URL and a path without doubling or dropping slashes. */

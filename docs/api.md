@@ -5507,3 +5507,64 @@ Audit actions: `chat.workflow.started`, `chat.workflow.finished`, `chat.workflow
 
 Socket events to the owner: `chat.invocation {conversationId, invocationId, state, kind, name, runId?, messageId?}` on
 every card change; `chat.status` for a queued placeholder turn and `chat.done` when a turn completes.
+
+## Sprint 40b (1.7.0): dataset import, knowledge sets, classifier eval sets and imported engines (B-3804 to B-3807)
+
+Migration `042b_dataset_import` (`import_jobs.result`, `rows_total`, `sample_rows`, `dataset_id`, `kb_id`, `source_id`,
+`classifier_id`, `eval_set`; `training_datasets.import_id`). Job `imports.dataset`. New settings: `IMPORT_DATASET_MAX_ROWS`
+(500 000), `CLASSIFIER_WORKER_URL` (none) and `CLASSIFIER_WORKER_TIMEOUT_MS` (30 s). No new permissions: every route is
+`imports:run`, and the destination's own permission (`training:submit`, `classifiers:manage`, `knowledge:manage`;
+`models:manage` or `classifiers:manage` for a model import) is checked by the plan and refused as a check.
+
+### Dataset import (B-3804; `imports:run`)
+
+A dataset from a confirmed repository is read page by page from its files (CSV, TSV, JSON, JSON Lines, streamed) or its
+paged API (the CKAN datastore, Socrata, e-Stat and the OGD platform by offset and limit; SDMX as SDMX-CSV), never whole in
+memory, into a staging object, then registered where the wizard's destination says. A dataset above the tenant's import
+quota (`IMPORT_DATASET_QUOTA_GB`) must be sampled (`sample` rows); at most `IMPORT_DATASET_MAX_ROWS` rows are kept.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/imports/repositories/:id/dataset?id=` | The select step: `{itemId, name, revision, licence, licenceSource, publisher, description, frequency, configurations: [{id, name, splits}], resources: [{id, name, format, url, api, bytes, rows, config, split}], landingPage, source: live}`. `api` is `file`, `ckan-datastore`, `socrata`, `sdmx`, `estat` or `ogd`; CKAN (`package_show`), OpenML, InvenioRDM and Hugging Face dataset repositories are read live, DCAT-AP from the snapshot's distributions, Kaggle lists its zip (refused at the format check) |
+| `POST /api/imports/dataset-plan` `{repositoryId, item, configuration?, resources?, splits?, columns?, target, label, licence?, attribution?, notes?, exception?, workspaceId?, sample?, final?, training?, classifiers?, knowledge?}` | The review step, nothing written: `{repository, item, name, revision, detail, selected, schema: {columns: [{name, type, pii, sample, filled}], previewRows, from, piiColumns}, sizeBytes, rowsEstimate, quota: {maxBytes, usedBytes, remainingBytes, overQuota, sample, maxRows}, licence: {id, source, allowed, recorded, needsException}, label, target, frequency, schedule, checks, blocked, waiting}`. The checks: Selection, Format, Quota, Licence (a recorded licence counts only when the source states none), Label, Destination (`info` until `final`, then `refused` when a name or column is missing), PII (the detectors over the first 200 rows) and Columns. `target` is `training`, `classifiers`, `knowledge` or `store` |
+| `POST /api/imports/datasets` (the plan's body) | `201` the import (`kind: dataset`) as `GET /api/imports/:id` shows it; `422 Import refused` with the refused row under `import` and `reason`; `409 Licence not recorded` or `409 Licence exception required`; with `exception: {reason}` the import is `waiting on licence` until `POST /api/imports/exceptions/:id/decision` grants it |
+| `GET /api/imports/:id` | Gains `result` (`{rows, sampled, hash, bytes, resources, columns, piiColumns, warnings, dataset? | evalSet? | knowledge? | stored?}`), `rowsTotal`, `sampleRows`, `datasetId`, `kbId`, `sourceId`, `classifierId`, `evalSet`; the manifest has `kind: dataset`, the resources read, `rows`, `hash`, `sampled` and `destination` |
+
+Destinations: `training: {name, textColumn?, labelColumn?, splits?, conversationData?}` registers a version through
+`TrainingService.registerImported` (`source_kind: import`, `import_id`); the rows are shaped for the trainers (`text`,
+`label`, the other columns beside them) and the PII scrub, sealed rows, hash, splits and report are exactly an inline
+version's. `classifiers: {evalSet, textColumn, labelColumn, classifier?: {mode: none | new | existing, name?, ref?,
+engine?, profile?}, evaluate?}` adds the rows as cases of the eval set, counts them per label (labels under 200 samples
+are `warnings`), optionally makes a classifier on the set (at most 20 labels) or points an existing tenant classifier
+at it, and queues `classifier.train` (a linear engine without a head) or `classifier.evaluate`. `knowledge: {kbId? |
+name + embedModel, titleColumn?, textColumns?, metadataColumns?, groupBy?, schedule?: 15m | hourly | daily | weekly |
+monthly | manual | publisher, dropPii?, labelFloor?}` makes a knowledge set (below). `store` keeps the rows sealed under
+`imports/datasets/<tenant>/<import>.jsonl`.
+
+Audit actions: `import.requested`, `import.refused`, `import.completed`, `import.failed` (with `kind: dataset` and the
+`target`), `import.exception.requested`; `training.dataset.registered`, `knowledge.created`, `knowledge.source.added`
+for what the job made.
+
+### Knowledge sets (B-3805; `knowledge:manage`)
+
+`knowledge_sources.kind = dataset`: `POST /api/knowledge/bases/:id/sources` takes `{kind: dataset, location, schedule?,
+labelFloor?, dataset: {importId, repositoryId, item, configuration, resources, titleColumn, textColumns,
+metadataColumns, groupBy, dropPii, piiColumns, maxRows, columns, frequency}}` (the import makes it; the mapping is what
+the wizard chose). `schedule` gains `weekly` and `monthly`; `publisher` on the import means the schedule the source's
+update frequency maps to (daily, weekly, monthly or quarterly and yearly as monthly; none stated: manual). A sync
+(`POST /api/knowledge/sources/:id/sync`, or the schedule) reads the source again through the import service: one
+document per row, or per group when `groupBy` is set, named `<title> (row n)` or `<column>: <value> (n rows)`, keyed
+by the row's position in its resource, with each row's text, its metadata columns and a `Source:` line naming the
+repository, the dataset, the resource and the row; changed rows re-index, missing ones are removed, the rest keep
+serving, so a refresh swaps row by row with nothing offline. Search hits name the source as `dataset: <repository>
+<item>`.
+
+### Eval sets and imported engines (B-3806; `classifiers:manage`)
+
+`POST /api/imports` takes `target: classifiers`: a text-classification model's files are downloaded and verified like
+any model import (no GGUF conversion, no pool), then `classifiers` gains a tenant classifier with the `imported` engine,
+its labels from the model's `config.json` (`id2label`) and its files named by their content-addressed blob keys
+(`config.model`). The classifier worker scores it: `POST <CLASSIFIER_WORKER_URL>/classify` `{model: {ref, name,
+revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
+classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
+eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.

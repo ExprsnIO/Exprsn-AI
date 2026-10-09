@@ -17,4 +17,4 @@ export const ADAPTERS: Record<RepoType, RepositoryAdapter> = {
   bundle: bundleAdapter
 };
 
-export type { AdapterContext, RepositoryAdapter } from './types.js';
+export type { AdapterContext, DatasetDetail, RepositoryAdapter } from './types.js';
