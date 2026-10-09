@@ -177,7 +177,7 @@
 
       if (ctx.params.app) { const p = st.apps.find((a) => a.id === ctx.params.app || a.name === ctx.params.app); if (p) st.app = p.id; delete ctx.params.app; }
       if (ctx.params.tab) { st.tab = ctx.params.tab; delete ctx.params.tab; }
-      if (!design && st.tab === 'triggers') st.tab = 'entities';
+      if (!design && (st.tab === 'triggers' || st.tab === 'api' || st.tab === 'embed')) st.tab = 'entities';
       if (!st.app || !st.apps.some((a) => a.id === st.app)) st.app = st.apps[0] ? st.apps[0].id : null;
       const appSummary = st.apps.find((a) => a.id === st.app) || null;
 
@@ -211,12 +211,14 @@
       } else {
         if (!st.entity || !app.entities.some((e) => e.id === st.entity)) st.entity = app.entities[0] ? app.entities[0].id : null;
         const ent = app.entities.find((e) => e.id === st.entity) || null;
-        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'policies', label: 'Policies', count: st.polKey === app.id && st.pol ? (st.pol.policies || []).length : null }, { id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }] : []), st.tab);
+        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'policies', label: 'Policies', count: st.polKey === app.id && st.pol ? (st.pol.policies || []).length : null }, { id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }, { id: 'api', label: 'API', count: st.schemaKey === app.id && st.schema ? st.schema.version : null }, { id: 'embed', label: 'Embed', count: st.embedKey === app.id && st.embed ? (st.embed.keys.filter((k) => k.state === 'active').length + st.embed.pages.length) : null }] : []), st.tab);
         let body = '';
         if (st.tab === 'entities') body = renderEntities(ctx, app, ent, design);
         else if (st.tab === 'records') { const r = renderRecords(ctx, app, ent, design, canWrite); body = r.body; inspector = r.inspector; }
         else if (st.tab === 'forms') body = renderForms(ctx, app, design, canWrite);
         else if (st.tab === 'policies' && design) body = renderPolicies(ctx, app);
+        else if (st.tab === 'api' && design) body = renderApi(ctx, app);
+        else if (st.tab === 'embed' && design) body = renderEmbed(ctx, app);
         else body = renderTriggers(ctx, app);
         const scope = app.scope === 'tenant' ? 'Tenant-wide' : 'Workspace ' + wsName(app.workspaceId);
         page = UI.pagehead(app.title || app.name, (app.description ? esc(app.description) + ' ' : '') + '<span class="muted">' + esc(scope) + ', by ' + esc(who(app.createdBy)) + ', updated ' + esc(when(app.updatedAt)) + '</span>', UI.label(app.label) + (design ? UI.btn('Edit app', { size: 'sm', icon: 'edit', attrs: 'data-editapp' }) + UI.btn('Delete app', { size: 'sm', kind: 'ghost', attrs: 'data-delapp' }) : ''))
@@ -1111,6 +1113,119 @@
         });
       }
     });
+  }
+
+  // ---------- API tab (1.6.0, B-8601 to B-8603) ----------
+  const KIND_TONE = { 'entity.created': 'ok', 'entity.deleted': 'danger', 'field.removed': 'warn', 'form.deleted': 'warn' };
+  const SOURCE_TONE = { 'schema-api': 'accent', package: 'outline' };
+  function renderApi(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.schemaKey !== key && st.schemaBusy !== key) {
+      st.schemaBusy = key;
+      Promise.all([App.get(A(app.id) + '/schema'), App.get(A(app.id) + '/schema/versions?limit=50')])
+        .then(([schema, versions]) => { st.schema = schema; st.schemaVersions = versions.versions; st.schemaKey = key; st.schemaError = null; })
+        .catch((err) => { st.schemaError = err; st.schemaKey = key; })
+        .finally(() => { st.schemaBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.schemaKey !== key) return UI.notice('Loading the schema…', 'info');
+    if (st.schemaError) return UI.problem('The schema could not be loaded', detailOf(st.schemaError), traceOf(st.schemaError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-schemareload' }) + '</div>';
+    const sc = st.schema;
+    const base = A(app.name);
+    const first = app.entities[0] || null;
+    const firstIndexed = first ? fieldsOf(first).find((f) => f.indexed || f.unique) : null;
+    const curl = 'curl -H "Authorization: Bearer exai_k1_…" \\\n  "' + location.origin + base + '/' + (first ? first.name : 'entity') + '?where=' + (firstIndexed ? firstIndexed.name : 'field') + ':eq:value&sort=updatedAt:desc&limit=50&include=related"';
+    const endpoints = UI.panel('Entity API', UI.notice('Every entity of the app is a REST resource under <span class="mono">' + esc(base) + '/&lt;entity&gt;</span>: list with <span class="mono">filter</span> (JSON), <span class="mono">where=field:op:value</span>, <span class="mono">sort</span>, <span class="mono">limit</span>, <span class="mono">offset</span> or <span class="mono">cursor</span>, <span class="mono">q</span> and <span class="mono">include=related</span>; read, create, update (with <span class="mono">version</span>), transition and delete. The caller\'s policies, masks, labels and workspaces apply as on this screen. A key may be limited to this app or one entity (Settings, API keys).', 'info')
+      + UI.table(['Method', 'Path', 'Needs', 'What it does'], app.entities.flatMap((e) => [
+        [UI.pill('GET', 'outline'), '<span class="mono">' + esc(base + '/' + e.name) + '</span>', '<span class="mono">records:read</span>', 'A page of ' + esc(e.title || e.name) + ' records: total, nextCursor, records'],
+        [UI.pill('POST', 'accent'), '<span class="mono">' + esc(base + '/' + e.name) + '</span>', '<span class="mono">records:write</span>', 'Create one: {values, label?}'],
+        [UI.pill('GET', 'outline'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:read</span>', 'One record; related records with include=related'],
+        [UI.pill('PATCH', 'accent'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:write</span>', 'Update: {values, version?}; 409 on a stale version'],
+        [UI.pill('DELETE', 'danger'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}') + '</span>', '<span class="mono">records:write</span>', 'Delete; 204']
+      ].concat(smOf(e) ? [[UI.pill('POST', 'accent'), '<span class="mono">' + esc(base + '/' + e.name + '/{id}/transition') + '</span>', '<span class="mono">records:write</span>', 'Move to a state: {to, version?, note?}; ' + esc(smOf(e).states.map((x) => x.name).join(', '))]] : [])), { clickable: false, minWidth: '720px', cls: 'bare', emptyTitle: 'No entities yet', emptyText: 'Design an entity first; each one becomes a resource.' })
+      + (first ? '<div class="eyebrow" style="margin-top:10px">Try it</div>' + UI.code(curl, 'sh') : ''));
+    const docs = UI.panel('OpenAPI and client', UI.kv([
+      ['Schema version', '<b>' + esc(String(sc.version)) + '</b>' + (sc.changedAt ? ' <span class="muted">changed ' + esc(when(sc.changedAt)) + '</span>' : ' <span class="muted">no change recorded yet</span>')],
+      ['Hash', '<span class="mono" style="overflow-wrap:anywhere">' + esc(sc.hash) + '</span> <span class="muted">(the ETag of the document and the client)</span>'],
+      ['OpenAPI 3.1', '<a href="' + esc(base + '/openapi.json') + '" class="mono" download="' + esc(app.name) + '-openapi.json">' + esc(base + '/openapi.json') + '</a> <span class="muted">typed from the entity definitions, current on every read</span>'],
+      ['Client', '<a href="' + esc(base + '/client.ts') + '" class="mono" download="' + esc(app.name) + '-client.ts">' + esc(base + '/client.ts') + '</a> <span class="muted">or</span> <a href="' + esc(base + '/client.js') + '" class="mono" download="' + esc(app.name) + '-client.js">' + esc(base + '/client.js') + '</a> <span class="muted">createClient({baseUrl, token}).' + esc(first ? first.name : 'entity') + '.list() / get / create / update / delete / transition</span>']
+    ], 1) + '<div class="hstack gap6 wrap" style="margin-top:8px">' + UI.btn('Download openapi.json', { size: 'sm', icon: 'download', attrs: 'data-dl="' + esc(base + '/openapi.json') + '" data-dlname="' + esc(app.name) + '-openapi.json"' }) + UI.btn('Download client.ts', { size: 'sm', icon: 'download', attrs: 'data-dl="' + esc(base + '/client.ts') + '" data-dlname="' + esc(app.name) + '-client.ts"' }) + (App.canOpen('settings') ? UI.btn('Make a key for this app', { size: 'sm', kind: 'ghost', icon: 'key', attrs: 'data-appkey' }) : '') + '</div>');
+    const versions = UI.panel('Schema versions', UI.notice('Every design change, whichever route made it (this screen, the schema API, a package import), is one version with a hash of the whole design afterwards; each is audited app.schema.versioned.', 'info')
+      + UI.table(['Version', 'Change', 'Target', 'What changed', 'Source', 'By', 'When'], (st.schemaVersions || []).map((v) => [ '<b>' + esc(String(v.version)) + '</b>', UI.pill(v.kind, KIND_TONE[v.kind] || 'info'), '<span class="mono">' + esc(v.target) + '</span>', esc(v.summary), UI.pill(v.source, SOURCE_TONE[v.source] || ''), esc(who(v.createdBy)), esc(when(v.createdAt)) ]), { clickable: false, minWidth: '900px', emptyTitle: 'No versions yet', emptyText: 'The first entity records version 1.' })
+      + '<div class="eyebrow" style="margin-top:10px">Schema API</div><div class="muted" style="font-size:12px">' + UI.pill('apps:design', 'outline') + ' <span class="mono">GET ' + esc(base) + '/schema</span>, <span class="mono">PUT …/schema/entities/{entity}</span>, <span class="mono">POST …/schema/entities/{entity}/fields</span>, <span class="mono">PATCH|DELETE …/fields/{field}</span>, <span class="mono">PUT …/entities/{entity}/states</span>, <span class="mono">PUT|DELETE …/schema/forms/{form}</span>, <span class="mono">GET …/schema/versions</span>.</div>');
+    ctx.on('click', '[data-schemareload]', () => { st.schemaKey = st.schemaBusy = null; st.schemaError = null; ctx.rerender(); });
+    ctx.on('click', '[data-dl]', async (e, t) => {
+      try {
+        const res = await fetch(t.dataset.dl, { credentials: 'same-origin', headers: { accept: 'application/json, text/plain, application/typescript' } });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = t.dataset.dlname; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+        ctx.toast(esc(t.dataset.dlname) + ' downloaded (schema version ' + esc(String(sc.version)) + ').', 'ok');
+      } catch (err) { App.fail(err, 'Could not download'); }
+    });
+    ctx.on('click', '[data-appkey]', () => ctx.navigate('settings', { section: 'keys', app: app.name }));
+    return endpoints + docs + versions;
+  }
+
+  // ---------- Embed tab (1.6.0, B-8701, B-8702) ----------
+  const ALGS = ['ES256', 'RS256', 'EdDSA', 'HS256', 'x5c'];
+  const algText = (a) => (a === 'x5c' ? 'tenant CA certificate' : a === 'HS256' ? 'HS256 shared secret' : a + ' public key');
+  const HOST_RE = /^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i;
+  function renderEmbed(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.embedKey !== key && st.embedBusy !== key) {
+      st.embedBusy = key;
+      App.get(A(app.id) + '/embed')
+        .then((d) => { st.embed = d; st.embedKey = key; st.embedError = null; })
+        .catch((err) => { st.embedError = err; st.embedKey = key; })
+        .finally(() => { st.embedBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.embedKey !== key) return UI.notice('Loading the embed settings…', 'info');
+    if (st.embedError) return UI.problem('The embed settings could not be loaded', detailOf(st.embedError), traceOf(st.embedError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-emreload' }) + '</div>';
+    const em = st.embed;
+    const reloadEmbed = () => { st.embedKey = st.embedBusy = null; ctx.rerender(); };
+    const secret = st.embedSecret && st.embedSecret.app === key ? UI.notice('<b>Secret for key ' + esc(st.embedSecret.kid) + '. Copy it now; it is shown once.</b><div class="mono apps-token" style="margin-top:4px">' + esc(st.embedSecret.secret) + '</div><div class="muted" style="font-size:12px;margin-top:4px">The host site signs HS256 tokens with it (base64url, 32 bytes). It is sealed with the tenant key here and never shown again; make a new key to rotate it.</div>', 'warn', UI.btn('Copy', { size: 'sm', attrs: 'data-emsecretcopy' }) + UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-emsecretdone' })) : '';
+    const problem = st.embedProblem ? UI.problem(st.embedProblem.title, st.embedProblem.text, st.embedProblem.trace) : '';
+    const settings = UI.panel('Embed settings', '<div class="formgrid">'
+      + UI.field('Allowed host sites', UI.textarea(em.allowedHosts.join('\n'), { rows: 2, attrs: 'data-emhosts aria-label="Allowed host sites" spellcheck="false"' }), 'One origin a line (https://host[:port]); they become the frame-ancestors of every embed page of this app.')
+      + UI.field('Public pages', UI.toggle(em.publicEnabled ? 'on' : 'off', em.publicEnabled, 'data-empublic aria-label="Public pages"'), 'Public forms of this app can be published as embed pages.')
+      + UI.field('Signed embeds', UI.toggle(em.signedEnabled ? 'on' : 'off', em.signedEnabled, 'data-emsigned aria-label="Signed embeds"'), 'The host site signs a short token per visitor with a key below.')
+      + UI.field('Claim that names the person', '<div class="hstack gap6">' + UI.input(em.claimName, { attrs: 'data-emclaim aria-label="Claim name" maxlength="60"' }) + UI.select([{ value: 'username', label: 'is the username' }, { value: 'email', label: 'is the email' }, { value: 'id', label: 'is the user id' }], em.claimMatch, 'data-emmatch aria-label="Claim match"') + '</div>', 'An existing, active user of this tenant; the session acts as them.')
+      + UI.field('Longest session', UI.select([{ value: '300', label: '5 minutes' }, { value: '900', label: '15 minutes' }, { value: '3600', label: '1 hour' }, { value: '86400', label: '1 day' }], String(em.maxTtlSeconds), 'data-emttl aria-label="Longest session"'), 'The shorter of this, the token\'s exp and APP_EMBED_MAX_TTL_SECONDS.')
+      + UI.field('Writes', UI.toggle(em.write ? 'allowed' : 'read-only', em.write, 'data-emwrite aria-label="Writes"'), 'Embedded sessions hold records:read, and records:write only when allowed.')
+      + UI.field('Entities reached', UI.input(em.entities ? em.entities.join(', ') : '', { placeholder: 'every entity', attrs: 'data-ementities aria-label="Entities reached"' }), 'Names, comma-separated; empty for every entity of the app.')
+      + '</div>' + UI.kv([['Audience the token must name', '<span class="mono">' + esc(em.audience) + '</span>'], ['Signed embed page', '<span class="mono" style="overflow-wrap:anywhere">' + esc(em.signedUrl) + '#token=&lt;jwt&gt;</span> <span class="muted">(the token travels in the fragment, never a query string)</span>'], ['frame-ancestors', '<span class="mono">' + esc(em.frameAncestors) + '</span>']], 1)
+      + '<div class="hstack gap6" style="margin-top:8px">' + UI.btn('Save settings', { kind: 'primary', size: 'sm', attrs: 'data-emsave' }) + '<span class="muted" style="font-size:12px">Audited app.embed.updated.</span></div>');
+    const keys = UI.panel('Signing keys', UI.table(['kid', 'Kind', 'State', 'By', 'Made', { label: '', right: true }], em.keys.map((k) => ({ cells: ['<span class="mono">' + esc(k.kid) + '</span>', esc(algText(k.alg)), k.state === 'active' ? UI.pill('active', 'ok') : UI.pill('revoked ' + when(k.revokedAt), 'danger'), esc(who(k.createdBy)), esc(when(k.createdAt)), '<span class="hstack" style="justify-content:flex-end">' + (k.state === 'active' ? UI.btn('Revoke', { size: 'xs', kind: 'ghost', attrs: 'data-emrevoke="' + esc(k.id) + '" aria-label="Revoke key ' + esc(k.kid) + '"' }) : '') + '</span>'], attrs: 'data-emkey="' + esc(k.id) + '"' })), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No keys', emptyText: 'Register the public key the host site signs with, a shared secret, or the tenant CA.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('Add key', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-emaddkey' }) + '<span class="muted" style="font-size:12px">Revoking a key ends every session it made.</span></div>');
+    const publicForms = (app.forms || []).filter((f) => f.public && !em.pages.some((p) => p.formId === f.id));
+    const pages = UI.panel('Public embed pages', UI.notice('A public form (one with a public link) is published as an embed page under a random id; the page opens and submits the form by that id, so the form\'s link token never reaches the host site. Submissions follow the public path: per-address and per-form limits, the user-input guardrail, held values queued for review.', 'info')
+      + UI.table(['Form', 'Entity', 'Embed page', 'By', 'Made', { label: '', right: true }], em.pages.map((p) => ({ cells: ['<b>' + esc(p.formTitle) + '</b> <span class="mono muted">' + esc(p.form) + '</span>' + (p.public ? '' : ' ' + UI.pill('form no longer public', 'warn')), '<span class="mono">' + esc(p.entity) + '</span>', '<span class="mono" style="overflow-wrap:anywhere">' + esc(p.url) + '</span>', esc(who(p.createdBy)), esc(when(p.createdAt)), '<span class="hstack gap4" style="justify-content:flex-end">' + UI.btn('Snippet', { size: 'xs', kind: 'ghost', attrs: 'data-emsnippet="' + esc(p.id) + '"' }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-emrmpage="' + esc(p.id) + '"' }) + '</span>'], attrs: 'data-empage="' + esc(p.id) + '"' })), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No embed pages', emptyText: (app.forms || []).some((f) => f.public) ? 'Publish one of the public forms as an embed page.' : 'No form of this app has a public link yet; publish one on the Forms tab first.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('Publish a form', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-emaddpage', disabled: !publicForms.length || !em.publicEnabled }) + (!em.publicEnabled ? '<span class="muted" style="font-size:12px">Turn public pages on and save first.</span>' : '') + '</div>');
+    const sessions = UI.panel('Embedded sessions', UI.table(['Person', 'Host (iss)', 'Opened', 'Expires', 'State'], em.sessions.map((x) => [esc(x.username || x.user), '<span class="mono">' + esc(x.host || '') + '</span>', esc(when(x.createdAt)), esc(when(x.expiresAt)), x.revokedAt ? UI.pill('revoked', 'danger') : x.expiresAt < Date.now() ? UI.pill('expired', '') : UI.pill('active', 'ok')]), { clickable: false, minWidth: '0', cls: 'bare', emptyTitle: 'No sessions', emptyText: 'Sessions opened by host tokens appear here with the issuer that made them.' })
+      + '<div class="hstack gap6">' + UI.btn('End every session', { size: 'sm', kind: 'danger', attrs: 'data-emendall', disabled: !em.sessions.some((x) => !x.revokedAt && x.expiresAt > Date.now()) }) + '<span class="muted" style="font-size:12px">Sessions are apart from console sessions: no cookie, a bearer of their own, the app only.</span></div>');
+    const fail = (err, title) => { st.embedProblem = { title, text: detailOf(err), trace: traceOf(err) }; App.closeOverlay(); ctx.rerender(); };
+    ctx.on('click', '[data-emreload]', () => { st.embedError = null; reloadEmbed(); });
+    ctx.on('click', '[data-emsecretdone]', () => { st.embedSecret = null; ctx.rerender(); });
+    ctx.on('click', '[data-emsecretcopy]', () => { const v = st.embedSecret && st.embedSecret.secret; if (!v) return; (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject(new Error('no clipboard'))).then(() => ctx.toast('Secret copied.'), () => ctx.toast('Select the secret and copy it.', 'warn')); });
+    ctx.on('click', '[data-emsave]', async () => {
+      const root = ctx.root || document;
+      const hosts = (root.querySelector('[data-emhosts]').value || '').split(/\n/).map((h) => h.trim()).filter(Boolean);
+      const bad = hosts.find((h) => !HOST_RE.test(h));
+      if (bad) { ctx.toast('An allowed host is an origin: https://host[:port], not ' + esc(bad) + '.', 'danger'); return; }
+      const ents = root.querySelector('[data-ementities]').value.split(',').map((x) => x.trim()).filter(Boolean);
+      const body = { allowedHosts: hosts, publicEnabled: root.querySelector('[data-empublic]').classList.contains('on'), signedEnabled: root.querySelector('[data-emsigned]').classList.contains('on'), claimName: root.querySelector('[data-emclaim]').value.trim() || 'sub', claimMatch: root.querySelector('[data-emmatch]').value, maxTtlSeconds: Number(root.querySelector('[data-emttl]').value), write: root.querySelector('[data-emwrite]').classList.contains('on'), entities: ents.length ? ents : null };
+      try { await App.put(A(app.id) + '/embed', body); st.embedProblem = null; reloadEmbed(); ctx.toast('Embed settings saved. Audited app.embed.updated.', 'ok'); } catch (err) { fail(err, 'Settings not saved'); }
+    });
+    ctx.on('click', '[data-emaddkey]', () => modal(ctx, { title: 'Add a signing key', body: '<div class="formgrid">' + UI.field('kid', UI.input('', { placeholder: 'portal-2027', attrs: 'data-kid aria-label="kid" maxlength="100"' }), 'The token\'s header names it.') + UI.field('Kind', UI.select(ALGS.map((a) => ({ value: a, label: algText(a) })), 'ES256', 'data-alg aria-label="Kind"')) + '</div>' + UI.field('Public key (PEM)', UI.textarea('', { rows: 4, placeholder: '-----BEGIN PUBLIC KEY-----', attrs: 'data-pem aria-label="Public key" spellcheck="false"' }), 'For ES256 (P-256), RS256 (2048 bits or more) and EdDSA. An HS256 secret is generated and shown once; a tenant CA key needs nothing: the token carries the certificate the CA issued (x5c).'),
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Add key', { kind: 'primary', attrs: 'data-go' }),
+      onMount(m) { m.querySelector('[data-go]').addEventListener('click', async () => { const kid = m.querySelector('[data-kid]').value.trim(); const alg = m.querySelector('[data-alg]').value; const pem = m.querySelector('[data-pem]').value.trim(); if (!kid) { ctx.toast('A key needs a kid.', 'warn'); return; } if (['ES256', 'RS256', 'EdDSA'].includes(alg) && !pem) { ctx.toast('A ' + alg + ' key needs the public key (PEM).', 'warn'); return; } const body = { kid, alg }; if (pem && alg !== 'HS256' && alg !== 'x5c') body.publicKey = pem; try { const out = await App.post(A(app.id) + '/embed/keys', body); if (out.secret) st.embedSecret = { app: key, kid, secret: out.secret }; st.embedProblem = null; App.closeOverlay(); reloadEmbed(); ctx.toast('Key ' + esc(kid) + ' added. Audited app.embed.key.created.', 'ok'); } catch (err) { fail(err, 'Key not added'); } }); } }));
+    ctx.on('click', '[data-emrevoke]', async (e, t) => { const k = em.keys.find((x) => x.id === t.dataset.emrevoke); if (!k) return; const ok = await ctx.confirm({ title: 'Revoke key ' + k.kid + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">Tokens signed with it are refused from now on, and every session it opened ends at once.</p>', ok: 'Revoke' }); if (!ok) return; try { await App.del(A(app.id) + '/embed/keys/' + enc(k.id)); reloadEmbed(); ctx.toast('Key ' + esc(k.kid) + ' revoked; its sessions ended. Audited app.embed.key.revoked.', 'warn'); } catch (err) { App.fail(err, 'Could not revoke the key'); } });
+    ctx.on('click', '[data-emaddpage]', () => modal(ctx, { title: 'Publish a form as an embed page', body: UI.field('Public form', UI.select(publicForms.map((f) => ({ value: f.name, label: (f.title || f.name) + ' (' + f.name + ')' })), publicForms[0] ? publicForms[0].name : '', 'data-form aria-label="Public form"'), 'Only forms with a public link.') + UI.notice('The page is served at /embed/&lt;id&gt; with frame-ancestors set to the allowed host sites.', 'info'), actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Publish', { kind: 'primary', attrs: 'data-go' }), onMount(m) { m.querySelector('[data-go]').addEventListener('click', async () => { const form = m.querySelector('[data-form]').value; try { const out = await App.post(A(app.id) + '/embed/pages', { form }); st.embedProblem = null; App.closeOverlay(); reloadEmbed(); ctx.toast('Embed page for ' + esc(form) + ' published at ' + esc(out.url) + '. Audited app.embed.page.created.', 'ok', 6000); } catch (err) { fail(err, 'Page not published'); } }); } }));
+    ctx.on('click', '[data-emsnippet]', (e, t) => { const p = em.pages.find((x) => x.id === t.dataset.emsnippet); if (!p) return; modal(ctx, { title: 'Embed ' + esc(p.formTitle), body: UI.code('<iframe src="' + p.url + '" title="' + p.formTitle + '" width="100%" height="640" style="border:0"></iframe>', 'html') + UI.notice('Works on ' + esc(em.allowedHosts.join(', ') || 'no site yet: add the host sites first') + '. The browser refuses the frame elsewhere.', 'info'), actions: UI.btn('Close', { attrs: 'data-close' }) }); });
+    ctx.on('click', '[data-emrmpage]', async (e, t) => { const p = em.pages.find((x) => x.id === t.dataset.emrmpage); if (!p) return; const ok = await ctx.confirm({ title: 'Remove the embed page for ' + p.formTitle + '?', tone: 'danger', body: '<p class="fg2" style="margin:0">Sites framing it get a 404 from now on. The form and its public link stay.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del(A(app.id) + '/embed/pages/' + enc(p.id)); reloadEmbed(); ctx.toast('Embed page removed. Audited app.embed.page.removed.', 'warn'); } catch (err) { App.fail(err, 'Could not remove the page'); } });
+    ctx.on('click', '[data-emendall]', async () => { const ok = await ctx.confirm({ title: 'End every embedded session?', tone: 'danger', body: '<p class="fg2" style="margin:0">Pages framed on the host sites get 401 on their next call and ask the host for a new token.</p>', ok: 'End sessions' }); if (!ok) return; try { const out = await App.post(A(app.id) + '/embed/sessions/revoke', {}); reloadEmbed(); ctx.toast(out.revoked + ' session' + (out.revoked === 1 ? '' : 's') + ' ended. Audited app.embed.sessions.revoked.', 'warn'); } catch (err) { App.fail(err, 'Could not end the sessions'); } });
+    return secret + problem + settings + keys + pages + sessions;
   }
 
   function renderTriggers(ctx, app) {

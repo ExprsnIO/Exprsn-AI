@@ -41,6 +41,7 @@ export function appEmbedPublicRoutes(s: Services): Router {
 <meta name="referrer" content="no-referrer">
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="/css/app.css">
+<style>body.embed{overflow:auto;background:var(--bg)}.embed-main{max-width:760px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}.embed-title{font-size:18px;margin:0}.embed-sub{font-size:14px;margin:8px 0 0}.embed-form{display:flex;flex-direction:column;gap:10px}.embed-head{align-items:baseline}</style>
 </head>
 <body class="embed">
 <main class="embed-main" id="embed" ${Object.entries(attrs)
