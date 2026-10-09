@@ -57,6 +57,8 @@ export interface DatasetPlanInput {
   workspaceId?: string | null;
   /** Keep at most this many rows (a dataset above the quota must be sampled). */
   sample?: number | null;
+  /** The confirm step: the destination's details must be complete (the review step plans before they are filled in). */
+  final?: boolean;
   training?: { name: string; textColumn?: string | null; labelColumn?: string | null; splits?: { train: number; val: number; test: number }; conversationData?: boolean };
   classifiers?: { evalSet: string; textColumn: string; labelColumn: string; classifier?: { mode: 'none' | 'new' | 'existing'; name?: string | null; ref?: string | null; engine?: 'linear' | 'llm' | 'guard'; profile?: string | null } | null; evaluate?: boolean };
   knowledge?: { kbId?: string | null; name?: string | null; embedModel?: string | null; titleColumn?: string | null; textColumns?: string[]; metadataColumns?: string[]; groupBy?: string | null; schedule?: Schedule | 'publisher'; dropPii?: boolean; labelFloor?: Label };
@@ -242,9 +244,8 @@ export class DatasetImports {
     const perms = effectivePermissions(p);
     const need: Record<DatasetTarget, string> = { training: 'training:submit', classifiers: 'classifiers:manage', knowledge: 'knowledge:manage', store: 'imports:run' };
     if (!perms.has(need[input.target] as never)) checks.push({ name: 'Destination', result: 'refused', detail: `Importing into ${input.target} needs ${need[input.target]} as well as imports:run.` });
-    if (input.target === 'training' && !input.training?.name) checks.push({ name: 'Destination', result: 'refused', detail: 'A training dataset needs a name.' });
-    if (input.target === 'classifiers' && !(input.classifiers?.evalSet && input.classifiers.textColumn && input.classifiers.labelColumn)) checks.push({ name: 'Destination', result: 'refused', detail: 'An eval set needs a name, a text column and a label column.' });
-    if (input.target === 'knowledge' && !(input.knowledge?.kbId || (input.knowledge?.name && input.knowledge.embedModel))) checks.push({ name: 'Destination', result: 'refused', detail: 'A knowledge set needs an existing knowledge base, or a name and an embedding model for a new one.' });
+    const incomplete = input.target === 'training' ? (!input.training?.name ? 'A training dataset needs a name.' : null) : input.target === 'classifiers' ? (!(input.classifiers?.evalSet && input.classifiers.textColumn && input.classifiers.labelColumn) ? 'An eval set needs a name, a text column and a label column.' : null) : input.target === 'knowledge' ? (!(input.knowledge?.kbId || (input.knowledge?.name && input.knowledge.embedModel)) ? 'A knowledge set needs an existing knowledge base, or a name and an embedding model for a new one.' : null) : null;
+    if (incomplete) checks.push({ name: 'Destination', result: input.final ? 'refused' : 'info', detail: input.final ? incomplete : `${incomplete} Filled in at the destination step.` });
     // ---- the schema preview (the detectors over the first rows)
     let schema: DatasetPlan['schema'] = { columns: [], previewRows: 0, from: null, piiColumns: [] };
     if (!checks.some((c) => c.result === 'refused' && (c.name === 'Format' || c.name === 'Selection'))) {
@@ -289,7 +290,7 @@ export class DatasetImports {
   /** The confirm step: a refused plan is recorded as refused, a licence outside the policy waits, the rest is queued. */
   async request(p: Principal, input: DatasetPlanInput, traceId?: string | null) {
     const s = this.s();
-    const plan = await this.plan(p, input);
+    const plan = await this.plan(p, { ...input, final: true });
     const r = await this.datasetRepo(p, input.repositoryId);
     const t = Date.now();
     const options = { ...input, selectedResources: plan.selected.map((x) => x.id), schedule: plan.schedule, frequency: plan.frequency, columns: input.columns ?? [], piiColumns: plan.schema.piiColumns };

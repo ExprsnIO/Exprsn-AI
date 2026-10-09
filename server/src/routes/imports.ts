@@ -207,6 +207,7 @@ export function importRoutes(s: Services): Router {
       exception: z.object({ reason: z.string().trim().max(1000).nullable().optional() }).strict().nullable().optional(),
       workspaceId: id26.nullable().optional(),
       sample: z.number().int().min(1).max(50_000_000).nullable().optional(),
+      final: z.boolean().optional(),
       training: z
         .object({
           name: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
