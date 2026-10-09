@@ -523,7 +523,7 @@ table.dt .actions{white-space:nowrap}
       { id: 'training', label: 'Training', icon: 'training' }, { id: 'tenants', label: 'Tenants', icon: 'tenants' }, { id: 'roles', label: 'Roles and access', icon: 'roles' }, { id: 'identity', label: 'Identity', icon: 'identity' },
       // 1.5.0 (Sprint 29 boards): the trust screens
       { id: 'certificates', label: 'Certificates', icon: 'certificates' }, { id: 'vault', label: 'Vault', icon: 'vault' }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins' }, { id: 'atproto', label: 'AT-Protocol', icon: 'atproto' },
-      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
+      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'analytics', label: 'Analytics', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
     ] }
   ];
 
@@ -650,7 +650,7 @@ table.dt .actions{white-space:nowrap}
       const groups = [
         ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
         ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
-        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
+        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + ((s.states || []).length ? ' · ' + s.states.length + ' states' : '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
       App.modal({ cls: 'wide', title: 'Prototype map <span class="pill outline">' + Object.keys(screens).length + ' screens</span>', body: '<p class="fg2" style="margin:0">Every screen from the design boards, wired together. Each screen also carries the states its board listed; apply one from the command palette (Ctrl K) while on that screen. The console shows none of these controls.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
@@ -2338,6 +2338,7 @@ table.dt .actions{white-space:nowrap}
       { title: 'Server model unavailable', tone: 'warn', text: 'The model server lists the model but reports it unavailable (Private Cloud Compute on fm serve). It cannot be registered.', apply(ctx) { ctx.state.openRequest = 'server'; ctx.state.pickUnavailable = true; ctx.rerender(); } },
       { title: 'Cross-region profile refused', tone: 'danger', text: 'Importing us.amazon.nova-pro-v1:0 at confidential is refused: a cross-region inference profile may run outside the account\'s allowed regions and is capped at internal.', apply(ctx) { ctx.state.problem = 'crossregion'; ctx.state.noB43 = false; ctx.rerender(); } },
       { title: 'B-43 not installed', tone: 'warn', text: 'Cloud backends need the model server interface from B-43. Without it the cloud rows are listed as unavailable and the Cloud catalogue is disabled.', apply(ctx) { ctx.state.noB43 = true; ctx.state.provider = 'all'; ctx.state.selected = 'amazon.nova-pro-v1:0'; ctx.rerender(); } },
+      { title: 'Agent without an owner', tone: 'warn', text: 'The Inventory tab lists Triage as incomplete: no owner. With the owner requirement on, its review cannot publish it until one is named.', apply(ctx) { ctx.state.view = 'inventory'; ctx.state.invSel = 1; ctx.state.requireOwner = true; ctx.rerender(); } },
       { title: 'Retired', tone: 'neutral', text: 'Retired tags stay resolvable for audit and are removed from routing. Shown read-only.', apply(ctx) { ctx.state.lc = ctx.state.lc || {}; ctx.state.lc['llama3:8b-q4_0'] = 'retired'; ctx.state.selected = 'llama3:8b-q4_0'; ctx.state.lifecycle = 'all'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -2413,6 +2414,38 @@ table.dt .actions{white-space:nowrap}
             : '';
       const b43 = st.noB43 ? UI.notice('<b>Cloud backends unavailable.</b> Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI entries need the model server interface from B-43 (<span class="mono">ModelServer</span>, instance kind <span class="mono">openai</span>, catalogue format <span class="mono">server</span>). Ollama models are not affected.', 'warn') : '';
 
+      // ----- B-7301, B-7302: the AI system inventory (Inventory tab) -----
+      st.view = st.view || 'catalogue';
+      st.inv = st.inv || [
+        { kind: 'agent', name: 'Data analyst', version: '1.4.0', status: 'published', label: 'confidential', owner: 'Mara Okafor', oversight: 'Finance lead reviews weekly samples', provenance: 'Prompts in-house; knowledge base Finance policies (internal)', lineage: 'profile:analyst > model:qwen2.5:32b-q4_K_M > base:Qwen 2.5 32B Q4_K_M', flags: 2, evals: 0, impact: 'Limited risk. Decision support for analysts; a person signs every report.' },
+        { kind: 'agent', name: 'Triage', version: '1.0.0', status: 'in review', label: 'internal', owner: null, oversight: null, provenance: null, lineage: 'profile:general > model:llama3.1:8b-q5_K_M > base:Llama 3.1 8B Q5_K_M', flags: 0, evals: 0, impact: null },
+        { kind: 'profile', name: 'analyst', version: '7', status: 'published', label: 'confidential', owner: 'Tomasz Wieczorek', oversight: 'Model admin', provenance: 'System prompt in-house', lineage: 'profile:analyst > model:qwen2.5:32b-q4_K_M > base:Qwen 2.5 32B Q4_K_M', flags: 0, evals: 1, impact: 'Minimal risk.' },
+        { kind: 'profile', name: 'general', version: '12', status: 'published', label: 'internal', owner: 'Tomasz Wieczorek', oversight: 'Model admin', provenance: 'System prompt in-house', lineage: 'profile:general > model:llama3.1:8b-q5_K_M > base:Llama 3.1 8B Q5_K_M', flags: 0, evals: 0, impact: 'Minimal risk.' },
+        { kind: 'model', name: 'qwen2.5:32b-q4_K_M', version: null, status: 'approved', label: 'confidential', owner: 'Tomasz Wieczorek', oversight: 'Model admin', provenance: 'Ollama library, digest verified; licence Apache-2.0', lineage: 'model:qwen2.5:32b-q4_K_M > base:Qwen 2.5 32B Q4_K_M', flags: 0, evals: 0, impact: null },
+        { kind: 'model', name: 'llama3.1:8b-q5_K_M', version: null, status: 'approved', label: 'confidential', owner: null, oversight: null, provenance: 'Ollama library, digest verified; Llama 3.1 community licence', lineage: 'model:llama3.1:8b-q5_K_M > base:Llama 3.1 8B Q5_K_M', flags: 0, evals: 0, impact: null },
+        { kind: 'workflow', name: 'Monthly close', version: '3', status: 'published', label: 'confidential', owner: 'Mara Okafor', oversight: 'Controller approves step 4', provenance: 'Steps in-house; reads the ERP connection', lineage: '', flags: 1, evals: 0, impact: 'Limited risk; a person approves the posting step.' },
+        { kind: 'tool', name: 'jira-internal', version: '2.1.0', status: 'published', label: 'confidential', owner: 'Platform team', oversight: '', provenance: 'MCP server jira-internal', lineage: '', flags: 0, evals: 0, impact: null },
+        { kind: 'mcp-server', name: 'jira-internal', version: '2025-06-18', status: 'healthy', label: null, owner: 'Platform team', oversight: '', provenance: 'Self-hosted, zone internal', lineage: '', flags: 0, evals: 0, impact: null },
+        { kind: 'dataset', name: 'finance-qa-2026q3', version: '2', status: 'ready', label: 'confidential', owner: null, oversight: null, provenance: 'Conversations opted in, PII scrubbed', lineage: '', flags: 0, evals: 0, impact: null }
+      ];
+      if (st.requireOwner == null) st.requireOwner = true;
+      const invKinds = ['all', 'model', 'profile', 'agent', 'workflow', 'tool', 'mcp-server', 'dataset'];
+      st.invKind = st.invKind || 'all'; if (st.invSel == null) st.invSel = 1;
+      const invRows = st.inv.filter((x) => st.invKind === 'all' || x.kind === st.invKind);
+      const incomplete = st.inv.filter((x) => !x.owner).length;
+      const invSel = st.inv[st.invSel] || st.inv[0];
+      const missingOf = (x) => [!x.owner ? 'owner' : null, !x.oversight ? 'oversight role' : null, !x.provenance ? 'data provenance' : null].filter(Boolean);
+      const invTabs = UI.tabs([{ id: 'catalogue', label: 'Catalogue', count: all.length }, { id: 'inventory', label: 'AI inventory', count: st.inv.length }], st.view);
+      const invPage = '<div class="hstack wrap"><div class="eyebrow">Systems</div>' + UI.seg(invKinds.map((k) => ({ id: k, label: k === 'all' ? 'All' : k === 'mcp-server' ? 'MCP servers' : k.charAt(0).toUpperCase() + k.slice(1) + 's' })), st.invKind, 'data-invkind aria-label="Kind"') + '<span class="right hstack gap6">' + UI.btn('Export register, CSV', { size: 'sm', icon: 'download', attrs: 'data-invexport="csv"' }) + UI.btn('JSON', { size: 'sm', icon: 'download', attrs: 'data-invexport="json"' }) + '</span></div>'
+        + (incomplete ? UI.notice('<b>' + incomplete + ' systems have no owner.</b> ' + (st.requireOwner ? 'An agent without an owner is not published until one is named.' : 'Publishing does not need an owner in this tenant yet.'), 'warn') : UI.notice('Every system has an owner.', 'ok'))
+        + UI.table(['Kind', 'System', 'Status', 'Owner', 'Oversight', 'Lineage', { label: 'Issues', right: true }, 'Register'], invRows.map((x) => ({ cells: [esc(x.kind), '<b>' + esc(x.name) + '</b>' + (x.version ? ' <span class="mono muted">' + esc(x.version) + '</span>' : ''), UI.pill(x.status, x.status === 'published' || x.status === 'approved' || x.status === 'healthy' || x.status === 'ready' ? 'ok' : 'neutral'), x.owner ? esc(x.owner) : '<span class="muted">none</span>', esc(x.oversight || '-'), '<span class="mono muted" style="font-size:11px">' + esc(x.lineage || '-') + '</span>', (x.flags + x.evals) ? UI.pill((x.flags ? x.flags + ' flags' : '') + (x.flags && x.evals ? ', ' : '') + (x.evals ? x.evals + ' failed eval' : ''), 'warn') : '0', missingOf(x).length ? UI.pill('incomplete', 'warn') : UI.pill('complete', 'ok')], attrs: 'data-invsel="' + st.inv.indexOf(x) + '"', selected: invSel === x })), { minWidth: '860px', emptyTitle: 'Nothing of this kind', emptyText: '' })
+        + '<div class="hstack wrap" style="margin-top:8px">' + UI.toggle('Publishing an agent needs an owner', st.requireOwner, 'data-invrequire') + '<span class="muted" style="font-size:12px">The register (CSV or JSON) lists every system with its owner, oversight role, provenance, model lineage, known issues and the impact assessment, for ISO/IEC 42001 and EU AI Act deployer records.</span></div>';
+      const invInspector = '<aside class="inspector w360"><div class="eyebrow">' + esc(invSel.kind) + '</div><div class="models-name">' + esc(invSel.name) + '</div>'
+        + (missingOf(invSel).length ? UI.notice('<b>Incomplete:</b> missing ' + esc(missingOf(invSel).join(', ')) + '.' + (invSel.kind === 'agent' && !invSel.owner && st.requireOwner ? ' It cannot be published.' : ''), 'warn') : UI.notice('Complete.', 'ok'))
+        + UI.kv([['Status', esc(invSel.status)], ['Lineage', '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(invSel.lineage || 'none') + '</span>'], ['Known issues', (invSel.flags ? invSel.flags + ' open flags' : '') + (invSel.evals ? (invSel.flags ? ', ' : '') + invSel.evals + ' failed evaluation' : '') || 'none']], 1)
+        + '<div class="formgrid">' + UI.field('Owner', UI.select(['none', 'Mara Okafor', 'Tomasz Wieczorek', 'Platform team'], invSel.owner || 'none', 'data-f="owner"')) + UI.field('Oversight role', UI.input(invSel.oversight || '', { attrs: 'data-f="oversight"', placeholder: 'Who reviews its output, how often' })) + UI.field('Data provenance', UI.textarea(invSel.provenance || '', { attrs: 'data-f="provenance"', placeholder: 'Where its prompts, weights and data came from' })) + UI.field('Impact assessment', UI.textarea(invSel.impact || '', { attrs: 'data-f="impact"', placeholder: 'Risk level, affected people, human oversight' })) + '</div>'
+        + '<div class="hstack wrap gap6">' + UI.btn('Save', { kind: 'primary', size: 'sm', attrs: 'data-invsave' }) + (invSel.flags ? UI.btn('Open flags', { size: 'sm', attrs: 'data-go="flags"' }) : '') + '</div></aside>';
+
       root.innerHTML = '<style>'
         + '.models-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.models-steps span{color:var(--muted);font-weight:500}.models-steps .cur{color:var(--fg);font-weight:700}.models-steps .done{color:var(--fg2)}.models-steps .sep{color:var(--faint)}'
         + '.models-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
@@ -2421,14 +2454,21 @@ table.dt .actions{white-space:nowrap}
         + '</style>'
         + '<div class="page">'
         + UI.pagehead('Model catalog', 'Weights enter only through the signed import path', UI.btn('Browse repositories', { icon: 'search', attrs: 'data-browse' }) + UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + UI.btn('Cloud catalogue', { attrs: 'data-catalogue', disabled: !!st.noB43, title: st.noB43 ? 'Needs the B-43 model server interface' : '' }) + UI.btn('Import safetensors', { attrs: 'data-import' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }))
-        + problem + b43
-        + '<div class="toolbar">' + UI.search('Filter models', 'data-search', st.query) + '<span class="relative">' + UI.btn('Lifecycle: ' + st.lifecycle, { attrs: 'data-menu="lifecycle"', cls: st.lifecycle !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Capability: ' + st.cap, { attrs: 'data-menu="cap"', cls: st.cap !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Provider: ' + (st.provider === 'cloud' ? 'any cloud' : st.provider), { attrs: 'data-menu="provider"', cls: st.provider !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' of ' + all.length + ' models</span></div>'
+        + problem + b43 + invTabs
+        + (st.view === 'inventory' ? invPage : '<div class="toolbar">' + UI.search('Filter models', 'data-search', st.query) + '<span class="relative">' + UI.btn('Lifecycle: ' + st.lifecycle, { attrs: 'data-menu="lifecycle"', cls: st.lifecycle !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Capability: ' + st.cap, { attrs: 'data-menu="cap"', cls: st.cap !== 'all' ? 'active' : '' }) + '</span><span class="relative">' + UI.btn('Provider: ' + (st.provider === 'cloud' ? 'any cloud' : st.provider), { attrs: 'data-menu="provider"', cls: st.provider !== 'all' ? 'active' : '' }) + '</span><span class="muted right" style="font-size:12px">' + rows.length + ' of ' + all.length + ' models</span></div>'
         + UI.table(['Model', 'Provider', 'Family', 'Size or region', 'Capabilities', 'Max label', 'Lifecycle'], rows.map((m) => ({ cells: ['<span class="mono">' + esc(m.id) + '</span>', esc(provOf(m)) + (m.cloud && st.noB43 ? ' ' + UI.pill('unavailable', 'warn') : ''), esc(m.family), esc(m.size), esc(m.caps.join(', ')), UI.label(m.label, { sm: true }), UI.pill(lcOf(m))], selected: m.id === sel.id, attrs: 'data-id="' + esc(m.id) + '"' })), { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' })
         + '<span class="muted" style="font-size:12px">Cloud rows are example data; prices are illustrative, not provider quotes.</span>'
-        + '</div>'
-        + '<aside class="inspector w360"><div class="models-name">' + esc(sel.id) + '</div>' + stepper + UI.kv(kv, 1) + notice + '<div class="hstack wrap gap6">' + actions + '</div></aside>';
+        + '</div>')
+        + (st.view === 'inventory' ? invInspector : '<aside class="inspector w360"><div class="models-name">' + esc(sel.id) + '</div>' + stepper + UI.kv(kv, 1) + notice + '<div class="hstack wrap gap6">' + actions + '</div></aside>');
 
       ctx.on('click', 'tr.row', (e, t) => { st.selected = t.dataset.id; ctx.rerender(); });
+      ctx.on('click', '[data-tab]', (e, t) => { st.view = t.dataset.tab; ctx.rerender(); });
+      ctx.on('click', '[data-invkind] [data-seg]', (e, t) => { st.invKind = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', 'tr[data-invsel]', (e, t) => { st.invSel = +t.dataset.invsel; ctx.rerender(); });
+      ctx.on('click', '[data-invsave]', () => { const x = st.inv[st.invSel]; const v = (n) => { const el = ctx.$('[data-f="' + n + '"]'); return el ? el.value : ''; }; x.owner = v('owner') === 'none' ? null : v('owner'); x.oversight = v('oversight'); x.provenance = v('provenance'); x.impact = v('impact'); ctx.rerender(); ctx.toast(x.owner ? 'Saved. ' + esc(x.name) + ' is ' + (missingOf(x).length ? 'still incomplete (' + esc(missingOf(x).join(', ')) + ')' : 'complete') + '. Audited inventory.updated.' : 'Saved without an owner: ' + esc(x.name) + ' stays incomplete. Audited inventory.updated.', x.owner ? 'ok' : 'warn'); });
+      ctx.on('click', '[data-invexport]', (e, t) => ctx.toast('Downloading ai-inventory-northwind-2026-10-09.' + esc(t.dataset.invexport) + ': ' + st.inv.length + ' systems with lineage and impact assessment. Audited inventory.exported.', 'ok'));
+      ctx.on('click', '[data-invrequire]', () => { st.requireOwner = !st.requireOwner; ctx.rerender(); ctx.toast(st.requireOwner ? 'Agents without an owner are no longer published. Audited inventory.settings.updated.' : 'Publishing no longer needs an owner. Audited inventory.settings.updated.'); });
+      ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const v = t.value; ctx.rerender(); const i = ctx.$('[data-search]'); i.focus(); i.setSelectionRange(v.length, v.length); });
       ctx.on('click', '[data-menu]', (e, t) => {
         e.stopPropagation();
@@ -5953,6 +5993,7 @@ table.dt .actions{white-space:nowrap}
       { title: 'Verification failed', tone: 'danger', text: 'The chain breaks at event 7a201f3d. Shows the last good checkpoint and who was notified. Nothing is auto-repaired.', apply(ctx) { ctx.state.chain = 'broken'; ctx.state.forceBreak = true; ctx.state.tab = 'audit'; ctx.state.sel = '7a201f3d'; ctx.state.inspect = 'event'; ctx.rerender(); } },
       { title: 'Export blocked', tone: 'warn', text: 'The export includes confidential events and the auditor is cleared to internal. Offers a filtered export.', apply(ctx) { ctx.state.exportBlocked = true; ctx.state.openExport = true; ctx.rerender(); } },
       { title: 'Corrections', tone: 'neutral', text: 'A correction is a new row linked to the row it corrects. The original is never edited.', apply(ctx) { ctx.state.tab = 'audit'; ctx.state.sel = '44c1e90a'; ctx.state.inspect = 'event'; ctx.state.showCorrection = true; ctx.rerender(); } },
+      { title: 'SIEM destination awaiting approval', tone: 'warn', text: 'A proposed destination sends nothing until a second tenant admin approves it; the proposer cannot.', apply(ctx) { ctx.state.tab = 'exports'; ctx.rerender(); } },
       { title: 'Bar hover', tone: 'neutral', text: 'Hovering a bar shows the day and exact token count. The table view carries the same values.', apply(ctx) { ctx.state.tab = 'usage'; ctx.state.chartTable = false; ctx.state.hover = 10; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -6002,7 +6043,33 @@ table.dt .actions{white-space:nowrap}
       } else {
         body = '<div class="hstack"><div class="eyebrow">Exports</div><span class="right">' + UI.btn('New export', { size: 'sm', icon: 'download', attrs: 'data-export' }) + '</span></div>'
           + UI.table(['File', 'Scope', { label: 'Rows', right: true }, 'Requested by', 'State', ''], st.exports.map((x) => [ '<span class="mono">' + esc(x.file) + '</span>', esc(x.scope), esc(x.rows), esc(x.by), UI.pill(x.state), x.state === 'ready' ? UI.btn('Download', { size: 'xs', kind: 'ghost', attrs: 'data-dl="' + esc(x.file) + '"' }) : '' ]), { clickable: false, minWidth: '640px' })
-          + UI.notice('Exports of <b>confidential</b> rows need auditor clearance at that level or above; otherwise the export is filtered to internal and below.', 'info');
+          + UI.notice('Exports of <b>confidential</b> rows need auditor clearance at that level or above; otherwise the export is filtered to internal and below.', 'info')
+          + siemPanel();
+      }
+
+      // ----- B-7501: audit streaming per tenant, under dual control -----
+      st.siem = st.siem || [
+        { id: 's1', name: 'Splunk HEC (SOC)', kind: 'https', url: 'https://hec.soc.northwind.example/services/collector/raw', token: true, state: 'active', by: 'Mara Okafor', approvedBy: 'Tomasz Wieczorek', delivered: '1,204,118', last: '14:02:19', connection: 'connected', error: null },
+        { id: 's2', name: 'Sentinel (syslog)', kind: 'syslog', url: 'siem-eu.northwind.example:6514', token: false, state: 'proposed', by: 'Mara Okafor', approvedBy: null, delivered: '0', last: null, connection: 'disabled', error: null },
+        { id: 's3', name: 'Old Logstash', kind: 'https', url: 'https://logstash.legacy.example:8443/', token: true, state: 'disabled', by: 'Tomasz Wieczorek', approvedBy: 'Mara Okafor', delivered: '88,301', last: '2 Sep', connection: 'disabled', error: 'SIEM answered 503' }
+      ];
+      function siemPanel() {
+        return '<div class="hstack" style="margin-top:12px"><div class="eyebrow">Streaming to a SIEM</div><span class="right">' + UI.btn('Propose destination', { size: 'sm', icon: 'plus', attrs: 'data-siempropose' }) + '</span></div>'
+          + UI.table(['Destination', 'Kind', 'Address', 'State', { label: 'Delivered', right: true }, 'Last', ''], st.siem.map((d) => ({ cells: ['<b>' + esc(d.name) + '</b>' + (d.token ? '<div class="muted" style="font-size:11px">bearer token sealed</div>' : ''), esc(d.kind === 'https' ? 'HTTPS, NDJSON' : 'syslog over TLS'), '<span class="mono" style="overflow-wrap:anywhere">' + esc(d.url) + '</span>',
+              UI.pill(d.state === 'proposed' ? 'awaits a second admin' : d.state, d.state === 'active' ? 'ok' : d.state === 'proposed' ? 'warn' : 'neutral') + (d.state === 'active' ? ' ' + UI.pill(d.connection, d.connection === 'connected' ? 'ok' : d.connection === 'failing' ? 'danger' : 'neutral') : ''),
+              esc(d.delivered), esc(d.last || '-') + (d.error ? '<div class="muted" style="font-size:11px">' + esc(d.error) + '</div>' : ''),
+              '<span class="hstack gap6" style="justify-content:flex-end">' + (d.state === 'proposed' ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-siemapprove="' + d.id + '"' }) + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-siemreject="' + d.id + '"' }) : '') + (d.state !== 'rejected' ? UI.btn('Test', { size: 'xs', kind: 'ghost', attrs: 'data-siemtest="' + d.id + '"' }) : '') + (d.state === 'active' ? UI.btn('Disable', { size: 'xs', kind: 'ghost', attrs: 'data-siemdisable="' + d.id + '"' }) : '') + '</span>'],
+            attrs: 'data-siemrow="' + d.id + '"' })), { clickable: false, minWidth: '720px', emptyTitle: 'No destinations', emptyText: 'Propose an HTTPS or syslog-over-TLS destination; a second tenant admin approves it before anything is sent.' })
+          + UI.notice('<b>Dual control.</b> A destination streams this tenant\'s audit events only after a second tenant admin approves it. The proposer cannot approve. Tokens are sealed and never shown again; every decision and test is on the chain. The platform stream (SIEM_URL) stays the operator\'s.', 'info');
+      }
+      function siemProposeModal() {
+        ctx.modal({
+          title: 'Propose a SIEM destination',
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('Sentinel (syslog)', { attrs: 'data-sname' })) + UI.field('Kind', UI.select(['HTTPS, NDJSON batches', 'syslog over TLS (RFC 5424)'], 'syslog over TLS (RFC 5424)', 'data-skind')) + UI.field('Address', UI.input('siem-eu.northwind.example:6514', { attrs: 'data-surl' }), 'https://host/path, or host:port for syslog. Cloud metadata and unlisted internal addresses are refused.') + UI.field('Bearer token', UI.input('', { type: 'password', attrs: 'data-stoken', placeholder: 'HTTPS only; sealed, shown once' })) + UI.field('Private CA (PEM)', UI.textarea('', { attrs: 'data-sca', placeholder: 'Optional: the CA that signed the receiver\'s certificate' })) + '</div>'
+            + UI.notice('Nothing is sent until another tenant admin approves. Audited audit.siem.proposed.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Propose', { kind: 'primary', attrs: 'data-sgo' }),
+          onMount(m) { m.querySelector('[data-sgo]').addEventListener('click', () => { st.siem.unshift({ id: 's' + Date.now(), name: m.querySelector('[data-sname]').value || 'New destination', kind: /HTTPS/.test(m.querySelector('[data-skind]').value) ? 'https' : 'syslog', url: m.querySelector('[data-surl]').value, token: !!m.querySelector('[data-stoken]').value, state: 'proposed', by: 'Mara Okafor', approvedBy: null, delivered: '0', last: null, connection: 'disabled', error: null }); App.closeOverlay(); st.tab = 'exports'; ctx.rerender(); ctx.toast('Proposed. A second tenant admin can approve it now. Audited audit.siem.proposed.', 'ok'); }); }
+        });
       }
 
       // ----- inspector -----
@@ -6049,11 +6116,18 @@ table.dt .actions{white-space:nowrap}
         const blocked = !!st.exportBlocked;
         ctx.modal({
           title: 'Export CSV',
-          body: '<div class="formgrid">' + UI.field('Content', UI.select(['Audit events', 'Usage per user and model', 'Usage per tenant'], st.tab === 'usage' || st.tab === 'quotas' ? 'Usage per user and model' : 'Audit events', 'data-xcontent')) + UI.field('Scope', UI.select(['Finance Ops', 'Northwind, all workspaces', 'All tenants'], 'Finance Ops')) + UI.field('From', UI.input('2026-09-12', { type: 'date' })) + UI.field('To', UI.input('2026-09-19', { type: 'date' })) + '</div>'
+          body: '<div class="formgrid">' + UI.field('Content', UI.select(['Audit events', 'Audit events as JSONL with chain proof', 'Usage per user and model', 'Usage per tenant'], st.tab === 'usage' || st.tab === 'quotas' ? 'Usage per user and model' : 'Audit events', 'data-xcontent'), 'JSONL carries every event of the window with its hashes and a checkpoint signed at the window\'s end; it verifies offline with exprsn-ai audit:verify-export. Rows above your clearance are redacted to their hashes.') + UI.field('Scope', UI.select(['Finance Ops', 'Northwind, all workspaces', 'All tenants'], 'Finance Ops')) + UI.field('From', UI.input('2026-09-12', { type: 'date' })) + UI.field('To', UI.input('2026-09-19', { type: 'date' })) + '</div>'
             + (blocked ? UI.notice('<b>Export blocked.</b> The selection includes 212 confidential events and your auditor clearance is internal. You can export internal and below, or ask a tenant admin for a cleared export.', 'warn') : UI.notice('212 of 4,812 rows are labelled confidential. A warning is logged with the export.', 'info')),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + (blocked ? UI.btn('Export internal and below', { kind: 'primary', attrs: 'data-xfiltered' }) : UI.btn('Export', { kind: 'primary', attrs: 'data-xgo' })),
           onMount(m) {
-            const add = (filtered) => { App.closeOverlay(); st.exports.unshift({ file: 'audit-finance-ops-2026-09-19' + (filtered ? '-internal' : '') + '.csv', scope: 'Finance Ops, 12 to 19 Sep, ' + (filtered ? 'internal and below' : 'all labels'), rows: filtered ? '4,600' : '4,812', by: 'Mara Okafor', state: 'ready' }); st.tab = 'exports'; st.exportBlocked = false; ctx.rerender(); ctx.toast(filtered ? 'Filtered export ready: 4,600 rows, confidential rows omitted.' : 'Export ready: 4,812 rows. Logged to audit.', 'ok'); };
+            const add = (filtered) => {
+              const jsonl = /JSONL/.test(m.querySelector('[data-xcontent]').value);
+              App.closeOverlay();
+              if (jsonl) st.exports.unshift({ file: 'audit-finance-ops-2026-09-19.jsonl', scope: 'Audit JSONL with chain proof, 12 to 19 Sep, checkpoint signed at sequence 4,812' + (filtered ? ', 212 above internal redacted' : ''), rows: '4,812', by: 'Mara Okafor', state: 'ready' });
+              else st.exports.unshift({ file: 'audit-finance-ops-2026-09-19' + (filtered ? '-internal' : '') + '.csv', scope: 'Finance Ops, 12 to 19 Sep, ' + (filtered ? 'internal and below' : 'all labels'), rows: filtered ? '4,600' : '4,812', by: 'Mara Okafor', state: 'ready' });
+              st.tab = 'exports'; st.exportBlocked = false; ctx.rerender();
+              ctx.toast(jsonl ? 'JSONL export ready: 4,812 events, proof at sequence 4,812. Verify it offline with exprsn-ai audit:verify-export.' : filtered ? 'Filtered export ready: 4,600 rows, confidential rows omitted.' : 'Export ready: 4,812 rows. Logged to audit.', 'ok');
+            };
             const g = m.querySelector('[data-xgo]'); if (g) g.addEventListener('click', () => add(false));
             const f = m.querySelector('[data-xfiltered]'); if (f) f.addEventListener('click', () => add(true));
           }
@@ -6079,11 +6153,190 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-verify]', () => verify());
       ctx.on('click', '[data-export]', () => exportModal());
       ctx.on('click', '[data-dl]', (e, t) => ctx.toast('Downloading ' + esc(t.dataset.dl) + '. The download is logged to audit.'));
+      ctx.on('click', '[data-siempropose]', () => siemProposeModal());
+      ctx.on('click', '[data-siemapprove]', (e, t) => {
+        const d = st.siem.find((x) => x.id === t.dataset.siemapprove); if (!d) return;
+        if (d.by === 'Mara Okafor' && !st.secondAdmin) { ctx.toast('<b>Dual control.</b> You proposed this destination; another tenant admin must approve it.', 'danger', 5000); st.secondAdmin = true; return; }
+        d.state = 'active'; d.approvedBy = 'Tomasz Wieczorek'; d.connection = 'connected'; d.last = 'just now'; d.delivered = '1'; ctx.rerender(); ctx.toast('Approved by a second admin: the approval itself is the first event delivered. Audited audit.siem.approved.', 'ok');
+      });
+      ctx.on('click', '[data-siemreject]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemreject); if (d) { d.state = 'rejected'; ctx.rerender(); ctx.toast('Rejected. Audited audit.siem.rejected.'); } });
+      ctx.on('click', '[data-siemdisable]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemdisable); if (d) { d.state = 'disabled'; d.connection = 'disabled'; ctx.rerender(); ctx.toast('Disabled: nothing more is sent. Audited audit.siem.disabled.'); } });
+      ctx.on('click', '[data-siemtest]', (e, t) => { const d = st.siem.find((x) => x.id === t.dataset.siemtest); if (!d) return; if (d.error) { ctx.toast('Test failed: ' + esc(d.error) + '. Audited audit.siem.tested.', 'danger'); } else { d.last = 'just now'; ctx.rerender(); ctx.toast('Test event delivered to ' + esc(d.name) + '. Audited audit.siem.tested.', 'ok'); } });
       ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
       ctx.on('click', '[data-convo]', (e, t) => ctx.navigate('chat', { convo: t.dataset.convo }));
       ctx.on('click', '[data-editquota]', (e, t) => {
         ctx.modal({ title: 'Edit limits, ' + esc(t.dataset.editquota), body: '<div class="formgrid">' + UI.field('Tokens per day', UI.input('5,000,000')) + UI.field('GPU-seconds per month', UI.input('18,000')) + UI.field('Training GPU-hours', UI.input('200')) + UI.field('Over quota', UI.select(['Return 429 with Retry-After', 'Fall back to fast profile', 'Allow with warning'], 'Return 429 with Retry-After')) + '</div>' + UI.notice('Changes take effect on the next request and are written to the audit chain.', 'info'), actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save limits', { kind: 'primary', attrs: 'data-savequota' }), onMount(m) { m.querySelector('[data-savequota]').addEventListener('click', () => { App.closeOverlay(); ctx.toast('Limits saved for ' + esc(t.dataset.editquota) + '. Audit event written.', 'ok'); }); } });
       });
+    }
+  });
+})();
+
+</script>
+<script>
+(function () {
+  const { UI, esc } = App;
+
+  // ---------- data (example figures for Northwind, last 14 days) ----------
+  const DAYS = ['26 Sep', '27 Sep', '28 Sep', '29 Sep', '30 Sep', '1 Oct', '2 Oct', '3 Oct', '4 Oct', '5 Oct', '6 Oct', '7 Oct', '8 Oct', '9 Oct'];
+  const DAILY = [
+    { msgs: 1180, runs: 42, tokens: 1986400 }, { msgs: 1322, runs: 51, tokens: 2269100 }, { msgs: 410, runs: 9, tokens: 850200 }, { msgs: 380, runs: 7, tokens: 790300 },
+    { msgs: 1490, runs: 63, tokens: 2967000 }, { msgs: 1410, runs: 58, tokens: 2751100 }, { msgs: 1260, runs: 47, tokens: 2068800 }, { msgs: 1302, runs: 49, tokens: 2129400 },
+    { msgs: 455, runs: 11, tokens: 915600 }, { msgs: 402, runs: 8, tokens: 829000 }, { msgs: 1540, runs: 66, tokens: 3167400 }, { msgs: 1488, runs: 61, tokens: 3038900 },
+    { msgs: 1397, runs: 55, tokens: 2846000 }, { msgs: 980, runs: 37, tokens: 2101200 }
+  ];
+  const ROWS = {
+    workspace: [
+      { name: 'Finance Ops', msgs: 8120, runs: 311, users: 46, tokens: 15842300, gpu: 18240, cost: 184.31 },
+      { name: 'People Ops', msgs: 2810, runs: 64, users: 19, tokens: 4120900, gpu: 3910, cost: 41.02 },
+      { name: 'Field Sales', msgs: 4086, runs: 189, users: 71, tokens: 8747200, gpu: 9080, cost: 96.55 },
+      { name: 'No workspace', msgs: 0, runs: 0, users: 2, tokens: 0, gpu: 0, cost: 0 }
+    ],
+    group: [
+      { name: 'Analysts', msgs: 5210, runs: 240, users: 18, tokens: 10210400, gpu: 11870, cost: 118.40 },
+      { name: 'Controllers', msgs: 1930, runs: 51, users: 9, tokens: 3480100, gpu: 4020, cost: 40.73 },
+      { name: 'Account executives', msgs: 3612, runs: 162, users: 54, tokens: 7651800, gpu: 7940, cost: 84.20 },
+      { name: 'No group', msgs: 4264, runs: 111, users: 55, tokens: 7368100, gpu: 7400, cost: null }
+    ],
+    model: [
+      { name: 'qwen2.5:32b-q4_K_M', msgs: 9240, runs: 402, users: 88, tokens: 18906500, gpu: 24300, cost: 236.21 },
+      { name: 'llama3.1:8b-q5_K_M', msgs: 5776, runs: 162, users: 64, tokens: 8120300, gpu: 6440, cost: 54.11 },
+      { name: 'bge-m3 (embed)', msgs: 0, runs: 0, users: 41, tokens: 1683600, gpu: 490, cost: 3.21 },
+      { name: 'system (Apple, on-device)', msgs: 0, runs: 0, users: 3, tokens: 0, gpu: 0, cost: null }
+    ],
+    profile: [
+      { name: 'analyst', msgs: 7410, runs: 395, users: 52, tokens: 15210000, gpu: 20100, cost: 198.04 },
+      { name: 'general', msgs: 6128, runs: 112, users: 101, tokens: 10802800, gpu: 9880, cost: 90.30 },
+      { name: 'fast', msgs: 1478, runs: 57, users: 33, tokens: 2697600, gpu: 1250, cost: 5.54 }
+    ],
+    user: [
+      { name: 'Data analyst agent', kind: 'agent', msgs: 0, runs: 311, users: 1, tokens: 6184100, gpu: 9460, cost: 92.40 },
+      { name: 'Mara Okafor', msgs: 1842, runs: 92, users: 1, tokens: 3071500, gpu: 4120, cost: 40.11 },
+      { name: 'Tomasz Wieczorek', msgs: 1306, runs: 41, users: 1, tokens: 2228000, gpu: 2910, cost: 28.70 },
+      { name: 'svc-close-bot', kind: 'service account', msgs: 2880, runs: 0, users: 1, tokens: 3301200, gpu: 402, cost: 6.02 }
+    ],
+    tenant: [
+      { name: 'Northwind', msgs: 15016, runs: 564, users: 136, tokens: 28710400, gpu: 31230, cost: 321.88 },
+      { name: 'Contoso Freight', msgs: 1203, runs: 22, users: 14, tokens: 2104100, gpu: 1180, cost: 12.95 }
+    ]
+  };
+  const PRICES = [
+    { scope: 'model', ref: 'qwen2.5:32b-q4_K_M', input: 0.40, output: 1.20, gpu: 2.80, note: 'energy at 0.31 €/kWh, H100 node' },
+    { scope: 'model', ref: 'llama3.1:8b-q5_K_M', input: 0.08, output: 0.24, gpu: 1.10, note: '' },
+    { scope: 'pool', ref: 'gpu-large', input: 0, output: 0, gpu: 2.80, note: 'what no model price covers' }
+  ];
+  const DIMS = [['workspace', 'Per workspace'], ['group', 'Per group'], ['model', 'Per model'], ['profile', 'Per profile'], ['user', 'Per user'], ['tenant', 'Per tenant']];
+  const fmt = (n) => n.toLocaleString('en-US');
+  const money = (n) => n == null ? '<span class="muted" title="A model or pool in this row has no price">no price</span>' : '€' + n.toFixed(2);
+
+  function chart(st) {
+    const W = 600, H = 160, L = 40, R = 590, top = 20, base = 130;
+    const key = st.metric === 'messages' ? 'msgs' : st.metric === 'runs' ? 'runs' : 'tokens';
+    const vals = DAILY.map((d) => d[key]);
+    const max = Math.max.apply(null, vals) * 1.1;
+    const y = (v) => base - (v / max) * (base - top);
+    const bw = 22, gap = 38;
+    let bars = '';
+    vals.forEach((v, i) => {
+      const x = 44 + i * gap; const yy = y(v); const hov = st.hover === i;
+      bars += '<g class="an-bar' + (hov ? ' hov' : '') + '" data-bar="' + i + '" tabindex="0" role="listitem" aria-label="' + DAYS[i] + ', ' + fmt(v) + ' ' + st.metric + '">'
+        + '<rect x="' + (x - 8) + '" y="' + top + '" width="' + gap + '" height="' + (base - top) + '" fill="transparent"></rect>'
+        + '<path d="M' + x + ' ' + base + ' V' + (yy + 4) + ' a4 4 0 0 1 4 -4 h' + (bw - 8) + ' a4 4 0 0 1 4 4 V' + base + ' z" fill="' + (hov || i === vals.length - 1 ? 'var(--accent)' : 'var(--meter)') + '"></path>'
+        + '<title>' + DAYS[i] + ': ' + fmt(v) + ' ' + st.metric + '</title></g>';
+    });
+    const short = (v) => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? Math.round(v / 1e3) + 'k' : String(v);
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="160" role="img" aria-label="' + esc(st.metric) + ' per day, last 14 days" style="display:block;font-family:var(--sans)">'
+      + '<g stroke="var(--line2)"><line x1="' + L + '" y1="' + top + '" x2="' + R + '" y2="' + top + '"></line><line x1="' + L + '" y1="' + (top + (base - top) / 2) + '" x2="' + R + '" y2="' + (top + (base - top) / 2) + '"></line></g>'
+      + '<line x1="' + L + '" y1="' + base + '" x2="' + R + '" y2="' + base + '" stroke="var(--faint)"></line>'
+      + '<g role="list">' + bars + '</g>'
+      + '<g font-size="11" fill="var(--muted)"><text x="34" y="24" text-anchor="end">' + short(max) + '</text><text x="34" y="79" text-anchor="end">' + short(max / 2) + '</text><text x="34" y="134" text-anchor="end">0</text><text x="44" y="148">' + DAYS[0] + '</text><text x="570" y="148" text-anchor="end">' + DAYS[13] + '</text></g></svg>';
+  }
+
+  App.register({
+    id: 'analytics', title: 'Analytics', section: 'admin', crumb: ['Admin', 'Analytics'],
+    summary: 'Messages, tokens, users, runs and cost by workspace, group, model, profile and user; prices and chargeback',
+    commands: [
+      { label: 'Chargeback export for a workspace', sub: 'Analytics', run(app) { app.stateFor('analytics').openChargeback = true; app.render(); } },
+      { label: 'Set a model price', sub: 'Analytics', run(app) { app.stateFor('analytics').openPrice = true; app.render(); } }
+    ],
+    states: [
+      { title: 'No prices yet', tone: 'neutral', text: 'Without a price per model or pool every cost reads "no price"; the usage figures are unaffected.', apply(ctx) { ctx.state.noPrices = true; ctx.rerender(); } },
+      { title: 'Partly priced row', tone: 'warn', text: 'A row with records that no price covers shows "no price" instead of a partial total.', apply(ctx) { ctx.state.by = 'group'; ctx.state.sel = 3; ctx.rerender(); } },
+      { title: 'Across tenants', tone: 'neutral', text: 'The tenant dimension is for system admins; others see their tenant only.', apply(ctx) { ctx.state.by = 'tenant'; ctx.rerender(); } }
+    ],
+    render(root, ctx) {
+      const st = ctx.state;
+      st.by = st.by || 'workspace'; st.period = st.period || '14 days'; st.metric = st.metric || 'tokens'; st.prices = st.prices || PRICES.slice();
+      if (st.sel == null) st.sel = 0;
+      const rows = ROWS[st.by];
+      const total = rows.reduce((a, r) => ({ msgs: a.msgs + r.msgs, runs: a.runs + r.runs, users: a.users + r.users, tokens: a.tokens + r.tokens, gpu: a.gpu + r.gpu, cost: a.cost == null || r.cost == null ? null : a.cost + r.cost }), { msgs: 0, runs: 0, users: 0, tokens: 0, gpu: 0, cost: 0 });
+      const noPrices = !!st.noPrices || !st.prices.length;
+      const cost = (r) => noPrices ? money(null) : money(r.cost);
+      const sel = rows[st.sel] || rows[0];
+
+      const chartPanel = UI.panel(st.metric.charAt(0).toUpperCase() + st.metric.slice(1) + ' per day, Northwind, last 14 days', '<div class="an-chart">' + chart(st) + '</div>'
+        + '<div class="muted" style="font-size:12px">A day\'s totals are the metering records of that day: the same rows the quotas count.</div>',
+        { actions: UI.seg([{ id: 'messages', label: 'Messages' }, { id: 'runs', label: 'Runs' }, { id: 'tokens', label: 'Tokens' }], st.metric, 'data-metric aria-label="Chart metric"') });
+      const totals = UI.panel('Totals, ' + esc(st.period), '<div class="grid2">' + UI.stat('Messages', fmt(total.msgs)) + UI.stat('Agent and workflow runs', fmt(total.runs)) + UI.stat('Tokens', fmt(total.tokens)) + UI.stat('Cost', noPrices ? 'no price' : '€' + (total.cost == null ? '—' : total.cost.toFixed(2))) + '</div>'
+        + (noPrices ? UI.notice('<b>No prices set.</b> Add a price per model (and a pool price for whatever else runs there) to see costs. Usage is counted either way.', 'info', UI.btn('Set a price', { size: 'sm', attrs: 'data-price' })) : ''));
+
+      const table = '<div class="hstack wrap"><div class="eyebrow">Usage by</div>' + UI.seg(DIMS.map((d) => ({ id: d[0], label: d[1] })), st.by, 'data-byseg aria-label="Dimension"') + '<span class="right">' + UI.select(['Today', '7 days', '14 days', 'This month', 'Last month'], st.period, 'data-period aria-label="Period" style="width:150px"') + '</span></div>'
+        + UI.table([DIMS.find((d) => d[0] === st.by)[1].replace('Per ', ''), { label: 'Messages', right: true }, { label: 'Runs', right: true }, { label: 'Users', right: true }, { label: 'Tokens', right: true }, { label: 'GPU-s', right: true }, { label: 'Cost', right: true }],
+          rows.map((r, i) => ({ cells: ['<b>' + esc(r.name) + '</b>' + (r.kind ? ' <span class="muted">' + esc(r.kind) + '</span>' : ''), fmt(r.msgs), fmt(r.runs), fmt(r.users), fmt(r.tokens), fmt(r.gpu), cost(r)], attrs: 'data-row="' + i + '"', selected: st.sel === i }))
+            .concat([{ cells: ['<b>Total</b>', '<b>' + fmt(total.msgs) + '</b>', '<b>' + fmt(total.runs) + '</b>', '<b>' + fmt(total.users) + '</b>', '<b>' + fmt(total.tokens) + '</b>', '<b>' + fmt(total.gpu) + '</b>', '<b>' + (noPrices || total.cost == null ? money(null) : money(total.cost)) + '</b>'], attrs: 'data-total' }]),
+          { minWidth: '720px', emptyTitle: 'No usage in this period', emptyText: 'Nothing was metered for this period.' })
+        + '<div class="muted" style="font-size:12px">Messages are answered turns (chat, compare, API and channels); runs are agent and workflow runs. Tokens include prompt, output and thinking tokens. A row\'s cost is null when a model or pool in it has no price, so a partial figure never reads as a total.</div>';
+
+      const prices = UI.panel('Prices, EUR', (noPrices ? UI.empty('No prices', 'One currency per tenant; a model price wins over its pool\'s.', '') : UI.table(['Scope', 'Model or pool', { label: '€ / M input', right: true }, { label: '€ / M output', right: true }, { label: '€ / GPU-hour', right: true }, 'Note', ''],
+        st.prices.map((p, i) => [esc(p.scope), '<span class="mono">' + esc(p.ref) + '</span>', p.input.toFixed(2), p.output.toFixed(2), p.gpu.toFixed(2), esc(p.note || ''), UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-rmprice="' + i + '"' })]), { cls: 'bare', minWidth: '0', clickable: false }))
+        + '<div class="muted" style="font-size:12px">Energy or a set rate for local models: a GPU-hour price covers what runs on this hardware; token prices suit metered providers. Changes are audited (analytics.price.set).</div>',
+        { actions: UI.btn('Add price', { size: 'sm', icon: 'plus', attrs: 'data-price' }) });
+
+      const insp = '<div class="eyebrow">' + esc(DIMS.find((d) => d[0] === st.by)[1].replace('Per ', '')) + '</div><div style="font-size:15px;font-weight:600;overflow-wrap:anywhere">' + esc(sel.name) + '</div>'
+        + UI.kv([['Messages', fmt(sel.msgs)], ['Runs', fmt(sel.runs)], ['Users', fmt(sel.users)], ['Tokens', fmt(sel.tokens)], ['GPU-seconds', fmt(sel.gpu)], ['Cost', cost(sel)], ['Period', esc(st.period)]], 1)
+        + (sel.cost == null && !noPrices ? UI.notice('<b>No price for part of this row.</b> "system (Apple, on-device)" has no price, so this row\'s cost is withheld rather than shown short.', 'warn') : '')
+        + '<div class="vstack gap6">' + (st.by === 'workspace' && sel.name !== 'No workspace' ? UI.btn('Chargeback export, this month', { size: 'sm', icon: 'download', attrs: 'data-chargeback' }) : '') + UI.btn('Open Usage and audit', { size: 'sm', attrs: 'data-go="usage-audit"' }) + '</div>'
+        + '<div class="divider"></div><div class="eyebrow">Tracing</div><div class="fg2" style="font-size:12px">Model spans carry <span class="mono">gen_ai.usage.input_tokens</span> and <span class="mono">gen_ai.usage.output_tokens</span>, so the same counts reach Grafana or any OTLP backend.</div>';
+
+      root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}'
+        + '.an-chart svg .an-bar{cursor:pointer}.an-chart svg .an-bar:hover path,.an-chart svg .an-bar:focus path{fill:var(--accent)}.an-chart svg .an-bar:focus{outline:none}'
+        + '.an-top{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}@media (max-width:1100px){.an-top{grid-template-columns:1fr}}</style>'
+        + '<div class="page">' + UI.pagehead('Analytics', 'Messages, tokens, users and runs by workspace, group, model, profile and user, with the cost at your prices', UI.btn('Chargeback export', { icon: 'download', attrs: 'data-chargeback' }))
+        + '<div class="an-top">' + chartPanel + totals + '</div>' + table + prices + '</div>'
+        + '<aside class="inspector w300">' + insp + '</aside>';
+
+      if (st.openChargeback) { st.openChargeback = false; setTimeout(chargebackModal, 50); }
+      if (st.openPrice) { st.openPrice = false; setTimeout(priceModal, 50); }
+
+      function chargebackModal() {
+        ctx.modal({
+          title: 'Chargeback export',
+          body: '<div class="formgrid">' + UI.field('Workspace', UI.select(['Finance Ops', 'People Ops', 'Field Sales', 'Every workspace'], st.by === 'workspace' && sel.name !== 'No workspace' ? sel.name : 'Every workspace', 'data-cbws')) + UI.field('Month', UI.select(['October 2026 (so far)', 'September 2026', 'August 2026'], 'September 2026', 'data-cbmonth')) + UI.field('Format', UI.select(['CSV', 'JSON'], 'CSV', 'data-cbformat')) + '</div>'
+            + UI.notice('One line per model and pool with tokens, GPU-seconds and cost, and a total line. The total equals what this screen shows for the same workspace and month. The export is audited.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Export', { kind: 'primary', attrs: 'data-cbgo' }),
+          onMount(m) { m.querySelector('[data-cbgo]').addEventListener('click', () => { const ws = m.querySelector('[data-cbws]').value; App.closeOverlay(); ctx.toast('Downloading chargeback-northwind-' + esc(ws.toLowerCase().replace(/ /g, '-')) + '-2026-09.csv. Audited analytics.chargeback.exported.', 'ok'); }); }
+        });
+      }
+      function priceModal() {
+        ctx.modal({
+          title: 'Set a price',
+          body: '<div class="formgrid" style="--cols:2">' + UI.field('Scope', UI.select(['Model', 'Pool'], 'Model', 'data-pscope')) + UI.field('Model or pool', UI.input('qwen2.5-coder:32b-q4_K_M', { attrs: 'data-pref' })) + UI.field('€ per million input tokens', UI.input('0.40', { attrs: 'data-pin' })) + UI.field('€ per million output tokens', UI.input('1.20', { attrs: 'data-pout' })) + UI.field('€ per GPU-hour', UI.input('2.80', { attrs: 'data-pgpu' }), 'Energy or a set rate for local models') + UI.field('Note', UI.input('', { attrs: 'data-pnote', placeholder: 'How the rate was set' })) + '</div>'
+            + UI.notice('One currency per tenant (EUR here). A model price wins over the pool price for the same records.', 'info'),
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save price', { kind: 'primary', attrs: 'data-pgo' }),
+          onMount(m) { m.querySelector('[data-pgo]').addEventListener('click', () => { st.prices.push({ scope: m.querySelector('[data-pscope]').value.toLowerCase(), ref: m.querySelector('[data-pref]').value, input: +m.querySelector('[data-pin]').value || 0, output: +m.querySelector('[data-pout]').value || 0, gpu: +m.querySelector('[data-pgpu]').value || 0, note: m.querySelector('[data-pnote]').value }); st.noPrices = false; App.closeOverlay(); ctx.rerender(); ctx.toast('Price saved. Audited analytics.price.set.', 'ok'); }); }
+        });
+      }
+
+      ctx.on('click', '[data-byseg] [data-seg]', (e, t) => { st.by = t.dataset.seg; st.sel = 0; ctx.rerender(); });
+      ctx.on('click', '[data-metric] [data-seg]', (e, t) => { st.metric = t.dataset.seg; ctx.rerender(); });
+      ctx.on('change', '[data-period]', (e, t) => { st.period = t.value; ctx.rerender(); ctx.toast('Recomputed for ' + esc(t.value) + '.'); });
+      ctx.on('click', 'tr[data-row]', (e, t) => { st.sel = +t.dataset.row; ctx.rerender(); });
+      ctx.on('mouseover', '.an-bar', (e, t) => { const i = +t.dataset.bar; if (st.hover !== i) { st.hover = i; ctx.rerender(); } });
+      ctx.on('mouseout', '.an-chart', (e, t) => { if (st.hover != null && !(e.relatedTarget && t.contains(e.relatedTarget))) { st.hover = null; ctx.rerender(); } });
+      ctx.on('focusin', '.an-bar', (e, t) => { const i = +t.dataset.bar; if (st.hover !== i) { st.hover = i; ctx.rerender(); const b = ctx.$('.an-bar[data-bar="' + i + '"]'); if (b) b.focus(); } });
+      ctx.on('click', '[data-chargeback]', () => chargebackModal());
+      ctx.on('click', '[data-price]', () => priceModal());
+      ctx.on('click', '[data-rmprice]', (e, t) => { st.prices.splice(+t.dataset.rmprice, 1); ctx.rerender(); ctx.toast('Price removed. Audited analytics.price.removed.'); });
+      ctx.on('click', '[data-go]', (e, t) => ctx.navigate(t.dataset.go));
     }
   });
 })();
