@@ -13,7 +13,7 @@ gaps in `docs/security.md`.
 
 **Size.** 77 items, 350 points (1 point ≈ half a day for one engineer, tests included), plus the release item: P1 257,
 P2 93 (B-117, B-119 and B-122 counted since 2026-10-09; the 240-point governance set below still lists B-117 and B-119). Agents, tools and skills in chat and the second half of the import wizard are 13 items and 72 points; the port
-items added on 2026-10-07 are 51 items and 216 points (B-122 added 2026-10-09). That is five sprints, Sprints 40 to 44
+items added on 2026-10-07 are 51 items and 216 points (B-122 added 2026-10-09). B-123, discovery (4 items, 9 points), was added unscheduled on 2026-10-09. That is five sprints, Sprints 40 to 44
 (72, 68, 60, 76 and 74 points; re-planned by usage on 2026-10-09). The first of them was numbered Sprint 38 until 2026-10-07, when the 1.6.0 gaps took
 Sprints 37 to 39 and this release moved to 40 to 43; 2.0.0 follows at Sprints 45 to 51. Unscheduled beside them, added
 2026-10-07: governance, thinking, learning, skills from knowledge, classification and moderation (B-115 to B-121,
@@ -513,6 +513,24 @@ dual control.
 | B-11806 | Active learning for classifiers: classifications in the review band (B-12004) queue for labelling, labelled items join the dataset, retraining or re-evaluation is proposed when the set has grown by a set count; the `classify` profile's results included | A low-confidence classification is labelled from the queue, and the next training run uses it | 5 |
 | B-11807 | Console: feedback controls on Chat and Runs; a Learning tab on Profiles (queue, cases, trend) and a Labelling tab on Classifiers; Playwright with axe-core and the reflow checks | Feedback given in the e2e suite reaches the queue and becomes a case with no axe or reflow finding | 5 |
 
+## Discovery (2026-10-09)
+
+### B-123 Finding what you can use (9 points, unscheduled)
+
+Added 2026-10-09 at the owner's request: how does a person learn that a workflow, agent, tool or skill exists for them?
+Today discovery is pull-only. The Chat composer's `/`, `@` and `+` pickers (B-4001, Sprint 40a) list what a conversation
+may call, but only once the person types the trigger character; Workflows and Registry are builder screens; publishing an
+entry tells nobody; and an entry the profile's allow-list hides is simply absent. This epic surfaces the same capabilities
+data (no new authority: every list is the caller's `GET /api/conversations/:id/capabilities` or its workspace form, within
+clearance, labels and allow-lists) where people look, and asks authors for what discovery needs.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-12301 | "What you can do": a panel on Chat's empty state and a catalogue page that list the workflows, agents, tools and skills the person may use in a workspace, grouped by category, each with its description, an example prompt and how to call it (`/`, `@`, `+`), opening the composer with it filled in; an entry the profile's allow-list hides is listed as "not on this profile" with the profiles that offer it, never one above the person's clearance; prototype board first, Playwright with axe-core and the reflow checks | A member sees a newly published workflow on the catalogue with its call, and an entry above their clearance is not listed | 3 |
+| B-12302 | Publish notices: an entry published (or newly offered) to a workspace notifies its members once, in-app, within the entry's label, with a per-person opt-out and a weekly digest option; a notice links to the catalogue entry | Publishing a workflow gives the workspace's members one notification linking to it, and a member below its label gets none | 2 |
+| B-12303 | Composer suggestions: while a person types, up to three entries whose description and examples match the draft are offered as a dismissible chip row, ranked by local embedding similarity over the capability descriptions (the embedding profile, no chat-model call); a dismissed suggestion stays dismissed for the conversation; off per profile | Typing "summarise this contract" suggests the summarise workflow, and dismissing it keeps it away for the rest of the conversation | 3 |
+| B-12304 | Entry quality for discovery: the registry review asks for a purpose, at least one example prompt and a category for any entry offered in chat, checked at submit, with the reviewer seeing a preview of the catalogue card | An agent submitted without an example prompt is returned with the missing field named | 1 |
+
 ## Release
 
 | ID | Item | Done when |
@@ -544,6 +562,8 @@ dual control.
 - [ ] Learning datasets (B-11804): fine-tuning in scope with the rest of B-118, or stop at eval cases, samples and
   memories until a training worker runs on cluster GPUs (2.0.0's compute pools, B-104)?
 - [ ] Secret ballots (B-11603): ballots shown to the proposer after close (assumed), or to nobody?
+- [ ] Discovery (B-123, 9 points): with the rest of Sprint 41 (its 26 points not started), or a later sprint? Suggestions
+  (B-12303) use the embedding profile only; a chat-model ranking would be better and slower.
 
 ## Risks
 
