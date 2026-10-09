@@ -61,65 +61,244 @@
 
 ## 1.6.0
 
-### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
+### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
 
-- Migration `041_provenance_artifacts`: `image_jobs.c2pa`, `pki_content_signers`, `chat_artifacts`,
-  `chat_artifact_versions`.
-- Content credentials (B-7901): a generated PNG carries a C2PA manifest store in a `caBX` chunk (`c2pa.actions`,
-  `c2pa.hash.data` over every byte outside the chunk, `io.exprsn.generation`), signed as a COSE_Sign1 (ES256) by the
-  tenant's content-credentials certificate, which the tenant's issuing CA makes on first use with its key in custody
-  and lists among the tenant's certificates (revoke it there and the next image signs with a new one). The manifest
-  travels with the bytes through the blob store, downloads and attachments; `GET /api/images/:id/content-credentials`
-  and `exprsn-ai c2pa:verify <file.png> [anchor.pem…]` read it back and check the claim hashes, the data hash, the
-  signature, the chain and its trust. The HMAC manifest of Sprint 20 stays and still verifies. Without an issuing CA
-  or key custody the image keeps the HMAC manifest and says why. Setting `IMAGE_C2PA`. Built from the
-  specification's parts (CBOR, JUMBF, COSE) in `server/src/images/c2pa.ts`; the deviations a conformance validator
-  may flag are in `docs/security.md`.
-- Versioned artifacts (B-8001): the fenced blocks of a finished answer become artifacts of the conversation, named
-  from the fence or `<language>-<n>`; a later turn that changes one adds a version and the earlier ones stay
-  readable, the same content adds none. `GET /api/conversations/:id/artifacts` and `.../versions/:n` for owners and
-  share readers; transcripts of shares and links carry the artifacts of the shown messages. HTML renders in a
-  sandboxed iframe on `GET /api/public/artifacts/:vid/raw`, a short-lived capability URL with its own CSP (an opaque
-  origin with no access to the console, its cookies or the API). Settings `CHAT_ARTIFACT_MIN_CHARS`,
-  `CHAT_ARTIFACT_MAX_BYTES`, `CHAT_ARTIFACT_RAW_TTL_SECONDS`.
-- Console: the Images inspector and download dialog show the content credentials beside the HMAC manifest, with a
-  details dialog of every check; the Chat inspector (and the shared and public link views) has an Artifacts panel with
-  chips under each answer, a version switcher, the sandboxed render and text views. Prototype boards first;
-  `e2e/tests/chat.spec.ts` and `images.spec.ts` extended with axe-core.
+- The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
+  `models`, `loaded`, `show`, `load`, `unload`, `pull`, `delete`, `chat` and `embed`; `OllamaClient` implements it
+  unchanged and no gateway test changed. What a server cannot do throws `Unsupported`, which the gateway, placements
+  and the catalogue skip: nothing resident is reported, loads and unloads are recorded as `unsupported` instance
+  events, pulls onto a mixed pool and rolling upgrades skip the server.
+- `kind: openai` instances (B-4302): migration `037_model_servers` (`instances.kind` defaulting to `ollama`,
+  `socket_path`, `token_ref`, `token_tenant`, `token_owner`). A Chat Completions server on a URL (the egress check and
+  mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), with an optional bearer token stored in the
+  caller's vault (`model-servers/<id>#token`) or given as a vault reference, resolved as the person who saved it.
+  Health from `/health` or `/v1/models`; models from `/v1/models` (Apple's `pcc` listed but unavailable is not
+  offered); llama.cpp's `/props` context length. The new `instance.probe` job (`POST /api/admin/instances/:id/probe`,
+  run at registration) records whether tool calls and JSON schema output work; what the server reported is in
+  `settings.reported`. `GET /api/admin/model-servers` (`models:manage`) is the import picker's list. Audited
+  `instance.created {kind, socket, token}`, `instance.probe.started`.
+- Chat Completions mapped onto the gateway's chat (B-4303, `server/src/gateway/openai-server.ts`): messages, the
+  system prompt, tools and tool calls (ids kept, results paired with their calls), streamed deltas and reasoning,
+  `response_format` from a JSON schema (`format` on the gateway's chat request, also passed to Ollama), stop,
+  temperature, max tokens and usage (estimated when the server reports none). Ollama-only options are dropped and
+  noted once as a `dropped` instance event. The tool loop, guardrails, labels and metering are unchanged.
+  `server/test/fake-openai-server.ts` stands in for `fm serve`, `mlx_lm.server` and `llama-server` (TCP or socket).
+- Catalogue entries without a pull (B-4304): `POST /api/admin/models {serverInstanceId, serverModel}` registers a
+  listed model with `format: server`, no expected digest, `source: server:<instance>/<id>` (`models.server_instance_id`,
+  `server_model`), placed warm on the instance's pool. Licence, conformance (run on that instance; the tool-calling
+  test always runs and grants `tools`), label and dual-control approval apply; placements on a pool with such a
+  server are warm only; retiring deletes nothing on the server.
+- Embeddings and guard models (B-4305): a server that answers `/v1/embeddings` serves embedding models; one that
+  refuses is remembered and the request goes to another instance with the model, such as an Ollama pool, with no
+  change to the knowledge or guardrail code.
+- Docs (B-4306): `docs/deploy.md` on `fm serve --socket` under launchd beside Ollama on a `metal` pool, with
+  `mlx_lm.server` and `llama-server` as alternatives; `docs/security.md` on what the digest check cannot cover for
+  server-held models; `docs/api.md` and `docs/openapi.json`.
+- Console (B-4307): the Models screen gets Model servers (a drawer of the registered servers with what they report,
+  Register model server with the kind, the socket path or URL and the token, and Probe again), Request import gets
+  "Held by a model server" (the import picker of server-held models, unavailable ones disabled with the reason), and
+  a held model's inspector, approval and card say "held by the server, no digest" with the capabilities the server
+  reported. The prototype board first, then the live screen; `e2e/tests/models.spec.ts` registers an `fm serve`
+  socket (the e2e server starts the fake on one) and approves its model with axe-core and 320 px reflow checks. The
+  Pools screen's Load model offers Ollama instances only.
 
-### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
+### Overview and Jobs and queues live (Sprint 35b, B-4202, B-4203, with B-4207)
 
-- Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,
-  `audit_siem_destinations`.
-- The AI system inventory (B-7301): one list of the tenant's models, profiles, agents, workflows, tools, MCP servers
-  and datasets, each with an accountable owner, a human-oversight role, data provenance, model lineage (agent →
-  profile → model → base weights), known issues (open flags raised in its runs, failed evaluations) and whether the
-  entry is complete, on the Models screen's Inventory tab (`models:manage`). With the tenant's "publishing an agent
-  needs an owner" switch on, the registry refuses to approve an agent that has no owner. Audited `inventory.updated`
-  and `inventory.settings.updated`. `server/src/governance/inventory.ts`.
-- The register (B-7302): `GET /api/admin/inventory/register` as CSV or JSON, every system with its lineage and the
-  tenant's impact assessment, for ISO/IEC 42001 and EU AI Act deployer records; audited `inventory.exported`.
-- The Analytics screen (B-7401, `usage:read`): messages, agent and workflow runs, users, tokens, GPU time and cost
-  by workspace, group (through membership), model, profile and user (and tenant for system admins) over a period, a
-  per-day chart, totals, every figure a sum over the metering records so a day's totals equal that day's meter.
-  `server/src/tenancy/analytics.ts`, `/api/admin/analytics/summary` and `/daily`.
-- Prices and chargeback (B-7402): a price per model or per pool (per million input and output tokens and per
-  GPU-hour, energy or a set rate for local models, one currency per tenant, `tenant:manage`, audited); a row whose
-  records a price does not cover shows no cost rather than a partial one; the chargeback per workspace and month as
-  JSON or CSV with a total line that equals the screen's total, audited `analytics.chargeback.exported`.
-- OpenTelemetry GenAI attributes (B-7403): `gen_ai.provider.name`, `gen_ai.response.model`,
-  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` on the `gateway chat stream` span, for Ollama and
-  Chat Completions servers.
-- JSONL audit exports with a chain proof (B-7501): `POST /api/admin/audit/exports/jsonl {from, to}` writes every
-  event of the window (rows above the requester's clearance redacted to their hashes) and a checkpoint signed at the
-  window's last sequence; `exprsn-ai audit:verify-export <file>` and `verifyAuditExport` verify it offline. The Usage
-  and audit export dialog offers it.
-- Audit streaming per tenant (B-7501): HTTPS (NDJSON with a sealed bearer token) or syslog-over-TLS (RFC 5424, octet
-  counting, optional private CA) destinations proposed by a tenant admin and approved by a second one, tested,
-  disabled, with delivery counters, on the Usage and audit screen's Exports tab; the outbound address guard applies;
-  audited `audit.siem.*`. New setting `SIEM_TENANT_MAX_DESTINATIONS` (5). `server/src/audit/siem-destinations.ts`.
-- Prototype boards first (Models inventory tab, Analytics, Usage and audit); `e2e/tests/analytics.spec.ts` and
-  additions to `models.spec.ts` and `usage-audit.spec.ts` with axe-core.
+- The Overview screen is live, first in the Admin group (Q3): open alerts computed from the existing watches (an
+  instance behind the schema or not answering, the backup RPO, zone drift in the cluster, platform certificates and the
+  tenant's own certificates expiring within 7 days, the rate-limit probe), acknowledged tenant-wide and audited
+  `platform.alert.acknowledged` (Q15); counters for 1 h, 24 h or 7 d; every server instance with its `/readyz` checks,
+  schema, claimed jobs, sockets, rate-limit store, tracing and NTP offset; the next schedules; the recent audit; and
+  capacity (database size and pool, vectors, blob store). `GET /api/admin/overview`.
+- Instances register themselves: each server process beats into `platform_instances` every 30 seconds (migration
+  `037b_platform_ops`) with what `/readyz` answers, which now shares that code. Draining an instance from the screen
+  (Q14: a confirm and a recent sign-in, `platform:manage`) stops it claiming jobs and makes `/readyz` answer 503 with
+  `checks.shutdown: draining`; audited `platform.instance.drained`.
+- The Jobs and queues screen is live, with five tabs: Queues (every job type with queued, running, oldest, failed,
+  p50 and p95, and pause by type, which every instance honours within one poll: `jobs.type.paused`,
+  `jobs.type.resumed`), Jobs (filters by state, type, window, job id or trace id; cancel and retry, retry every failed
+  job: `jobs.cancelled`, `jobs.retried`), Schedules (last runs, run now, pause: `jobs.schedule.*`), Dead letters
+  (moderation jobs and workflow runs, redriven or discarded with a reason: `jobs.deadletter.discarded`) and Cache (the
+  tenant cache's namespaces with reads, hits and invalidations, and invalidate: `jobs.cache.invalidated`, Q1). System
+  admins see every tenant's jobs with a tenant filter, tenant admins their own (Q9). `JobQueue` gains pause by type
+  and `requeue`; `Scheduler` lists its schedules, runs one now and skips a paused one.
+- Both screens are in the accessibility and reflow checks (axe-core, Standard and Enhanced, light and dark, 320 and
+  640 px) through their own Playwright spec; `docs/accessibility.md` lists them.
+
+### Storage and Configuration live (Sprint 35c, B-4204, B-4205, with B-4207)
+
+- **Storage** (B-4204) is a live admin screen (`platform:manage`) with Stores, Usage, Quarantine, Integrity and Purges.
+  Stores: the blob store (health from `/readyz`, size and objects from the last verification, capacity from `statfs`),
+  the database (its own size and connections), the vector store, backups, the media work directory, training datasets
+  and model files, with daily growth samples (`ops.storage.sample`). Usage: bytes by workspace (files, versions,
+  trash, media, knowledge uploads, attachments) against the file quota (which counts files, versions and trash), by
+  user and by kind; quotas are set from the screen. Quarantine: what waits for its scan or was refused in the last 24
+  hours, the ClamAV scanner (`PING`, `VERSION`, counts today), Rescan (`503` while ClamAV does not answer) and Delete,
+  audited `file.quarantine.rescanned` and `file.quarantine.deleted`.
+- The integrity check `ops.blobs.verify` (every `BLOBS_VERIFY_MINUTES`, or from the screen, optionally comparing
+  checksums) lists the store and walks every row: **missing** objects a row names, **orphans** older than
+  `BLOBS_ORPHAN_GRACE_HOURS` that nothing references (never backups or mirror files), and **mismatches** (an object
+  whose SHA-256 changed without the server writing it). It never changes the store. Orphans are deleted after a dry
+  run that walks the references again, by one admin with a reason (decision Q10), within `BLOBS_DRY_RUN_MINUTES`;
+  audited `platform.blobs.orphans.dry-run` and `platform.blobs.orphans.deleted` with the list of objects. An expected
+  checksum change is accepted with a reason (`platform.blobs.checksum.accepted`).
+- Blob store migration (decision Q16) as a copy-then-switch job `ops.blobs.migrate`, started with a recent sign-in and
+  a reason: every instance also writes to the target while every object is copied and its SHA-256 checked, the target
+  is verified, then reads and writes switch, with reads of anything missed falling back to the old store until it is
+  retired. A failure puts every instance back on the old store. The store any process uses is now a switchable store
+  (`platform/blob-switch.ts`) that follows the shared mode.
+- **Configuration** (B-4205) is a live admin screen: every setting this build reads, from a descriptor generated from
+  `server/src/config/index.ts` (`npm run gen:settings -w server`; section, type, constraint, default, secret, hot or
+  restart, description), what each instance reads and where it came from (env, file, default or override), and
+  whether instances differ. Every instance reports under `INSTANCE_NAME` every `PLATFORM_INSTANCE_REPORT_SECONDS`;
+  secrets are reported as set or unset, their length, file and mode and a keyed fingerprint, never their value.
+  Export as `.env` (secrets masked, audited `platform.settings.exported`) and Diff against defaults.
+- Database overrides for every overridable setting under dual control (decision Q2): one platform admin proposes a
+  value with a reason, another approves (never the proposer). The value is checked against the field and the
+  configuration's cross-field rules. A hot setting applies on every instance at once; a restart setting at each
+  instance's next start (applied before the services are built), and the screen names the instances still waiting.
+  Secrets and the settings needed to reach the database are not overridable; `PLATFORM_SETTINGS_OVERRIDES=false` keeps
+  every setting in the environment. Audited `platform.setting.proposed`, `.approved`, `.rejected`, `.withdrawn`.
+- New routes under `/api/admin/storage/` and `/api/admin/platform/settings` (`docs/api.md`, `docs/openapi.json`,
+  `docs/permissions.md`); migration `037c_platform_storage`; new settings `PLATFORM_SETTINGS_OVERRIDES`,
+  `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`, `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`,
+  `BLOBS_DRY_RUN_MINUTES`. The boards (B-4201) follow what the server does: the migration and the verification are no
+  longer proposals, a checksum mismatch is accepted rather than re-sealed, the purge table lists the jobs the server
+  schedules, and Mark restarted became Check again (the banner clears itself as instances report).
+- Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
+  `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
+  and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
+
+### Social and messaging live (Sprint 35d, B-4206, with B-4207)
+
+- The Social and messaging screen is live (`#/social`, after Channels, its own sidebar icon; decision Q13), over
+  `GET`/`PUT` routes under `/api/admin/social/` (`docs/api.md`). Migration `037d_platform_social`
+  (`social_workspace_policies`, `social_tenant_settings`, `feed_trending_exclusions`, `messaging_exports`) and the
+  group state `archived`. `social:manage` now also governs these policies (decision Q4); held content stays under
+  `moderation:manage`.
+- Feed: per-workspace approval policy (whether posts pass `user-input` in full, with the platform baseline always
+  kept; who approves held posts; media allowed and their largest size), a per-tenant trending exclusion list honoured
+  at once and by the `feed.trending` job, Run trending now, and the weekly digest's profile, weekday and hour (UTC),
+  size and highest label per tenant, with a test digest sent to the requester alone.
+- Groups and events: per-workspace defaults (who may create groups, visibility, join mode, event capacity), groups
+  across workspaces with members, pending requests, upcoming events, open reports and feeds, Transfer ownership and
+  Archive (read only), and the tenant's calendar feeds with Revoke: a revoked feed answers 404 on its next fetch
+  (the item's "done when").
+- Messaging: retention, limits, search and the tenant's summary profile; legal-hold export of a conversation under
+  dual control (decision Q5): requested with a reason and a recent sign-in, approved by a second platform admin, then
+  written by the job `messaging.conversation.export` as a sealed CSV only the requester downloads. Audited
+  `messaging.export.*` and `messaging.conversation.exported`.
+- Realtime (`platform:manage`): this instance's rooms and sockets by kind, signals per minute and those refused by
+  `ROOM_SIGNALS_PER_MINUTE`, socket authentication failures, and Close a user's rooms on every instance
+  (`TOPICS.roomsClose`, audited `realtime.rooms.closed`).
+- Relations: follow, block, mute and list counts, the most blocked accounts (counts only), and contact rules per
+  workspace (anyone in the workspace, contacts only, admins only) enforced when a conversation is started or someone
+  added, on top of each person's own rule.
+- Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
+  `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
+  refused signals instead of a backlog, as the server reports them.
+
+### Tenant provisioning templates (Sprint 35d, B-4501)
+
+- Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system
+  admins), `POST /api/admin/tenants/from-template` and `exprsn-ai tenant:create --template <id>`. The first
+  templates are exprsn-platform's organisation types: **enterprise** (General, Finance, People, Engineering and Legal
+  workspaces up to confidential; Reader and Contributor roles; assistant, analyst and summariser profiles; an issuing
+  CA), **team** (Team and Projects workspaces; a Contributor role; an assistant profile; an issuing CA) and
+  **personal** (one confidential workspace; an assistant profile). `GET /api/admin/tenant-templates` lists what each
+  creates. No new permission (`tenant:manage` and the system-admin role) and no migration.
+- One step: the tenant, its local user store and data key, the workspaces, the custom roles (member-baseline
+  permissions only, version 1 applied), draft gateway profiles pinned to a pool in the template's zone (`inference`)
+  when one may process their label, the tenant's intermediate CA under the platform root when there is one (reported
+  as skipped otherwise), and the first admin: `tenant-admin`, cleared for the highest workspace ceiling, a member of
+  every workspace, with a single-use enrolment link by default or a password. Audited in both chains: the parts' own
+  events and `tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin}`.
+- `admin:create`'s `createAdmin` takes the audit actor, so the first admin's `user.created` names the provisioning
+  admin rather than the CLI.
+
+### Groups depth (Sprint 36a, B-4401 to B-4405)
+
+- Channels inside a group (B-4401): groups one level down with their own members, roles, posts and events, created by
+  the group's owners and moderators (`POST /api/groups/:id/channels`). The group is a channel's outer boundary: only
+  its readers see its channels, only its members join them, leaving the group leaves them, and archiving or deleting
+  the group takes them along. The group's owners act as owners of its channels. A channel's label is never below its
+  group's; raising the group's label raises the channels below it. The feed's group scope and fan-out follow the same
+  rule. Migration `038_groups2`.
+- Discovery (B-4402): `GET /api/groups/discover` lists the groups the caller may join, ranked by shared members and
+  activity of the last 30 days, and never one labelled above the caller's clearance.
+- Places (B-4403): an optional place on groups (a sealed name and a point) and a point on events, with distance
+  filters (`near`, `km`) on the group list, discovery and the calendar. PostGIS narrows on PostgreSQL when the
+  extension is there (the migration creates it and a GiST index when the role may), a bounding box elsewhere; one
+  great-circle distance decides, so the three databases return the same groups.
+- Trending groups (B-4404): the `groups.trending` job counts joins and posts per group like trending hashtags;
+  `GET /api/groups/trending` and Recount now on Social and messaging.
+- Group categories (B-4405, decision Q6): a tenant-managed list on Social and messaging
+  (`/api/admin/social/group-categories`), a category per group, and category filters on Groups and Discover; removing
+  a category leaves its groups uncategorised, never hidden.
+- Screens: Groups gains Discover (ranked), Trending, category and distance filters, a group's category and place, a
+  Channels tab and channel pages, and points on events; Social and messaging gains Group categories and Trending
+  groups. Boards first in `design/prototype/`, then live; `e2e/tests/groups-depth.spec.ts` checks them with axe-core,
+  the in-page checker and reflow.
+
+### Blob deduplication, held form values and reveal anomalies (Sprint 36b, B-4601, B-4701, B-4803)
+
+- Reference-counted blobs in the file store, within one tenant only (B-4601): migration `038b_dedup_held_vault`
+  (`file_blobs`, `file_versions.blob_id`). When a version passes its scan and the tenant already stores the same
+  content (SHA-256 of the plaintext), the version reads the existing sealed object and the quarantined copy is
+  deleted; otherwise its object becomes a blob later uploads share. The trash purge releases references and deletes
+  an object with its last reader; offboarding deletes the tenant's blob rows. Every upload still stores and scans its
+  full bytes, and quotas still count each version's own size. The migration registers the first ready copy of each
+  content per tenant. `GET /api/admin/storage/usage` adds `dedup` (objects, shared objects, references, bytes held,
+  bytes stored, bytes saved, per tenant), shown on Storage, Usage. The integrity check, orphan deletion, purges and
+  blob store migration see shared objects through `file_blobs.blob_key`. `file.version.ready` names the shared blob.
+- Held form values (B-4701, closing the B-2205 known gap): a public form value the `user-input` guardrail holds no
+  longer refuses the submission. It waits as a held submission (values sealed, `app_form_holds`) with a hold flag of
+  source kind `app-form-submission`, routed to moderation queues like any flag; the submitter gets `202 {held: true}`.
+  `GET /api/apps/held`, `GET /api/apps/held/:id` and `POST /api/apps/held/:id/decide` (`flags:review` or
+  `moderation:review`) list, read and accept (into a record, written by no one, `source: form`) or reject it; the
+  Flags decide route does the same for these flags and shows the values. Moderation shows the held submission in the
+  queue inspector with Accept and Reject. At most `APPS_HELD_MAX_PER_FORM` (200) wait per form; decided ones go
+  `APPS_HELD_KEEP_DAYS` (30) after the decision (`apps.held.purge`). Audited `app.form.held`,
+  `app.form.held.accepted`, `app.form.held.rejected`.
+- Anomaly detection on vault reveals (B-4803): reveals of KV secrets over the API are kept (`vault_reveals`,
+  `VAULT_ANOMALY_HISTORY_DAYS`) and each is compared with the secret's history before it is answered: a new address,
+  an odd hour of the day (once it has `VAULT_ANOMALY_MIN_HISTORY` reveals) or a burst (`VAULT_ANOMALY_BURST` reveals by
+  one caller within `VAULT_ANOMALY_BURST_SECONDS`) opens a flag for the secret's owner (`vault_reveal_flags`), with a
+  notification and email. `GET /api/vault/reveal-flags`, `GET /api/vault/reveal-flags/:id` and `POST
+  /api/vault/reveal-flags/:id/resolve` (`secrets:read`; the owner or `secrets:admin`) list and resolve them as expected
+  or suspicious; Vault has a Reveal flags tab. Detection never refuses a reveal; `VAULT_ANOMALY_BURST=0` turns it off.
+  Audited `vault.reveal.flagged`, `vault.reveal.flag.updated`, `vault.reveal.flag.resolved`; `vault.reveals.prune`
+  drops old reveals hourly.
+
+### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
+
+- Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
+  `media`, the sealed description, the safety score), `knowledge_doc_labels`, image eval cases (`eval_cases.media_key`,
+  `media_type`) and the `knowledge_search` built-in tool.
+- Images as knowledge documents (B-8801): PNG, JPEG, WebP, GIF and HEIC uploads pass quarantine and the image safety
+  check (a flagged image is rejected and deleted, audited `knowledge.image.withheld`); the base's vision profile
+  writes a caption and the text in the image, which become the indexed text, so a screenshot is found by a phrase from
+  it. The images inside PDF and Word documents become the document's parts, at least its label; a scanned PDF is
+  indexed through its images. `server/src/knowledge/images.ts`.
+- The `vision` classifier engine (B-8802): labels with thresholds like `llm`, scored by a vision profile from the
+  image, JSON answers validated against the labels. A knowledge base names its published vision classifiers; the
+  labels are stored on each image with their scores and the classifier version (`knowledge.classify`), and a new
+  version of a published classifier re-labels the base's images in the background (`knowledge.reclassify`, audited
+  `knowledge.reclassified`) without re-uploading them.
+- Label search (B-8803): `labels: {any, all, minScore}` on `POST /api/knowledge/search` and on the documents list
+  (`labels`, `labelsAll`, `minScore`, `media=image`); `GET /api/knowledge/bases/:id/labels` for the filter chips; image
+  hits carry the caption, a text excerpt, the labels and a thumbnail URL (`GET /api/knowledge/documents/:id/thumbnail`,
+  at the caller's clearance). The built-in tool `knowledge_search` is the knowledge step of agents and workflows, with
+  the same filters, at the label of the call.
+- Console (B-8804): the Knowledge screen shows image documents with their thumbnail, caption, labels and scores, label
+  filter chips, re-classify for a base and an image, and the vision profile and image classifiers in a base's settings;
+  the Classifiers screen offers the `vision` engine. Prototype boards first; axe-core and reflow checks in
+  `e2e/tests/knowledge-images.spec.ts`.
+- Evaluation (B-8805): image cases in the eval-set format (`image` as base64 on the samples route, or
+  `PUT /api/admin/classifiers/:id/samples/image`), sealed in the blob store; a vision classifier publishes only after
+  an evaluation with at least 200 image cases per label. `POST /api/classify` takes an image for a vision classifier.
+- Docs: `docs/api.md`, `docs/openapi.json`, `docs/security.md` (what a caption or OCR text may leak, labels as
+  metadata at the image's label, known gaps) and `docs/accessibility.md`.
 
 ### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
 
@@ -162,14 +341,6 @@
   with the baseline rule and a guard-model rule on the fake guard model; canary cases check that a marked prompt is
   not followed.
 - Tests that compared a tool result echoed by the fake model now expect it wrapped (`mcp.test.ts`, `agents.test.ts`).
-
-### Pinned models stay pinned while they serve
-
-- Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned
-  model, the instance's keep-alive for a warm one, none for a cold one (Ollama's default). Before, only explicit
-  loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
-  expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
-  instance poll.
 
 ### The MCP server and MCP authorization (Sprint 37b, B-7101 to B-7103)
 
@@ -231,6 +402,40 @@
   `IDENTITY_SCIM_TOKEN_MAX_DAYS`.
 - Docs: `docs/api.md`, `docs/openapi.json`, `docs/identity.md` (SCIM and its conformance), `docs/security.md` (SCIM
   tokens, shares, MongoDB lease expiry, what unlisted means), `docs/accessibility.md`, `docs/permissions.md`.
+
+### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
+
+- Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,
+  `audit_siem_destinations`.
+- The AI system inventory (B-7301): one list of the tenant's models, profiles, agents, workflows, tools, MCP servers
+  and datasets, each with an accountable owner, a human-oversight role, data provenance, model lineage (agent →
+  profile → model → base weights), known issues (open flags raised in its runs, failed evaluations) and whether the
+  entry is complete, on the Models screen's Inventory tab (`models:manage`). With the tenant's "publishing an agent
+  needs an owner" switch on, the registry refuses to approve an agent that has no owner. Audited `inventory.updated`
+  and `inventory.settings.updated`. `server/src/governance/inventory.ts`.
+- The register (B-7302): `GET /api/admin/inventory/register` as CSV or JSON, every system with its lineage and the
+  tenant's impact assessment, for ISO/IEC 42001 and EU AI Act deployer records; audited `inventory.exported`.
+- The Analytics screen (B-7401, `usage:read`): messages, agent and workflow runs, users, tokens, GPU time and cost
+  by workspace, group (through membership), model, profile and user (and tenant for system admins) over a period, a
+  per-day chart, totals, every figure a sum over the metering records so a day's totals equal that day's meter.
+  `server/src/tenancy/analytics.ts`, `/api/admin/analytics/summary` and `/daily`.
+- Prices and chargeback (B-7402): a price per model or per pool (per million input and output tokens and per
+  GPU-hour, energy or a set rate for local models, one currency per tenant, `tenant:manage`, audited); a row whose
+  records a price does not cover shows no cost rather than a partial one; the chargeback per workspace and month as
+  JSON or CSV with a total line that equals the screen's total, audited `analytics.chargeback.exported`.
+- OpenTelemetry GenAI attributes (B-7403): `gen_ai.provider.name`, `gen_ai.response.model`,
+  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` on the `gateway chat stream` span, for Ollama and
+  Chat Completions servers.
+- JSONL audit exports with a chain proof (B-7501): `POST /api/admin/audit/exports/jsonl {from, to}` writes every
+  event of the window (rows above the requester's clearance redacted to their hashes) and a checkpoint signed at the
+  window's last sequence; `exprsn-ai audit:verify-export <file>` and `verifyAuditExport` verify it offline. The Usage
+  and audit export dialog offers it.
+- Audit streaming per tenant (B-7501): HTTPS (NDJSON with a sealed bearer token) or syslog-over-TLS (RFC 5424, octet
+  counting, optional private CA) destinations proposed by a tenant admin and approved by a second one, tested,
+  disabled, with delivery counters, on the Usage and audit screen's Exports tab; the outbound address guard applies;
+  audited `audit.siem.*`. New setting `SIEM_TENANT_MAX_DESTINATIONS` (5). `server/src/audit/siem-destinations.ts`.
+- Prototype boards first (Models inventory tab, Analytics, Usage and audit); `e2e/tests/analytics.spec.ts` and
+  additions to `models.spec.ts` and `usage-audit.spec.ts` with axe-core.
 
 ### Red-team suites, agent identities and handoffs (Sprint 38b, B-7001 to B-7002, B-7701, B-7801)
 
@@ -296,6 +501,31 @@
   patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
   `e2e/tests/compliance.spec.ts`.
 
+### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
+
+- Migration `041_provenance_artifacts`: `image_jobs.c2pa`, `pki_content_signers`, `chat_artifacts`,
+  `chat_artifact_versions`.
+- Content credentials (B-7901): a generated PNG carries a C2PA manifest store in a `caBX` chunk (`c2pa.actions`,
+  `c2pa.hash.data` over every byte outside the chunk, `io.exprsn.generation`), signed as a COSE_Sign1 (ES256) by the
+  tenant's content-credentials certificate, which the tenant's issuing CA makes on first use with its key in custody
+  and lists among the tenant's certificates (revoke it there and the next image signs with a new one). The manifest
+  travels with the bytes through the blob store, downloads and attachments; `GET /api/images/:id/content-credentials`
+  and `exprsn-ai c2pa:verify <file.png> [anchor.pem…]` read it back and check the claim hashes, the data hash, the
+  signature, the chain and its trust. The HMAC manifest of Sprint 20 stays and still verifies. Without an issuing CA
+  or key custody the image keeps the HMAC manifest and says why. Setting `IMAGE_C2PA`. Built from the
+  specification's parts (CBOR, JUMBF, COSE) in `server/src/images/c2pa.ts`; the deviations a conformance validator
+  may flag are in `docs/security.md`.
+- Versioned artifacts (B-8001): the fenced blocks of a finished answer become artifacts of the conversation, named
+  from the fence or `<language>-<n>`; a later turn that changes one adds a version and the earlier ones stay
+  readable, the same content adds none. `GET /api/conversations/:id/artifacts` and `.../versions/:n` for owners and
+  share readers; transcripts of shares and links carry the artifacts of the shown messages. HTML renders in a
+  sandboxed iframe on `GET /api/public/artifacts/:vid/raw`, a short-lived capability URL with its own CSP (an opaque
+  origin with no access to the console, its cookies or the API). Settings `CHAT_ARTIFACT_MIN_CHARS`,
+  `CHAT_ARTIFACT_MAX_BYTES`, `CHAT_ARTIFACT_RAW_TTL_SECONDS`.
+- Console: the Images inspector and download dialog show the content credentials beside the HMAC manifest, with a
+  details dialog of every check; the Chat inspector (and the shared and public link views) has an Artifacts panel with
+  chips under each answer, a version switcher, the sandboxed render and text views. Prototype boards first;
+  `e2e/tests/chat.spec.ts` and `images.spec.ts` extended with axe-core.
 
 ### App packages, environments and promotion (Sprint 39b, B-8201 to B-8204)
 
@@ -395,244 +625,25 @@
   app-limited key is refused on `/v1` and the MCP server outright; the tenant CA path checks one intermediate and
   no OCSP; the session's `host` is the token's `iss`; a reload of an embed page needs a new host token.
 
-### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
+### Pinned models stay pinned while they serve
 
-- Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
-  `media`, the sealed description, the safety score), `knowledge_doc_labels`, image eval cases (`eval_cases.media_key`,
-  `media_type`) and the `knowledge_search` built-in tool.
-- Images as knowledge documents (B-8801): PNG, JPEG, WebP, GIF and HEIC uploads pass quarantine and the image safety
-  check (a flagged image is rejected and deleted, audited `knowledge.image.withheld`); the base's vision profile
-  writes a caption and the text in the image, which become the indexed text, so a screenshot is found by a phrase from
-  it. The images inside PDF and Word documents become the document's parts, at least its label; a scanned PDF is
-  indexed through its images. `server/src/knowledge/images.ts`.
-- The `vision` classifier engine (B-8802): labels with thresholds like `llm`, scored by a vision profile from the
-  image, JSON answers validated against the labels. A knowledge base names its published vision classifiers; the
-  labels are stored on each image with their scores and the classifier version (`knowledge.classify`), and a new
-  version of a published classifier re-labels the base's images in the background (`knowledge.reclassify`, audited
-  `knowledge.reclassified`) without re-uploading them.
-- Label search (B-8803): `labels: {any, all, minScore}` on `POST /api/knowledge/search` and on the documents list
-  (`labels`, `labelsAll`, `minScore`, `media=image`); `GET /api/knowledge/bases/:id/labels` for the filter chips; image
-  hits carry the caption, a text excerpt, the labels and a thumbnail URL (`GET /api/knowledge/documents/:id/thumbnail`,
-  at the caller's clearance). The built-in tool `knowledge_search` is the knowledge step of agents and workflows, with
-  the same filters, at the label of the call.
-- Console (B-8804): the Knowledge screen shows image documents with their thumbnail, caption, labels and scores, label
-  filter chips, re-classify for a base and an image, and the vision profile and image classifiers in a base's settings;
-  the Classifiers screen offers the `vision` engine. Prototype boards first; axe-core and reflow checks in
-  `e2e/tests/knowledge-images.spec.ts`.
-- Evaluation (B-8805): image cases in the eval-set format (`image` as base64 on the samples route, or
-  `PUT /api/admin/classifiers/:id/samples/image`), sealed in the blob store; a vision classifier publishes only after
-  an evaluation with at least 200 image cases per label. `POST /api/classify` takes an image for a vision classifier.
-- Docs: `docs/api.md`, `docs/openapi.json`, `docs/security.md` (what a caption or OCR text may leak, labels as
-  metadata at the image's label, known gaps) and `docs/accessibility.md`.
+- Every chat and embedding request to an Ollama instance now carries its placement's keep-alive: `-1` for a pinned
+  model, the instance's keep-alive for a warm one, none for a cold one (Ollama's default). Before, only explicit
+  loads set it, and Ollama resets a model's expiry on every request, so the first answer a pinned model gave set its
+  expiry back to Ollama's default (five minutes) and the pin was lost. The keep-alive per model is refreshed on every
+  instance poll.
 
-### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
+### Release 1.6.0 (B-5101)
 
-- The gateway client behind an interface (B-4301): `ModelServer` (`server/src/gateway/server.ts`) with `version`,
-  `models`, `loaded`, `show`, `load`, `unload`, `pull`, `delete`, `chat` and `embed`; `OllamaClient` implements it
-  unchanged and no gateway test changed. What a server cannot do throws `Unsupported`, which the gateway, placements
-  and the catalogue skip: nothing resident is reported, loads and unloads are recorded as `unsupported` instance
-  events, pulls onto a mixed pool and rolling upgrades skip the server.
-- `kind: openai` instances (B-4302): migration `037_model_servers` (`instances.kind` defaulting to `ollama`,
-  `socket_path`, `token_ref`, `token_tenant`, `token_owner`). A Chat Completions server on a URL (the egress check and
-  mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), with an optional bearer token stored in the
-  caller's vault (`model-servers/<id>#token`) or given as a vault reference, resolved as the person who saved it.
-  Health from `/health` or `/v1/models`; models from `/v1/models` (Apple's `pcc` listed but unavailable is not
-  offered); llama.cpp's `/props` context length. The new `instance.probe` job (`POST /api/admin/instances/:id/probe`,
-  run at registration) records whether tool calls and JSON schema output work; what the server reported is in
-  `settings.reported`. `GET /api/admin/model-servers` (`models:manage`) is the import picker's list. Audited
-  `instance.created {kind, socket, token}`, `instance.probe.started`.
-- Chat Completions mapped onto the gateway's chat (B-4303, `server/src/gateway/openai-server.ts`): messages, the
-  system prompt, tools and tool calls (ids kept, results paired with their calls), streamed deltas and reasoning,
-  `response_format` from a JSON schema (`format` on the gateway's chat request, also passed to Ollama), stop,
-  temperature, max tokens and usage (estimated when the server reports none). Ollama-only options are dropped and
-  noted once as a `dropped` instance event. The tool loop, guardrails, labels and metering are unchanged.
-  `server/test/fake-openai-server.ts` stands in for `fm serve`, `mlx_lm.server` and `llama-server` (TCP or socket).
-- Catalogue entries without a pull (B-4304): `POST /api/admin/models {serverInstanceId, serverModel}` registers a
-  listed model with `format: server`, no expected digest, `source: server:<instance>/<id>` (`models.server_instance_id`,
-  `server_model`), placed warm on the instance's pool. Licence, conformance (run on that instance; the tool-calling
-  test always runs and grants `tools`), label and dual-control approval apply; placements on a pool with such a
-  server are warm only; retiring deletes nothing on the server.
-- Embeddings and guard models (B-4305): a server that answers `/v1/embeddings` serves embedding models; one that
-  refuses is remembered and the request goes to another instance with the model, such as an Ollama pool, with no
-  change to the knowledge or guardrail code.
-- Docs (B-4306): `docs/deploy.md` on `fm serve --socket` under launchd beside Ollama on a `metal` pool, with
-  `mlx_lm.server` and `llama-server` as alternatives; `docs/security.md` on what the digest check cannot cover for
-  server-held models; `docs/api.md` and `docs/openapi.json`.
-- Console (B-4307): the Models screen gets Model servers (a drawer of the registered servers with what they report,
-  Register model server with the kind, the socket path or URL and the token, and Probe again), Request import gets
-  "Held by a model server" (the import picker of server-held models, unavailable ones disabled with the reason), and
-  a held model's inspector, approval and card say "held by the server, no digest" with the capabilities the server
-  reported. The prototype board first, then the live screen; `e2e/tests/models.spec.ts` registers an `fm serve`
-  socket (the e2e server starts the fake on one) and approves its model with axe-core and 320 px reflow checks. The
-  Pools screen's Load model offers Ollama instances only.
-
-### Social and messaging live (Sprint 35d, B-4206, with B-4207)
-
-- The Social and messaging screen is live (`#/social`, after Channels, its own sidebar icon; decision Q13), over
-  `GET`/`PUT` routes under `/api/admin/social/` (`docs/api.md`). Migration `037d_platform_social`
-  (`social_workspace_policies`, `social_tenant_settings`, `feed_trending_exclusions`, `messaging_exports`) and the
-  group state `archived`. `social:manage` now also governs these policies (decision Q4); held content stays under
-  `moderation:manage`.
-- Feed: per-workspace approval policy (whether posts pass `user-input` in full, with the platform baseline always
-  kept; who approves held posts; media allowed and their largest size), a per-tenant trending exclusion list honoured
-  at once and by the `feed.trending` job, Run trending now, and the weekly digest's profile, weekday and hour (UTC),
-  size and highest label per tenant, with a test digest sent to the requester alone.
-- Groups and events: per-workspace defaults (who may create groups, visibility, join mode, event capacity), groups
-  across workspaces with members, pending requests, upcoming events, open reports and feeds, Transfer ownership and
-  Archive (read only), and the tenant's calendar feeds with Revoke: a revoked feed answers 404 on its next fetch
-  (the item's "done when").
-- Messaging: retention, limits, search and the tenant's summary profile; legal-hold export of a conversation under
-  dual control (decision Q5): requested with a reason and a recent sign-in, approved by a second platform admin, then
-  written by the job `messaging.conversation.export` as a sealed CSV only the requester downloads. Audited
-  `messaging.export.*` and `messaging.conversation.exported`.
-- Realtime (`platform:manage`): this instance's rooms and sockets by kind, signals per minute and those refused by
-  `ROOM_SIGNALS_PER_MINUTE`, socket authentication failures, and Close a user's rooms on every instance
-  (`TOPICS.roomsClose`, audited `realtime.rooms.closed`).
-- Relations: follow, block, mute and list counts, the most blocked accounts (counts only), and contact rules per
-  workspace (anyone in the workspace, contacts only, admins only) enforced when a conversation is started or someone
-  added, on top of each person's own rule.
-- Accessibility and reflow for the screen and its dialogs (B-4207's share): `docs/accessibility.md`,
-  `e2e/tests/social.spec.ts`. The prototype board now names a second platform admin as the export approver and shows
-  refused signals instead of a backlog, as the server reports them.
-
-### Groups depth (Sprint 36a, B-4401 to B-4405)
-
-- Channels inside a group (B-4401): groups one level down with their own members, roles, posts and events, created by
-  the group's owners and moderators (`POST /api/groups/:id/channels`). The group is a channel's outer boundary: only
-  its readers see its channels, only its members join them, leaving the group leaves them, and archiving or deleting
-  the group takes them along. The group's owners act as owners of its channels. A channel's label is never below its
-  group's; raising the group's label raises the channels below it. The feed's group scope and fan-out follow the same
-  rule. Migration `038_groups2`.
-- Discovery (B-4402): `GET /api/groups/discover` lists the groups the caller may join, ranked by shared members and
-  activity of the last 30 days, and never one labelled above the caller's clearance.
-- Places (B-4403): an optional place on groups (a sealed name and a point) and a point on events, with distance
-  filters (`near`, `km`) on the group list, discovery and the calendar. PostGIS narrows on PostgreSQL when the
-  extension is there (the migration creates it and a GiST index when the role may), a bounding box elsewhere; one
-  great-circle distance decides, so the three databases return the same groups.
-- Trending groups (B-4404): the `groups.trending` job counts joins and posts per group like trending hashtags;
-  `GET /api/groups/trending` and Recount now on Social and messaging.
-- Group categories (B-4405, decision Q6): a tenant-managed list on Social and messaging
-  (`/api/admin/social/group-categories`), a category per group, and category filters on Groups and Discover; removing
-  a category leaves its groups uncategorised, never hidden.
-- Screens: Groups gains Discover (ranked), Trending, category and distance filters, a group's category and place, a
-  Channels tab and channel pages, and points on events; Social and messaging gains Group categories and Trending
-  groups. Boards first in `design/prototype/`, then live; `e2e/tests/groups-depth.spec.ts` checks them with axe-core,
-  the in-page checker and reflow.
-
-### Tenant provisioning templates (Sprint 35d, B-4501)
-
-- Tenants are created from a template (decision Q11): **Create from template** on the Tenants screen (system
-  admins), `POST /api/admin/tenants/from-template` and `exprsn-ai tenant:create --template <id>`. The first
-  templates are exprsn-platform's organisation types: **enterprise** (General, Finance, People, Engineering and Legal
-  workspaces up to confidential; Reader and Contributor roles; assistant, analyst and summariser profiles; an issuing
-  CA), **team** (Team and Projects workspaces; a Contributor role; an assistant profile; an issuing CA) and
-  **personal** (one confidential workspace; an assistant profile). `GET /api/admin/tenant-templates` lists what each
-  creates. No new permission (`tenant:manage` and the system-admin role) and no migration.
-- One step: the tenant, its local user store and data key, the workspaces, the custom roles (member-baseline
-  permissions only, version 1 applied), draft gateway profiles pinned to a pool in the template's zone (`inference`)
-  when one may process their label, the tenant's intermediate CA under the platform root when there is one (reported
-  as skipped otherwise), and the first admin: `tenant-admin`, cleared for the highest workspace ceiling, a member of
-  every workspace, with a single-use enrolment link by default or a password. Audited in both chains: the parts' own
-  events and `tenant.template.applied {template, workspaces, roles, profiles, zone, issuer, admin}`.
-- `admin:create`'s `createAdmin` takes the audit actor, so the first admin's `user.created` names the provisioning
-  admin rather than the CLI.
-
-### Overview and Jobs and queues live (Sprint 35b, B-4202, B-4203, with B-4207)
-
-- The Overview screen is live, first in the Admin group (Q3): open alerts computed from the existing watches (an
-  instance behind the schema or not answering, the backup RPO, zone drift in the cluster, platform certificates and the
-  tenant's own certificates expiring within 7 days, the rate-limit probe), acknowledged tenant-wide and audited
-  `platform.alert.acknowledged` (Q15); counters for 1 h, 24 h or 7 d; every server instance with its `/readyz` checks,
-  schema, claimed jobs, sockets, rate-limit store, tracing and NTP offset; the next schedules; the recent audit; and
-  capacity (database size and pool, vectors, blob store). `GET /api/admin/overview`.
-- Instances register themselves: each server process beats into `platform_instances` every 30 seconds (migration
-  `037b_platform_ops`) with what `/readyz` answers, which now shares that code. Draining an instance from the screen
-  (Q14: a confirm and a recent sign-in, `platform:manage`) stops it claiming jobs and makes `/readyz` answer 503 with
-  `checks.shutdown: draining`; audited `platform.instance.drained`.
-- The Jobs and queues screen is live, with five tabs: Queues (every job type with queued, running, oldest, failed,
-  p50 and p95, and pause by type, which every instance honours within one poll: `jobs.type.paused`,
-  `jobs.type.resumed`), Jobs (filters by state, type, window, job id or trace id; cancel and retry, retry every failed
-  job: `jobs.cancelled`, `jobs.retried`), Schedules (last runs, run now, pause: `jobs.schedule.*`), Dead letters
-  (moderation jobs and workflow runs, redriven or discarded with a reason: `jobs.deadletter.discarded`) and Cache (the
-  tenant cache's namespaces with reads, hits and invalidations, and invalidate: `jobs.cache.invalidated`, Q1). System
-  admins see every tenant's jobs with a tenant filter, tenant admins their own (Q9). `JobQueue` gains pause by type
-  and `requeue`; `Scheduler` lists its schedules, runs one now and skips a paused one.
-- Both screens are in the accessibility and reflow checks (axe-core, Standard and Enhanced, light and dark, 320 and
-  640 px) through their own Playwright spec; `docs/accessibility.md` lists them.
-
-### Storage and Configuration live (Sprint 35c, B-4204, B-4205, with B-4207)
-
-- **Storage** (B-4204) is a live admin screen (`platform:manage`) with Stores, Usage, Quarantine, Integrity and Purges.
-  Stores: the blob store (health from `/readyz`, size and objects from the last verification, capacity from `statfs`),
-  the database (its own size and connections), the vector store, backups, the media work directory, training datasets
-  and model files, with daily growth samples (`ops.storage.sample`). Usage: bytes by workspace (files, versions,
-  trash, media, knowledge uploads, attachments) against the file quota (which counts files, versions and trash), by
-  user and by kind; quotas are set from the screen. Quarantine: what waits for its scan or was refused in the last 24
-  hours, the ClamAV scanner (`PING`, `VERSION`, counts today), Rescan (`503` while ClamAV does not answer) and Delete,
-  audited `file.quarantine.rescanned` and `file.quarantine.deleted`.
-- The integrity check `ops.blobs.verify` (every `BLOBS_VERIFY_MINUTES`, or from the screen, optionally comparing
-  checksums) lists the store and walks every row: **missing** objects a row names, **orphans** older than
-  `BLOBS_ORPHAN_GRACE_HOURS` that nothing references (never backups or mirror files), and **mismatches** (an object
-  whose SHA-256 changed without the server writing it). It never changes the store. Orphans are deleted after a dry
-  run that walks the references again, by one admin with a reason (decision Q10), within `BLOBS_DRY_RUN_MINUTES`;
-  audited `platform.blobs.orphans.dry-run` and `platform.blobs.orphans.deleted` with the list of objects. An expected
-  checksum change is accepted with a reason (`platform.blobs.checksum.accepted`).
-- Blob store migration (decision Q16) as a copy-then-switch job `ops.blobs.migrate`, started with a recent sign-in and
-  a reason: every instance also writes to the target while every object is copied and its SHA-256 checked, the target
-  is verified, then reads and writes switch, with reads of anything missed falling back to the old store until it is
-  retired. A failure puts every instance back on the old store. The store any process uses is now a switchable store
-  (`platform/blob-switch.ts`) that follows the shared mode.
-- **Configuration** (B-4205) is a live admin screen: every setting this build reads, from a descriptor generated from
-  `server/src/config/index.ts` (`npm run gen:settings -w server`; section, type, constraint, default, secret, hot or
-  restart, description), what each instance reads and where it came from (env, file, default or override), and
-  whether instances differ. Every instance reports under `INSTANCE_NAME` every `PLATFORM_INSTANCE_REPORT_SECONDS`;
-  secrets are reported as set or unset, their length, file and mode and a keyed fingerprint, never their value.
-  Export as `.env` (secrets masked, audited `platform.settings.exported`) and Diff against defaults.
-- Database overrides for every overridable setting under dual control (decision Q2): one platform admin proposes a
-  value with a reason, another approves (never the proposer). The value is checked against the field and the
-  configuration's cross-field rules. A hot setting applies on every instance at once; a restart setting at each
-  instance's next start (applied before the services are built), and the screen names the instances still waiting.
-  Secrets and the settings needed to reach the database are not overridable; `PLATFORM_SETTINGS_OVERRIDES=false` keeps
-  every setting in the environment. Audited `platform.setting.proposed`, `.approved`, `.rejected`, `.withdrawn`.
-- New routes under `/api/admin/storage/` and `/api/admin/platform/settings` (`docs/api.md`, `docs/openapi.json`,
-  `docs/permissions.md`); migration `037c_platform_storage`; new settings `PLATFORM_SETTINGS_OVERRIDES`,
-  `INSTANCE_NAME`, `PLATFORM_INSTANCE_REPORT_SECONDS`, `BLOBS_VERIFY_MINUTES`, `BLOBS_ORPHAN_GRACE_HOURS`,
-  `BLOBS_DRY_RUN_MINUTES`. The boards (B-4201) follow what the server does: the migration and the verification are no
-  longer proposals, a checksum mismatch is accepted rather than re-sealed, the purge table lists the jobs the server
-  schedules, and Mark restarted became Check again (the banner clears itself as instances report).
-- Accessibility and reflow (B-4207, this part): both screens in the Playwright sweeps and in
-  `e2e/tests/storage-configuration.spec.ts` (axe-core and the in-page checker on every tab and design state, Standard
-  and Enhanced, light and dark; reflow at 320 and 640 px for the screens and their dialogs); `docs/accessibility.md`.
-
-### Blob deduplication, held form values and reveal anomalies (Sprint 36b, B-4601, B-4701, B-4803)
-
-- Reference-counted blobs in the file store, within one tenant only (B-4601): migration `038b_dedup_held_vault`
-  (`file_blobs`, `file_versions.blob_id`). When a version passes its scan and the tenant already stores the same
-  content (SHA-256 of the plaintext), the version reads the existing sealed object and the quarantined copy is
-  deleted; otherwise its object becomes a blob later uploads share. The trash purge releases references and deletes
-  an object with its last reader; offboarding deletes the tenant's blob rows. Every upload still stores and scans its
-  full bytes, and quotas still count each version's own size. The migration registers the first ready copy of each
-  content per tenant. `GET /api/admin/storage/usage` adds `dedup` (objects, shared objects, references, bytes held,
-  bytes stored, bytes saved, per tenant), shown on Storage, Usage. The integrity check, orphan deletion, purges and
-  blob store migration see shared objects through `file_blobs.blob_key`. `file.version.ready` names the shared blob.
-- Held form values (B-4701, closing the B-2205 known gap): a public form value the `user-input` guardrail holds no
-  longer refuses the submission. It waits as a held submission (values sealed, `app_form_holds`) with a hold flag of
-  source kind `app-form-submission`, routed to moderation queues like any flag; the submitter gets `202 {held: true}`.
-  `GET /api/apps/held`, `GET /api/apps/held/:id` and `POST /api/apps/held/:id/decide` (`flags:review` or
-  `moderation:review`) list, read and accept (into a record, written by no one, `source: form`) or reject it; the
-  Flags decide route does the same for these flags and shows the values. Moderation shows the held submission in the
-  queue inspector with Accept and Reject. At most `APPS_HELD_MAX_PER_FORM` (200) wait per form; decided ones go
-  `APPS_HELD_KEEP_DAYS` (30) after the decision (`apps.held.purge`). Audited `app.form.held`,
-  `app.form.held.accepted`, `app.form.held.rejected`.
-- Anomaly detection on vault reveals (B-4803): reveals of KV secrets over the API are kept (`vault_reveals`,
-  `VAULT_ANOMALY_HISTORY_DAYS`) and each is compared with the secret's history before it is answered: a new address,
-  an odd hour of the day (once it has `VAULT_ANOMALY_MIN_HISTORY` reveals) or a burst (`VAULT_ANOMALY_BURST` reveals by
-  one caller within `VAULT_ANOMALY_BURST_SECONDS`) opens a flag for the secret's owner (`vault_reveal_flags`), with a
-  notification and email. `GET /api/vault/reveal-flags`, `GET /api/vault/reveal-flags/:id` and `POST
-  /api/vault/reveal-flags/:id/resolve` (`secrets:read`; the owner or `secrets:admin`) list and resolve them as expected
-  or suspicious; Vault has a Reveal flags tab. Detection never refuses a reveal; `VAULT_ANOMALY_BURST=0` turns it off.
-  Audited `vault.reveal.flagged`, `vault.reveal.flag.updated`, `vault.reveal.flag.resolved`; `vault.reveals.prune`
-  drops old reveals hourly.
+- Sprints 35 to 39 as above, released on 2026-10-09 (PR #71). Dropped: B-5001, capability tokens (owner, 2026-10-07).
+  Partial: B-7202, SCIM against the Entra ID and Okta validators (a local conformance suite stands in). B-11707
+  (Sprint 36b, model thinking templates) was pulled forward from 1.7.0 on 2026-10-08 and lands after the release.
+- Checks on the release tree: lint, typecheck and the console parse check; 1170 unit and API tests across 126 files,
+  1 skipped; the PostgreSQL integration suite (52 files); the prototype smoke (51 screens); the full Playwright
+  console suite run locally, 168 passed, 0 failed, after fixes to the sweep's screen list, the e2e harness driver,
+  an Analytics reload race and the data model draft dialog's accessibility pass.
+- Migrations `037_model_servers` to `041d_entity_api_embeds`, all expand-only. New CLI commands
+  `audit:verify-export` and `c2pa:verify`.
 
 ## 1.5.0
 

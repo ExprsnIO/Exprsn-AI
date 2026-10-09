@@ -47,8 +47,8 @@ Its six live screens (B-3402 to B-3404, B-3407, B-3408, B-3413) were built in Sp
 **Sprint 30: done** (PR #46): CalDAV and CardDAV with DAV-only app passwords (B-3101 to B-3103), model-based memory
 management (B-3701 to B-3703), MongoDB connections (B-3602), and eleven live screens with their accessibility and
 reflow checks (B-3405, B-3409 to B-3412, B-3414, and Sprint 29's six). Unit suite 851 passed, Playwright 96 passed.
-**B-3104 is partial**: the conformance fixtures were written from the clients' documented requests; B-3606 captures
-real traffic in Sprint 34 (moved to 1.6.0, see Sprint 34). Built ahead and parked: WebDAV for the file store (B-32, Sprint 34).
+**B-3104 is partial**: the conformance fixtures were written from the clients' documented requests; B-3606 (capturing
+real traffic) was dropped by the owner on 2026-10-06, see Sprint 34. Built ahead and parked: WebDAV for the file store (B-32, Sprint 34).
 
 **Sprint 31: done** (PR #47): the AT-Protocol PDS with a post written to it appearing in the reference AppView in
 CI (B-2901 to B-2906), feed generators and their published records (B-3001 to B-3004), relay commit signatures
@@ -341,7 +341,7 @@ Groomed by the owner on 2026-10-05.
 All six resolved by the owner on 2026-10-05.
 
 - [x] PDS hosting: opt-in per tenant, enabled by a platform admin; handles live on a platform-controlled tenant
-  subdomain (`<handle>.<tenant>.<pds domain>`). A tenant's own handle domain is deferred to 1.6 (B-2901).
+  subdomain (`<handle>.<tenant>.<pds domain>`). A tenant's own handle domain was deferred to 1.6 (B-2901) and stays ungroomed (Backlog-1.6.0.md, Still deferred).
 - [x] Custom roles: tenant only. Workspaces assign roles but do not define them; the matrix stays one table per
   tenant (B-3302, B-3412).
 - [x] Access reviews: both the workspace admin (tenant admin for tenant-level roles) and the member's directory
