@@ -11,11 +11,11 @@ board first, then live when every control is backed by the server); every server
 audit events, jobs, tests on SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known
 gaps in `docs/security.md`.
 
-**Size.** 63 items, 283 points (1 point ≈ half a day for one engineer, tests included), plus the release item: P1 222,
-P2 61. Agents, tools and skills in chat and the second half of the import wizard are 13 items and 72 points; the port
-items added on 2026-10-07 are 50 items and 211 points. That is four sprints at the 78-point pace, Sprints 40 to 43
-(72, 74, 72 and 65 points). The first of them was numbered Sprint 38 until 2026-10-07, when the 1.6.0 gaps took
-Sprints 37 to 39 and this release moved to 40 to 43; 2.0.0 follows at Sprints 44 to 50. Unscheduled beside them, added
+**Size.** 77 items, 350 points (1 point ≈ half a day for one engineer, tests included), plus the release item: P1 257,
+P2 93 (B-117, B-119 and B-122 counted since 2026-10-09; the 240-point governance set below still lists B-117 and B-119). Agents, tools and skills in chat and the second half of the import wizard are 13 items and 72 points; the port
+items added on 2026-10-07 are 51 items and 216 points (B-122 added 2026-10-09). That is five sprints, Sprints 40 to 44
+(72, 68, 60, 76 and 74 points; re-planned by usage on 2026-10-09). The first of them was numbered Sprint 38 until 2026-10-07, when the 1.6.0 gaps took
+Sprints 37 to 39 and this release moved to 40 to 43; 2.0.0 follows at Sprints 45 to 51. Unscheduled beside them, added
 2026-10-07: governance, thinking, learning, skills from knowledge, classification and moderation (B-115 to B-121,
 below), 52 items and 240 points, about three more sprints; where they go is an open decision.
 
@@ -31,9 +31,23 @@ B-29 PDS, and on 1.6.0's HTTP tool kind (B-89), per-post visibility (B-4901), gr
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
 | 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | **Done** |
-| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, boot order, hot path, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder | B-9001–B-9002, B-9101–B-9102, B-9201–B-9205, B-9301–B-9302, B-9401–B-9404, B-9501–B-9504, B-9601–B-9602 | 74 | Next |
-| 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, profile fields, search, custom roles, group moderation, event extras, notifications, linked conversations | B-9206–B-9209, B-9701–B-9709 | 72 | Planned |
-| 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9801–B-9805, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 65 | Planned |
+| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (re-planned by usage on 2026-10-09) | B-11701–B-11706, B-11708, B-11901–B-11902, B-11906, B-9201, B-9203, B-9601–B-9602, B-12201 | 68 | Next |
+| 42 | The vault for signing keys and session tokens; Redis for multi-process installs; workflows calling listed public hosts; dynamic API-key leases | B-9202, B-9204–B-9209, B-9001–B-9002, B-9101–B-9102, B-9301–B-9302 | 60 | Planned |
+| 43 | Groups: the rest of nexus; groups as access subjects; skills from knowledge, second part | B-9701–B-9709, B-9801–B-9805, B-11903–B-11905 | 76 | Planned |
+| 44 | Held messages for review; evidence retention and legal hold; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9401–B-9404, B-9501–B-9504, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 74 | Planned |
+
+**Usage review (2026-10-09).** The live install (one host, one server process, four users, two workspaces) shows
+where the work goes: 142,813 embedding calls in 30 days over 8 knowledge bases and 170,191 documents against 21
+conversations, 11 of them on the `think` profile; 40 workflows and 366 runs, 304 of them one scheduled trigger; 6 MCP
+servers with 151 write-call approvals in a week; 249 registry entries; `vault.secret.read` the most frequent audit
+action (328 a week); 6 guardrail rule sets with real block and redact decisions. It shows no direct messages, feed
+posts, moderation reports, flags, legal holds, webhooks, HTTP tool calls, workflow HTTP steps, database leases or
+second server process (Redis is configured but one process runs), and 3 API keys. Sprint 41 was re-planned around
+that: thinking (B-117, less the done B-11707), the first part of skills from knowledge (B-119), the vault's system
+scope and hot path (B-9201, B-9203), the rule builder (B-96) and a new epic for MCP approval ergonomics (B-122), with
+the rest of the port items moved to Sprints 42 to 44 in dependency order. Every moved item keeps its text. The
+placement question for B-115 to B-121 (Open decisions) is partly answered: B-117 and B-119 are scheduled by usage;
+B-115, B-116, B-118, B-120 and B-121 stay unscheduled.
 
 ### Progress
 
@@ -57,10 +71,14 @@ protocol is this server's own and no reference worker ships.
 The order follows the dependencies: what a conversation may call (B-4001) before any call from chat (B-4002 to
 B-4006); the Chat board (B-4007) before the live screen (B-4008); dataset import (B-3804) before knowledge sets and
 eval sets (B-3805, B-3806), and all of them before the Import screen (B-3807) goes live, which also gives 1.5.0's
-model import its screen. For the port items: Redis as a requirement (B-90) before the vault's bus-invalidated cache
-(B-9203); the system scope (B-9201) before everything else in B-92, the generic lease table (B-9204) before API-key
-leases (B-93) and before sessions as leases (B-9206), which also wait for the hot path (B-9203) and transit HMAC
-(B-9205); the HTTP tool kind's host list (B-8902, 1.6.0) before workflows use it (B-9101); takedown as its own state
+model import its screen. For the port items: the vault's bus-invalidated cache (B-9203, Sprint 41) runs on the bus the single-process
+install has today and Redis as a requirement (B-90, Sprint 42) hardens it for more than one process; the system scope (B-9201) before everything else in B-92, the generic lease table (B-9204) before API-key
+leases (B-93) and before sessions as leases (B-9206), which also wait for the hot path (B-9203, Sprint 41) and transit
+HMAC (B-9205), so the rest of the vault chain stays whole in Sprint 42; thinking templates (B-11707, 1.6.0) before the
+thinking policy and plans (B-117, Sprint 41); a skill that names knowledge (B-11901) before drafting one from a base
+(B-11902) and both before staleness, evaluation and packs (B-11903 to B-11905, Sprint 43); held messages (B-94) and
+evidence retention (B-95) wait in Sprint 44 for a usage trigger: build them when messaging or moderation is in use,
+and the owner may drop them; the HTTP tool kind's host list (B-8902, 1.6.0) before workflows use it (B-9101); takedown as its own state
 (B-9501) before evidence retention (B-9502) and file retention (B-9503); bans and per-group roles (B-9701, B-9705)
 and ownerless groups (B-9801) before groups carry access (B-9802 to B-9805); per-post visibility (B-4901, 1.6.0) and
 the live PDS run (B-11401) before cross-posting (B-11402).
@@ -171,6 +189,16 @@ every request, so the read path is cached and invalidated over the bus, which ne
 | B-9207 | Transit keys backed by the signer or OpenBao, then the OIDC, SAML, webhook, CA and OCSP, ACME, AT-Protocol and PDS signing keys registered as vault keys; never moved into today's in-memory transit, which would weaken signer isolation (VLT-7) | Rotating the OIDC signing key from the Vault screen publishes the new key in JWKS, and tokens signed before still verify until they expire | 8 |
 | B-9208 | Sealed third-party credentials (webhook secrets, MCP tokens, connections, registry tool tokens, moderation provider keys, channel secrets, knowledge source credentials) move to vault paths with references created automatically, so path policy, versions, rotation notices and reveal audit apply (VLT-8) | After the migration no third-party secret is held outside the vault, and revealing an MCP token is audited | 8 |
 | B-9209 | Workspace or service ownership of references, so disabling the user who saved a reference does not break the integrations that use it (VLT-10) | Disabling the admin who set up a connection leaves the connection working | 3 |
+
+### B-122 MCP approval ergonomics (5 points)
+
+Added 2026-10-09 from the usage review: the owner approves about 151 MCP write calls a week by hand, and Sprint 37b's
+known gap says write calls over MCP need a browser approval each time. A standing approval keeps the audit and the
+label rules and removes the repeated click.
+
+| ID | Item | Done when | Pts |
+| --- | --- | --- | --- |
+| B-12201 | Standing approvals for MCP server write calls: a tenant admin grants a connected client a standing approval per tool (or per server) for a period, under the same label rules; each call is still audited and metered, the approval is revocable from the MCP access screen and expires on its own; the Flags queue still holds calls a guardrail rule holds | A client with a standing approval runs a write tool without a browser approval, and revoking it makes the next call wait again | 5 |
 
 ### B-94 Held messages for review (13 points)
 
@@ -504,7 +532,7 @@ dual control.
   The board and decision record are the epic's first item.
 - [ ] Sessions as leases (B-9206): migrate every install in 1.7.0 with the dual read, or keep the `sessions` table as an
   option for single-process installs?
-- [ ] Placement of B-115 to B-121 (added 2026-10-07, 240 points): two or three more sprints in 1.7.0 (Sprints 44 to 46,
+- [ ] Placement of B-115 to B-121 (added 2026-10-07, 240 points; partly answered 2026-10-09: B-117 and B-119 scheduled by usage in Sprints 41 and 43, the rest open): two or three more sprints in 1.7.0 (Sprints 44 to 46,
   with 2.0.0 moving to 47 to 53 and the release item to the last of them), or the first sprints of a 1.8.0 after 2.0.0?
   The split A, B, C above is sized for three.
 - [ ] Priorities of B-115 to B-121: the P1 and P2 above are a proposal; the owner asked for the seven together and set no

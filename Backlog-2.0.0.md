@@ -1,5 +1,7 @@
 # Backlog: 2.0.0
 
+Sprints renumbered 45 to 51 on 2026-10-09, when 1.7.0 gained Sprint 44 (its sprints were 44 to 50).
+
 Cloud deployments and integrations for AWS, Azure, DigitalOcean and Cloudflare, in both directions: (a) deploy
 Exprsn-AI itself (application, PostgreSQL, Redis, Ollama GPU nodes) to a cloud from the console, and (b) from any
 running install, use the clouds' services: model APIs, GPU compute joined as gateway pools, managed databases as
@@ -24,8 +26,8 @@ only (B-109).
 storyboard). B-100 to B-111 are 2.0.0's, and later epics continue at B-112 (the port's last three, in 1.7.0) and B-115 to B-121 (governance, thinking, learning, skills from knowledge, classification and moderation, unscheduled in 1.7.0).
 
 **Size.** 76 items, 474 points (1 point ≈ half a day for one engineer, tests included): P0 197, P1 254, release 23. At
-about 70 points a sprint that is Sprints 44 to 50, after 1.7.0, which ends at Sprint 43 (renumbered from 40 to 46 on
-2026-10-07, when the 1.6.0 gaps and the 1.7.0 port items were placed); Sprint 50 is the release sprint at 55 points. With fewer engineers, the first things to move to a 2.1 are the
+about 70 points a sprint that is Sprints 45 to 51, after 1.7.0, which ends at Sprint 44 (renumbered from 40 to 46 on
+2026-10-07, when the 1.6.0 gaps and the 1.7.0 port items were placed, and again on 2026-10-09); Sprint 51 is the release sprint at 55 points. With fewer engineers, the first things to move to a 2.1 are the
 out-of-band change trail (B-10703), the document and key-value drivers (B-10304), D1 (B-10907) and the cloud KMS
 providers (B-10208).
 
@@ -49,20 +51,20 @@ filter and cloud catalogue on `models.js` (`#/models`).
 
 | Sprint | Theme | Items | Points | Migration | Status |
 | --- | --- | --- | --- | --- | --- |
-| 44 | Cloud accounts and credentials (federated and vaulted, all four providers); the provider adapter interface and the test fakes | B-10002–B-10009, B-10101, B-10109 | 68 | `0NN_cloud_accounts` | Planned |
-| 45 | Resource graph, operation journal, plan, apply, verify, drift, destroy and rate limits; deployment spec and network foundation; audit; price catalogue and estimates | B-10102–B-10108, B-10201, B-10202, B-10701, B-10601 | 71 | `0NN_cloud_journal` | Planned |
-| 46 | Platform deployment: Kubernetes, VMs and container platforms, DNS and TLS, upgrades and rollback, cloud KMS and Azure Blob; budgets and the hard stop | B-10203–B-10208, B-10602 | 66 | `0NN_cloud_deploy` | Planned |
-| 47 | Managed data services; cloud metrics and dashboards; metadata-endpoint hardening; billing ingestion | B-10301–B-10307, B-10702, B-10705, B-10603 | 70 | `0NN_cloud_data` | Planned |
-| 48 | GPU compute pools with scale-to-zero and spot; Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI backends; idle savings | B-10401–B-10406, B-10501–B-10504, B-10509, B-10605 | 68 | `0NN_cloud_compute` | Planned |
-| 49 | Cloudflare edge and hosting; model pricing, provider guardrails and residency; Cloudflare billing; showback | B-10901–B-10908, B-10505–B-10508, B-10608, B-10604 | 71 | `0NN_cloud_edge_finops` | Planned |
-| 50 | Anomaly alerts and the Cloud spend screen; on-prem front-door targets; change trail and runbooks; the cloud screens live; release | B-10209, B-10606, B-10607, B-10703, B-10704, B-10706, B-10801–B-10805 | 55 | — | Planned |
+| 45 | Cloud accounts and credentials (federated and vaulted, all four providers); the provider adapter interface and the test fakes | B-10002–B-10009, B-10101, B-10109 | 68 | `0NN_cloud_accounts` | Planned |
+| 46 | Resource graph, operation journal, plan, apply, verify, drift, destroy and rate limits; deployment spec and network foundation; audit; price catalogue and estimates | B-10102–B-10108, B-10201, B-10202, B-10701, B-10601 | 71 | `0NN_cloud_journal` | Planned |
+| 47 | Platform deployment: Kubernetes, VMs and container platforms, DNS and TLS, upgrades and rollback, cloud KMS and Azure Blob; budgets and the hard stop | B-10203–B-10208, B-10602 | 66 | `0NN_cloud_deploy` | Planned |
+| 48 | Managed data services; cloud metrics and dashboards; metadata-endpoint hardening; billing ingestion | B-10301–B-10307, B-10702, B-10705, B-10603 | 70 | `0NN_cloud_data` | Planned |
+| 49 | GPU compute pools with scale-to-zero and spot; Bedrock, Azure AI Foundry, DigitalOcean GenAI and Workers AI backends; idle savings | B-10401–B-10406, B-10501–B-10504, B-10509, B-10605 | 68 | `0NN_cloud_compute` | Planned |
+| 50 | Cloudflare edge and hosting; model pricing, provider guardrails and residency; Cloudflare billing; showback | B-10901–B-10908, B-10505–B-10508, B-10608, B-10604 | 71 | `0NN_cloud_edge_finops` | Planned |
+| 51 | Anomaly alerts and the Cloud spend screen; on-prem front-door targets; change trail and runbooks; the cloud screens live; release | B-10209, B-10606, B-10607, B-10703, B-10704, B-10706, B-10801–B-10805 | 55 | — | Planned |
 
 The order follows the dependencies: accounts and credentials (B-100) before any adapter call; the adapter interface
 (B-10101) and the fakes (B-10109) before the journal and planner, which every later epic uses; the price catalogue
 (B-10601) with the planner, so the first plan already carries an estimate, and budgets (B-10602) before any compute or
 data epic can create spend; network foundation (B-10202) before every deployment target and before managed data
 (B-103), whose private endpoints live in it; Kubernetes (B-10203) before GPU node groups on EKS, AKS and DOKS
-(B-10401); B-43 before any cloud model backend (B-105), which B-105 waits for in Sprint 48 (B-43 shipped in Sprint 35,
+(B-10401); B-43 before any cloud model backend (B-105), which B-105 waits for in Sprint 49 (B-43 shipped in Sprint 35,
 so open decision 13 no longer shifts the plan); billing ingestion (B-10603) before showback and anomalies (B-10604, B-10606); Cloudflare's front door
 (B-10901, B-10902) before its app tier (B-10905), which reaches its database through a tunnel; and B-109 before the
 release (B-108), which depends on it.
@@ -256,7 +258,7 @@ Depends on B-109 and on every epic above.
 | B-10802 | Docs: `docs/cloud.md` (accounts, federation setup per provider, the permission policies, regions and labels, Cloudflare front door), the cloud section of `docs/deploy.md`, `docs/api.md`, `docs/openapi.json`, `docs/permissions.md` | Every route and permission added in 2.0.0 is in the docs and the generated permissions file | 5 |
 | B-10803 | Security review: the ASVS delta, the cloud-plane threat model (confused deputy, credential theft, metadata endpoints, cross-tenant accounts), a review of every generated IAM, Azure RBAC and token policy, and a test of the credential paths | No finding above low is open at release, or each is accepted in `docs/security.md` | 5 |
 | B-10804 | End-to-end against sandbox accounts: a nightly job on dedicated AWS, Azure, DigitalOcean and Cloudflare sandbox accounts with budget caps: deploy small, verify, introduce drift, revert, upgrade, destroy; a sweeper deletes anything tagged and older than a day | Seven consecutive nightly runs pass with nothing left in the accounts | 8 |
-| B-10805 | Version `2.0.0`, the CHANGELOG with the breaking changes, upgrade notes, the known-gaps sections updated as each item lands (Sprint 50) | — |
+| B-10805 | Version `2.0.0`, the CHANGELOG with the breaking changes, upgrade notes, the known-gaps sections updated as each item lands (Sprint 51) | — |
 
 ---
 
@@ -308,7 +310,7 @@ Everything below was assumed so the design could proceed; each names the assumpt
   endpoints refused by every egress check; production refusing cloud credentials in the environment. If the owner
   judges these not breaking enough, this ships as 1.8.0 with the same content.
 - [ ] 12. Migration numbers. The boards use `0NN_cloud_*` placeholders; 1.5.0 used up to `036c` and 1.6.0's Sprint 35
-  `037` to `037d`, and the rest of 1.6.0 and 1.7.0 add more, so the numbers are fixed when Sprint 44 starts.
+  `037` to `037d`, and the rest of 1.6.0 and 1.7.0 add more, so the numbers are fixed when Sprint 45 starts.
 - [x] 13. B-43 scheduling. B-105 needs B-43's `ModelServer` interface and `kind: openai`. Settled: B-43 shipped in
   1.6.0's Sprint 35 (B-4301 to B-4307).
 - [ ] 14. Cloud KMS providers (B-10208) in 2.0.0 or a 2.1. Assumed 2.0.0, since container deployments need somewhere to
@@ -316,7 +318,7 @@ Everything below was assumed so the design could proceed; each names the assumpt
 - [ ] 15. Write access through document and key-value connections. Assumed read-only for DynamoDB, Cosmos DB and D1,
   as for SQL connections today.
 - [x] 16. Sprint numbering. Settled 2026-10-07: 1.6.0 ends at Sprint 39 and 1.7.0 at Sprint 43, so 2.0.0 is Sprints 44
-  to 50 (it was 40 to 46).
+  to 50 (it was 40 to 46); renumbered 45 to 51 on 2026-10-09 when 1.7.0 gained Sprint 44.
 - [ ] 17. Currency. Assumed each account's billing currency, USD by default, with no conversion; showback across
   accounts in different currencies is shown per currency.
 - [ ] 18. Sandbox accounts for the nightly e2e (B-10804): who owns them and their monthly cap. Assumed four dedicated
