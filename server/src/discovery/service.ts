@@ -153,7 +153,7 @@ export class DiscoveryService {
    */
   async catalog(p: Principal, opts: { profile?: string | null } = {}) {
     const s = this.s();
-    const profiles = await this.chatProfiles(p);
+    const profiles = await s.chat.profilesFor(p);
     const chosen = opts.profile ? (profiles.find((x) => x.name === opts.profile || x.id === opts.profile) ?? null) : (profiles[0] ?? null);
     if (opts.profile && !chosen) throw new HttpProblem(404, 'Not found', `Profile ${opts.profile} is not one you may pick.`);
     const caps = await s.chatInvocations.workspaceCapabilities(p, chosen?.name ?? null);
@@ -225,13 +225,6 @@ export class DiscoveryService {
       categories,
       counts: { available: out.filter((e) => e.available).length, notOnProfile: out.filter((e) => !e.available).length }
     };
-  }
-
-  /** The profiles the caller may pick for chat: an embedding-only model (the embedding profile) cannot answer. */
-  private async chatProfiles(p: Principal) {
-    const s = this.s();
-    const embedOnly = new Set((await s.gateway.repo.models()).filter((m) => m.capabilities.includes('embedding') && !m.capabilities.includes('completion')).map((m) => m.name));
-    return (await s.chat.profilesFor(p)).filter((x) => !embedOnly.has(x.model));
   }
 
   // ---------- B-12304: the catalogue fields at submit ----------

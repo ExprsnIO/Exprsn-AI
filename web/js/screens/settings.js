@@ -111,6 +111,8 @@
           .catch((err) => { st.loadError = err; })
           .finally(() => { st.loading = false; if (App.state.route === 'settings') ctx.rerender(); });
       }
+      // 1.7.0 (B-12302): how notices about newly published workflows, agents, tools and skills reach the person.
+      if (st.catNotices === undefined) { st.catNotices = null; App.get('/api/me/catalog-notices').then((r) => { st.catNotices = r; }).catch((err) => { st.catNotices = { error: err }; }).finally(() => { if (App.state.route === 'settings') ctx.rerender(); }); }
       const theme = App.state.theme === 'dark' ? 'Dark' : App.state.theme === 'light' ? 'Light' : 'Follow system';
       const perms = me.permissions;
 
@@ -166,6 +168,12 @@
         + UI.field('Accessibility', UI.select(A11Y, a11y, 'data-a11y-mode'), a11y === 'system' ? 'In use: ' + (eff === 'aaa' ? 'Enhanced, because your system asks for more contrast.' : 'Standard.') : '') + '</div>'
         + UI.toggle('Single-key shortcuts (? opens the screen map)', App.state.singleKeys, 'data-singlekeys data-manual="1"')
         + '<span class="muted" style="font-size:12px">The accessibility mode is saved with your account and follows you to other browsers; the theme and shortcuts are saved in this browser. Standard meets WCAG 2.2 AA. Enhanced raises text contrast to 7:1, enlarges click targets, shows a focus ring on every focused control, underlines links, stops animation and keeps messages on screen longer. Reduced motion from your system is always honoured.</span>');
+
+      const cn = st.catNotices;
+      const noticesPanel = UI.panel('New things you can use', !cn ? UI.notice('Loading…', 'info') : cn.error ? UI.notice('Your notice choice could not be loaded: ' + esc(cn.error.message), 'danger')
+        : '<div class="fg2" style="font-size:13px">When a workflow, agent, tool or skill is published to one of your workspaces within your clearance, you hear about it once, with a link to it in the catalogue.</div>'
+          + UI.seg([{ id: 'each', label: 'As they happen' }, { id: 'digest', label: 'Weekly digest' }, { id: 'off', label: 'Off' }], cn.notices, 'data-catnotices role="group" aria-label="Notices about new things you can use"')
+          + '<span class="muted" style="font-size:12px">' + (cn.notices === 'digest' ? 'One notice a week lists what was published' + (cn.pending ? '; ' + cn.pending + ' wait' + (cn.pending === 1 ? 's' : '') + ' for the next one' : '') + '.' : cn.notices === 'off' ? 'No notices. The catalogue still lists everything you can use.' : 'One notice per new entry, in the console.') + '</span>');
 
       const factors = st.mfa ? st.mfa.factors : [];
       const hasEmailFactor = factors.some((f) => f.kind === 'email');
@@ -269,7 +277,7 @@
         + (st.loadError ? UI.problem('Settings could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) : '')
         + (!st.loaded && !st.loadError ? UI.notice('Loading…', 'info') : '')
         + '<style>#main .settings-avatar{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:50%;background:var(--fg);color:var(--bg);font-size:18px;font-weight:700;flex-shrink:0;object-fit:cover}</style>'
-        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + mcpPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
+        + '<div class="grid2"><div class="vstack" style="gap:14px">' + profile + publicPanel + statusPanel + appearance + noticesPanel + mfaPanel + davPanel + '</div><div class="vstack" style="gap:14px">' + passwordPanel + mcpPanel + keysPanel + grantsPanel + atPanel + '</div></div>'
         + sessionsPanel + '</div>';
 
       if (ctx.$('[data-pwnew]')) App.passwordMeter.attach(ctx.$('[data-pwnew]'), ctx.$('[data-pwmeter]'));
@@ -317,6 +325,9 @@
         if (!socialW) { ctx.toast('Changing your status needs social:write.', 'warn'); return; }
         const v = t.dataset.seg; if (st.person && st.person.presence && st.person.presence.status === v) return;
         App.api('PUT', '/api/presence/me', { status: v }).then((r) => { if (st.person) st.person.presence = r; ctx.toast('Status: ' + esc(t.textContent) + '. Others see ' + esc(r.effective) + '.', 'ok'); ctx.rerender(); }).catch((err) => App.fail(err, 'Status not changed'));
+      });
+      ctx.on('click', '[data-catnotices] [data-seg]', async (e, t) => {
+        try { st.catNotices = await App.put('/api/me/catalog-notices', { notices: t.dataset.seg }); ctx.rerender(); App.toast(t.dataset.seg === 'digest' ? 'Weekly digest on. What is published waits for the next one.' : t.dataset.seg === 'off' ? 'Notices about new things you can use are off.' : 'Notices as they happen.', 'ok'); } catch (err) { App.fail(err, 'Could not save your notice choice'); }
       });
       ctx.on('change', '[data-theme]', (e, t) => { App.setTheme(t.value === 'Dark' ? 'dark' : t.value === 'Light' ? 'light' : null); ctx.toast('Theme: ' + esc(t.value) + '.'); });
       ctx.on('change', '[data-a11y-mode]', (e, t) => {

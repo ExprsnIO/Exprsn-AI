@@ -80,10 +80,10 @@ test.describe('Chat', () => {
       const author = await apiAs('root');
       const reviewer = await apiAs('root2');
       // A published skill and agent (the registry's dual control), and the fake MCP server's write tool on the General profile.
-      const skill = await author.post('/api/admin/registry', { kind: 'skill', name: 'Concise', version: '1.0.0', description: 'Answers in one sentence with the figure first and the source second.', label: 'internal', definition: { instructions: 'Answer in one sentence.', tools: [] } });
+      const skill = await author.post('/api/admin/registry', { kind: 'skill', name: 'Concise', version: '1.0.0', description: 'Answers in one sentence with the figure first and the source second.', label: 'internal', definition: { instructions: 'Answer in one sentence.', tools: [] }, purpose: 'Short answers, the figure first.', examples: ['What is the refund window?'], category: 'Writing' });
       await author.post(`/api/admin/registry/${skill.id}/submit`);
       await reviewer.post(`/api/admin/registry/${skill.id}/review`, { decision: 'approve', scope: 'tenant', workspaces: [] });
-      const agent = await author.post('/api/admin/registry', { kind: 'agent', name: 'Concierge', version: '1.0.0', description: 'Answers questions about bookings and the travel policy for the finance team.', label: 'internal', definition: { profile: 'general', systemPrompt: 'You are the concierge.', tools: [], budgets: { steps: 6, tokens: 4000, wallSeconds: 60, toolCalls: 2 } } });
+      const agent = await author.post('/api/admin/registry', { kind: 'agent', name: 'Concierge', version: '1.0.0', description: 'Answers questions about bookings and the travel policy for the finance team.', label: 'internal', definition: { profile: 'general', systemPrompt: 'You are the concierge.', tools: [], budgets: { steps: 6, tokens: 4000, wallSeconds: 60, toolCalls: 2 } }, purpose: 'Bookings and the travel policy, answered.', examples: ['Can I book business class to Lisbon?'], category: 'Travel' });
       await author.post(`/api/admin/registry/${agent.id}/submit`);
       await reviewer.post(`/api/admin/registry/${agent.id}/review`, { decision: 'approve', scope: 'tenant', workspaces: [] });
       const srv = (await author.post('/api/admin/mcp-servers', { name: 'crm', url: serverState().fakes.mcp })) as { id: string };
@@ -109,7 +109,8 @@ test.describe('Chat', () => {
       await composer.fill('/');
       const picker = page.locator('#ch-picker');
       await expect(picker).toBeVisible();
-      await expect(picker.locator('[data-pickitem]')).toHaveCount(2);
+      // The bound server's two tools (published workflows, from other specs, are listed after them).
+      await expect(picker.locator('[data-pickitem]', { hasText: 'crm.' })).toHaveCount(2);
       await composer.fill('/look');
       await expect(picker.locator('[data-pickitem]')).toHaveCount(1);
       await expect(picker.locator('[data-pickitem]').first()).toContainText('crm.lookup_invoice');
@@ -236,5 +237,61 @@ test.describe('plan first and reflection', () => {
     await expect(page.locator('.ch-card.ch-plan.denied').first()).toContainText('Declined');
     await expect(page.locator('.ch-msg.ch-ai').last()).toContainText('declined the plan', { timeout: 20_000 });
     await expect(page.locator('.ch-msg.ch-ai').last()).toContainText('stopped');
+  });
+});
+
+// 1.7.0, Sprint 41d (B-12301, B-12303): "What you can do" on a new chat fills the composer with an entry's call and
+// example; while a person types, up to three entries matching the draft are offered as chips, ranked by the
+// embedding profile; a dismissed one stays away for the rest of the conversation. axe-core covers both.
+test.describe('Chat: what you can do and composer suggestions', () => {
+  test.beforeAll(async () => {
+    const root = await apiAs('root');
+    const w = await root.post('/api/workflows', { name: 'summarise-agreement', description: 'Summarises an agreement: the parties, the term and the obligations.', label: 'internal' });
+    await root.put(`/api/workflows/${w.id}/draft`, { graph: { nodes: [{ id: 'trigger', kind: 'trigger', title: 'Trigger', x: 20, y: 24, config: { source: 'api' }, output: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }, { id: 'shape', kind: 'transform', title: 'Shape', x: 230, y: 24, config: { fields: { summary: 'Summary of {{input.text}}' } } }], edges: [{ from: 'trigger', to: 'shape' }], limits: {} } });
+    await root.put(`/api/workflows/${w.id}/discovery`, { purpose: 'A one-page summary of an agreement.', examples: ['Summarise this agreement'], category: 'Documents' });
+    await root.post(`/api/workflows/${w.id}/publish`, {});
+    await root.close();
+  });
+
+  test('a new chat lists what you can do; typing suggests the summarise workflow, and a dismissed suggestion stays away', async ({ page }) => {
+    await open(page, 'chat');
+    await expectLive(page);
+    await page.locator('[data-new]').click();
+    await page.locator('[data-pick="profile"]').click();
+    await page.locator('.ch-dd [data-prof="general"]').click();
+    const panel = page.locator('.ch-discover');
+    await expect(panel.getByRole('heading', { name: 'What you can do' })).toBeVisible();
+    const entry = panel.locator('[data-discover="workflow:summarise-agreement"]');
+    await expect(entry).toContainText('/summarise-agreement');
+    await expect(entry).toContainText('"Summarise this agreement"');
+    await expectAxeClean(page, 'aa', 'a new chat with what you can do');
+    await entry.click();
+    const composer = page.locator('#ch-composer');
+    await expect(composer).toHaveValue('/summarise-agreement Summarise this agreement');
+
+    // A conversation first, then a draft: the suggestion chips.
+    await composer.fill('Hello there');
+    await composer.press('Enter');
+    await expect(page.locator('.ch-msg.ch-ai .ch-answer').last()).toContainText('Fake answer to: Hello there', { timeout: 20_000 });
+    await expect(page.locator('.ch-caret')).toHaveCount(0);
+    const first = page.waitForResponse((r) => r.url().includes('/api/catalog/suggestions') && r.request().method() === 'POST');
+    await composer.fill('summarise this agreement');
+    const body1 = await (await first).json();
+    expect(body1.suggestions.length).toBeLessThanOrEqual(3);
+    const chip = page.locator('[data-usesug="workflow:summarise-agreement"]');
+    await expect(chip).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Suggested for this message' })).toBeVisible();
+    await expectAxeClean(page, 'aa', 'chat with composer suggestions');
+
+    // Dismissed: gone, and kept away for the rest of the conversation.
+    await page.getByRole('button', { name: 'Dismiss the suggestion summarise-agreement' }).click();
+    await toast(page, 'Dismissed for the rest of this conversation');
+    await expect(chip).toHaveCount(0);
+    const second = page.waitForResponse((r) => r.url().includes('/api/catalog/suggestions') && r.request().method() === 'POST');
+    await composer.fill('please summarise the agreement');
+    const body2 = await (await second).json();
+    expect(body2.dismissed).toContain('workflow:summarise-agreement');
+    expect(body2.suggestions.map((x: { key: string }) => x.key)).not.toContain('workflow:summarise-agreement');
+    await expect(chip).toHaveCount(0);
   });
 });

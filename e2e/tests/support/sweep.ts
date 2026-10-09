@@ -2,7 +2,7 @@ import { test, expect, ready, expectLive, type Page } from './fixtures';
 
 // Every sidebar screen, in the order of the NAV table in web/js/app.js, plus Settings (opened from the avatar) and,
 // since 1.5.0 (B-5801), the Profile page (opened from people's names).
-export const SCREENS = ['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'files', 'apps', 'groups', 'messages', 'overview', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'moderation', 'channels', 'social', 'connections', 'training', 'import', 'tenants', 'roles', 'directories', 'identity', 'certificates', 'vault', 'plugins', 'atproto', 'zones', 'usage-audit', 'analytics', 'jobs', 'storage', 'configuration', 'platform'];
+export const SCREENS = ['chat', 'catalog', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'scripts', 'media', 'images', 'files', 'apps', 'groups', 'messages', 'overview', 'models', 'profiles', 'pools', 'registry', 'mcp-servers', 'guardrails', 'flags', 'classifiers', 'moderation', 'channels', 'social', 'connections', 'training', 'import', 'tenants', 'roles', 'directories', 'identity', 'certificates', 'vault', 'plugins', 'atproto', 'zones', 'usage-audit', 'analytics', 'jobs', 'storage', 'configuration', 'platform'];
 
 /** The routes the accessibility and reflow specs walk: every screen and Settings, or only E2E_ONLY (comma-separated)
  *  while writing a screen. */
@@ -55,7 +55,7 @@ export function everyScreen(title: string): void {
         await page.goto('/#/chat');
         await ready(page, 'chat');
         const allowed = await page.evaluate((all) => all.filter((r) => (window as unknown as { App: { canOpen(r: string): boolean } }).App.canOpen(r)), SCREENS);
-        expect(allowed).toEqual(['chat', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'media', 'images', 'files', 'apps', 'groups', 'messages']);
+        expect(allowed).toEqual(['chat', 'catalog', 'compare', 'runs', 'knowledge', 'memory', 'workflows', 'media', 'images', 'files', 'apps', 'groups', 'messages']);
         await sweep(page, [...allowed, 'settings', 'person'], null);
       });
     });

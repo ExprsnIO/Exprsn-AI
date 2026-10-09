@@ -48,6 +48,9 @@
       { title: 'Chain reference not published', tone: 'danger', text: 'An agent that delegates to an agent, or a skill that builds on a skill, which is not published fails the Chain references check; Approve stays disabled until it is published or removed.', apply(ctx) { ctx.state.demo = 'chainref'; ctx.rerender(); } },
       { title: 'Test harness', tone: 'info', text: 'Runs the tool once with sample arguments and shows the typed result and label.', apply(ctx) { ctx.state.demo = 'harness'; ctx.rerender(); } },
       { title: 'HTTP host refused', tone: 'danger', text: 'A test call to a host that resolves to a cloud metadata address, an internal host the operator has not named, or a public host off the tenant\'s list is refused before anything is sent.', apply(ctx) { ctx.state.demo = 'egress'; ctx.rerender(); } },
+      // 1.7.0 (B-12304): the catalogue card.
+      { title: 'Missing for the catalogue', tone: 'danger', text: 'Submitting an entry offered in chat (an agent, a skill, a tool a profile lists) without a purpose, an example prompt and a category is refused, naming the missing field. The entry stays a draft.', apply(ctx) { ctx.state.demo = 'cardmissing'; ctx.rerender(); } },
+      { title: 'Catalogue card preview', tone: 'info', text: 'The reviewer sees the card the catalogue will show: purpose, the first example prompt, the call and the category.', apply(ctx) { ctx.state.demo = 'cardpreview'; ctx.rerender(); } },
       { title: 'Literal credential refused', tone: 'danger', text: 'Saving an HTTP tool with a literal Authorization header, API key query parameter or secret body field is refused: credentials go in as vault references, resolved at call time.', apply(ctx) { ctx.state.demo = 'literal'; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -108,6 +111,14 @@
         } else if (d === 'literal') {
           if (App.can('tools:manage')) st.openLiteral = true;
           else st.demoNote = 'Creating HTTP tools needs tools:manage. A literal credential in a header, query parameter or body field is refused on save.';
+        } else if (d === 'cardmissing') {
+          const miss = (x) => !x.purpose || !(x.examples || []).length || !x.category;
+          const e = list.find((x) => x.status === 'draft' && x.kind !== 'tool' && miss(x)) || list.find((x) => !x.platform && x.kind !== 'tool' && miss(x));
+          if (e) { st.sel = e.id; st.tab = e.kind + 's'; st.problem = { title: 'Missing for the catalogue', detail: e.name + ' ' + e.version + ' is offered in chat, so the catalogue needs ' + [!e.purpose ? 'a purpose' : '', !(e.examples || []).length ? 'at least one example prompt' : '', !e.category ? 'a category' : ''].filter(Boolean).join(', ') + '. Submitting it as it is would be refused.', trace: null }; }
+          else st.demoNote = 'Every agent and skill has its purpose, example prompts and category. One without them is refused at submit, naming what is missing.';
+        } else if (d === 'cardpreview') {
+          const e = list.find((x) => x.status === 'in_review') || list.find((x) => !x.platform && x.status === 'published');
+          if (e) { st.sel = e.id; st.tab = e.status === 'in_review' ? 'review' : e.kind === 'tool' ? 'tools' : e.kind + 's'; st.flashCard = true; } else st.demoNote = 'Nothing waits for review. The inspector of an entry in review shows its catalogue card.';
         } else if (d === 'harness') {
           const e = list.find((x) => x.name === 'calculate' && x.platform) || list.find((x) => x.kind === 'tool');
           if (e) { st.sel = e.id; st.tab = 'tools'; st.harnessOpen = true; st.harnessRun = true; }
@@ -126,6 +137,17 @@
         st.fetching = sel.id;
         App.get('/api/admin/registry/' + sel.id).then((d) => { st.details[sel.id] = d; }).catch(() => { st.details[sel.id] = { versions: [], referencedBy: [], profiles: [], workspaces: [] }; }).finally(() => { st.fetching = null; later(); });
       }
+      /** 1.7.0 (B-12304): the reviewer's preview of the catalogue card (`catalogCard` from the detail), with Edit. */
+      const cardHtml = (e, d) => {
+        const c = d.catalogCard || { call: (e.kind === 'agent' ? '@' : e.kind === 'skill' ? '+' : '/') + e.name, example: (e.examples || [])[0] || null, category: e.category || 'Other', missing: [] };
+        const missing = [!e.purpose ? 'purpose' : '', !(e.examples || []).length ? 'example prompt' : '', !e.category ? 'category' : ''].filter(Boolean);
+        return '<div class="hstack"><h3 class="eyebrow grow" style="margin:0">Catalogue card</h3>' + (canManage(e) && e.status !== 'retired' ? UI.btn('Edit', { kind: 'ghost', size: 'xs', icon: 'edit', attrs: 'data-cardedit aria-label="Edit the catalogue card"' }) : '') + '</div>'
+          + '<div class="reg-card' + (st.flashCard ? ' flash' : '') + '"><div class="hstack wrap gap6"><b style="overflow-wrap:anywhere">' + esc(e.name) + '</b>' + UI.pill(e.kind, 'outline') + '<span class="right">' + UI.label(e.label, { sm: true }) + '</span></div>'
+          + '<div class="fg2" style="font-size:13px;overflow-wrap:anywhere">' + esc(e.purpose || e.description || 'No purpose yet.') + '</div>'
+          + (c.example ? '<div class="reg-ex">"' + esc(c.example) + '"</div>' : '<div class="muted" style="font-size:12px">No example prompt yet.</div>')
+          + '<div class="hstack wrap gap6"><span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.call) + '</span><span class="muted right" style="font-size:12px">' + esc(c.category) + '</span></div></div>'
+          + (missing.length ? '<div class="muted" style="font-size:12px">' + (d.discoveryRequired ? 'Asked for at submit, since it is offered in chat: ' : d.offeredInChat === false ? 'Not asked for (no published profile offers it in chat): ' : 'Missing: ') + esc(missing.join(', ')) + '</div>' : '');
+      };
       const rowAttrs = (e) => 'data-entry="' + esc(e.id) + '"';
       const canManage = (e) => App.can(e.kind === 'agent' ? 'agents:manage' : 'tools:manage') && !e.platform;
       const tools = (e) => ((e.definition && e.definition.tools) || []);
@@ -175,6 +197,7 @@
             ['Publish scope', sel.publishScope === 'workspace' ? esc((d.workspaces || []).map((w) => w.name).join(', ') || sel.publishWorkspaces.length + ' workspaces') : esc(sel.publishScope || 'not published')],
             ['Reviewed by', sel.reviewedBy ? esc(sel.reviewedBy + ', ' + when(sel.reviewedAt)) : 'not yet'],
           ].concat(httpRows(sel, d)).concat(chainRows(sel)).concat([['Used by', esc(((d.profiles || []).map((p) => 'profile ' + p).concat((d.referencedBy || []).map((r) => r.kind + ' ' + r.name + ' ' + r.version))).join(', ') || 'nothing yet') + ' ' + UI.btn('Used by', { kind: 'ghost', size: 'xs', attrs: 'data-usedby' })]]), 1)
+          + cardHtml(sel, d)
           + '<div class="hstack"><div class="eyebrow grow">Automated checks</div>' + (canManage(sel) ? UI.btn('Re-run', { kind: 'ghost', size: 'xs', icon: 'refresh', attrs: 'data-recheck' }) : '') + '</div>'
           + '<div class="vstack gap4">' + sel.checks.map((c) => '<div class="hstack" style="align-items:flex-start;color:var(--' + (c.ok ? 'ok-fg' : 'danger-fg') + ')">' + UI.icon(c.ok ? 'check' : 'x', 14) + '<span style="color:var(--fg)"><b style="font-weight:600">' + esc(c.name) + '</b><span class="fg2" style="display:block;font-size:12px">' + esc(c.detail) + '</span></span></div>').join('') + (sel.checkedAt ? '<div class="muted" style="font-size:12px">Checked ' + esc(when(sel.checkedAt)) + '</div>' : '') + '</div>'
           + '<div class="hstack wrap">'
@@ -196,7 +219,7 @@
       }
       inspector += '</aside>';
 
-      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}</style>'
+      root.innerHTML = '<style>.registry-page > *{flex-shrink:0}.registry-insp > *{flex-shrink:0}.registry-page .tabs .count{margin-left:2px}.reg-card{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.reg-card.flash{border-color:var(--accent)}.reg-ex{font-size:13px;font-style:italic;color:var(--fg2);overflow-wrap:anywhere}</style>'
         + '<div class="page registry-page">' + UI.pagehead('Registry', 'Nothing reaches a tenant before review', (App.can('tenant:manage') ? UI.btn('Allowed hosts', { attrs: 'data-hosts' }) : '') + UI.btn('Open test harness', { attrs: 'data-harness-open' }) + UI.btn('Submit entry', { kind: 'primary', attrs: 'data-submit', disabled: !App.can('tools:manage') && !App.can('agents:manage') }))
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
         + UI.tabs([{ id: 'tools', label: 'Tools', count: ofKind('tool').length }, { id: 'skills', label: 'Skills', count: ofKind('skill').length }, { id: 'agents', label: 'Agents', count: ofKind('agent').length }, { id: 'review', label: 'Review queue', count: review.length }], st.tab)
@@ -223,6 +246,20 @@
       ctx.on('click', '[data-replacement]', (e, t) => { e.preventDefault(); const name = t.dataset.replacement.split(' ')[0]; const hit = list.find((x) => x.name === name && x.id !== sel.id); if (hit) { st.sel = hit.id; ctx.rerender(); } else toast('No entry named ' + esc(name) + ' in this registry yet.'); });
       ctx.on('click', '[data-copyhash]', (e, t) => { if (navigator.clipboard) navigator.clipboard.writeText(t.dataset.copyhash).catch(() => undefined); toast('Copied the full schema hash.'); });
       ctx.on('click', '[data-recheck]', () => act(() => App.post('/api/admin/registry/' + sel.id + '/checks'), 'Checks re-ran for ' + esc(sel.name) + '.'));
+      st.flashCard = false;
+      // 1.7.0 (B-12304): the catalogue card's fields, in any state but retired (they are not part of the schema hash).
+      ctx.on('click', '[data-cardedit]', () => {
+        ctx.modal({ title: 'Catalogue card for ' + esc(sel.name), body: '<div class="vstack gap8">' + UI.field('Purpose', UI.input(sel.purpose || '', { placeholder: 'What a person gets from it, in one line', attrs: 'data-cpurpose maxlength="500"' })) + UI.field('Example prompts', UI.textarea((sel.examples || []).join('\n'), { rows: 3, placeholder: 'One per line, up to five', attrs: 'data-cexamples' }), 'The first one fills the composer when someone picks it from the catalogue.') + UI.field('Category', UI.input(sel.category || '', { placeholder: 'Documents, Finance, Writing', attrs: 'data-ccat maxlength="60"' })) + UI.notice('These are not part of the schema hash: a published entry gains them without a new version or a new review.', 'info') + '</div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Save', { kind: 'primary', attrs: 'data-csave' }),
+          onMount(m) {
+            m.querySelector('[data-csave]').addEventListener('click', async () => {
+              const examples = m.querySelector('[data-cexamples]').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 5);
+              const body = { purpose: m.querySelector('[data-cpurpose]').value.trim() || null, examples, category: m.querySelector('[data-ccat]').value.trim() || null };
+              App.closeOverlay();
+              await act(() => App.put('/api/admin/registry/' + sel.id + '/discovery', body), 'Catalogue card for ' + esc(sel.name) + ' saved.');
+            });
+          } });
+      });
       ctx.on('click', '[data-submitreview]', async () => {
         const ok = await ctx.confirm({ title: 'Submit ' + esc(sel.name) + ' for review', tag: 'review', tone: 'info', body: '<p class="fg2" style="margin:0">The automated checks run again, then a tool admin other than you reviews it.</p>', kv: [['Version', esc(sel.version)], ['Checks now', sel.checksPassed ? 'all passing' : sel.checks.filter((c) => !c.ok).length + ' failing']], ok: 'Submit' });
         if (ok) act(() => App.post('/api/admin/registry/' + sel.id + '/submit'), esc(sel.name) + ' is in the review queue.');
@@ -457,7 +494,11 @@
         const fields = (k) => {
           const common = UI.field('Name', UI.input(e ? e.name : '', { placeholder: k === 'agent' ? 'Data analyst' : 'namespace.operation', attrs: 'data-name' + (e ? ' readonly' : '') })) + UI.field('Version', UI.input(e ? e.version : '0.1.0', { attrs: 'data-version' + (e ? ' readonly' : '') }))
             + '<div class="span2">' + UI.field('Description', UI.textarea(e ? e.description || '' : '', { rows: 2, attrs: 'data-desc', placeholder: 'What it does, when to use it and what it returns' }), 'At least 40 characters: a model reads this to decide when to use it.') + '</div>'
-            + UI.field('Max label', UI.select(LABELS.filter((l) => !me.clearance || rank(l) <= rank(me.clearance)), e ? e.label : 'internal', 'data-label'));
+            + UI.field('Max label', UI.select(LABELS.filter((l) => !me.clearance || rank(l) <= rank(me.clearance)), e ? e.label : 'internal', 'data-label'))
+            // 1.7.0 (B-12304): the catalogue card; asked for at submit for anything offered in chat.
+            + '<div class="span2">' + UI.field('Purpose', UI.input(e ? e.purpose || '' : '', { placeholder: 'What a person gets from it, in one line', attrs: 'data-purpose maxlength="500"' }), 'Shown on the catalogue card') + '</div>'
+            + '<div class="span2">' + UI.field('Example prompts', UI.textarea(e ? (e.examples || []).join('\n') : '', { rows: 2, placeholder: 'One per line, up to five', attrs: 'data-examples' }), 'At least one for an agent, a skill or a tool a profile offers in chat') + '</div>'
+            + UI.field('Category', UI.input(e ? e.category || '' : '', { placeholder: 'Documents, Finance, Writing', attrs: 'data-category maxlength="60"' }));
           if (k === 'http') {
             const schema0 = e && e.inputSchema ? e.inputSchema : { type: 'object', properties: placeholders(hd.url).reduce((a, n) => { a[n] = { type: 'string' }; return a; }, {}), required: placeholders(hd.url) };
             const side = e ? e.sideEffect : 'read';
@@ -526,7 +567,7 @@
             m.querySelector('[data-ok]').addEventListener('click', async () => {
               let body;
               try {
-                const common = { description: val('[data-desc]').trim() || null, label: val('[data-label]') };
+                const common = { description: val('[data-desc]').trim() || null, label: val('[data-label]'), purpose: val('[data-purpose]').trim() || null, examples: val('[data-examples]').split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 5), category: val('[data-category]').trim() || null };
                 if (k === 'skill') body = Object.assign(common, { definition: Object.assign({}, e ? e.definition || {} : {}, { instructions: val('[data-instructions]'), tools: listOf('[data-tools]'), skills: listOf('[data-subskills]') }) });
                 else if (k === 'agent') {
                   const bud = {}; m.querySelectorAll('[data-b]').forEach((x) => { bud[x.dataset.b] = Number(x.value); });

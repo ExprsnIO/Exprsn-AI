@@ -260,6 +260,7 @@
     set('side', sideHtml(st));
     set('cold', coldHtml(st));
     set('skills', skillChipsHtml(st));
+    set('suggest', suggestHtml(st));
     if (scroller && near) scroller.scrollTop = scroller.scrollHeight;
   }
   function rerender(focusComposer) {
@@ -387,7 +388,7 @@
     if (st.convError) return UI.problem('This conversation could not be opened', st.convError.message, st.convError.problem && st.convError.problem.trace_id);
     const conv = st.conv;
     if (!conv || !conv.messages.length) {
-      return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.');
+      return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.') + (st.convId ? '' : discoverHtml(st));
     }
     return pathOf(conv).map((m) => (m.role === 'user' ? userHtml(st, conv, m) : aiHtml(st, conv, m))).join('') + pendingCardsHtml(st);
   }
@@ -611,6 +612,13 @@
         };
         d.querySelector('[data-go]').addEventListener('click', go);
         d.querySelector('[data-argform]').addEventListener('submit', (e) => { e.preventDefault(); go(); });
+        // 1.7.0 (B-12301): a call from the catalogue or a suggestion brings its text: a tool's description of the
+        // call, or a workflow's first text field.
+        if (it.prefill) {
+          const tx = d.querySelector('[data-text]');
+          const str = Array.prototype.filter.call(d.querySelectorAll('[data-arg]'), (el) => (el.dataset.type || 'string') === 'string' && el.tagName !== 'SELECT')[0];
+          if (isTool && tx) tx.value = it.prefill; else if (str) str.value = it.prefill;
+        }
         const first = d.querySelector('[data-arg], [data-text]'); if (first) first.focus();
       }
     });
@@ -748,7 +756,7 @@
   async function openConv(id) {
     const st = S();
     if (st.convId === id && st.conv) return;
-    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false; st.bound = null;
+    st.convId = id; setConv(st, null); st.convLoading = true; st.notice = null; st.resumed = {}; st.forceCold = false; st.bound = null; st.call = null; st.sugg = null; st.dismissedNew = [];
     syncUrl(id);
     loadBindings(id);
     rerender();
@@ -764,13 +772,108 @@
     App.fail(err, what);
   }
 
+  // ---------- 1.7.0, Sprint 41d (B-12301, B-12303): what you can do, and composer suggestions ----------
+  /** The catalogue for the picked profile, for the panel on a new chat (GET /api/catalog, the workspace form). */
+  function loadCat(st) {
+    const prof = st.profile || null;
+    if (!App.can('chat:read') || st.catLoading === prof) return;
+    st.catLoading = prof;
+    App.get('/api/catalog' + (prof ? '?profile=' + enc(prof) : '')).then((data) => { st.cat = { profile: prof, data }; }).catch((err) => { st.cat = { profile: prof, error: err }; }).finally(() => { st.catLoading = undefined; schedule(); });
+  }
+  function discoverHtml(st) {
+    const c = st.cat;
+    if (!c || c.profile !== (st.profile || null)) { loadCat(st); return ''; }
+    if (c.error) return '';
+    const entries = (c.data.entries || []).filter((e) => e.available);
+    const ws = c.data.workspace ? c.data.workspace.name : 'this workspace';
+    if (!entries.length) return '<section class="ch-discover panel" aria-labelledby="ch-discover-h"><h2 id="ch-discover-h" class="eyebrow">What you can do</h2><div class="muted" style="font-size:13px">Nothing is published to ' + esc(ws) + ' for you yet. New workflows, agents, tools and skills show in the <a href="#/catalog" data-gocat>catalogue</a>.</div></section>';
+    const cats = []; entries.forEach((e) => { if (cats.indexOf(e.category) < 0) cats.push(e.category); });
+    return '<section class="ch-discover panel" aria-labelledby="ch-discover-h"><div class="hstack"><h2 id="ch-discover-h" class="eyebrow grow">What you can do</h2><a href="#/catalog" data-gocat>See the whole catalogue</a></div>'
+      + '<div class="fg2" style="font-size:13px">Published to ' + esc(ws) + ' for you' + (c.data.profile ? ', through ' + esc(c.data.profile) : '') + '. Pick one to fill the composer.</div>'
+      + cats.slice(0, 4).map((cat) => '<div class="ch-dcat"><h3 class="ch-dcatname">' + esc(cat) + '</h3>' + entries.filter((e) => e.category === cat).slice(0, 3).map((e) => '<button type="button" class="ch-ditem" data-discover="' + esc(e.key) + '"><span class="mono">' + esc(e.call) + '</span>' + (e.description ? '<span class="desc">' + esc(e.description) + '</span>' : '') + (e.example ? '<span class="ex">"' + esc(e.example) + '"</span>' : '') + '</button>').join('') + '</div>').join('')
+      + '</section>';
+  }
+  /** Puts an entry's call (and an example prompt) in the composer; Enter then calls it (`sendCall`). */
+  function fillCall(st, f) {
+    st.call = { kind: f.kind, name: f.name, call: f.call, id: f.id || null };
+    st.draft = f.compose; st.sugg = null;
+    const ta = document.getElementById('ch-composer'); if (ta) { ta.value = f.compose; ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) { /* not focusable */ } }
+  }
+  function suggestHtml(st) {
+    const sg = st.sugg; if (!sg || !(sg.list || []).length || st.picker) return '';
+    return '<div class="ch-suggest" role="group" aria-label="Suggested for this message"><span class="muted" style="font-size:12px">Suggested:</span>' + sg.list.map((x) => '<span class="ch-schip"><button type="button" class="chip" data-usesug="' + esc(x.key) + '"' + (x.description ? ' title="' + esc(x.description) + '"' : '') + '>' + esc(x.kind) + ' <span class="mono">' + esc(x.call) + '</span></button>' + UI.iconbtn('x', 'Dismiss the suggestion ' + x.name, { cls: 'sm ghost', attrs: 'data-dismisssug="' + esc(x.key) + '"' }) + '</span>').join('') + '</div>';
+  }
+  function paintSuggest(st) { const el = document.querySelector('[data-region="suggest"]'); if (el && visible()) el.innerHTML = suggestHtml(st); }
+  /** B-12303: POST /api/catalog/suggestions after a pause in typing; the server ranks by the embedding profile. */
+  async function suggest(st, draft) {
+    const d = draft.trim();
+    if (S() !== st || !visible() || (st.sugg && st.sugg.draft === d)) return;
+    const seq = (live.sugSeq = (live.sugSeq || 0) + 1);
+    try {
+      const r = await App.post('/api/catalog/suggestions', { draft: d, profile: st.profile || null, conversationId: st.convId || null, dismissed: st.convId ? [] : st.dismissedNew || [] });
+      if (seq !== live.sugSeq || S() !== st) return;
+      st.sugg = { draft: d, list: r.suggestions || [], off: r.off || null };
+    } catch (err) { st.sugg = null; }
+    paintSuggest(st);
+  }
+  /** A new chat gets a conversation before a call that needs one; suggestions dismissed before it existed are kept. */
+  async function keepDismissals(st) {
+    const keys = st.dismissedNew || []; st.dismissedNew = [];
+    for (const key of keys) await App.post(cUrl(st.convId) + '/suggestions/dismiss', { key }).catch(() => undefined);
+  }
+  async function ensureConv(st) {
+    if (st.convId) return st.convId;
+    const c = await App.post('/api/conversations', {});
+    const kbIds = st.newKbs || [];
+    if (kbIds.length && App.can('context:write')) await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds }).catch(() => undefined);
+    st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(c.id);
+    await keepDismissals(st);
+    await Promise.all([loadConv(false), loadList()]);
+    return c.id;
+  }
+  /** Enter on a call filled in from the catalogue, the panel or a suggestion: `@agent: task`, `+skill text`, `/workflow text`, `/tool text`. */
+  async function sendCall(st, c, text) {
+    const rest = text.slice(c.call.length).replace(/^:\s*/, '').trim();
+    const ta = document.getElementById('ch-composer');
+    try {
+      if (c.kind === 'agent') {
+        if (!App.can('agents:run')) { App.toast('Your roles do not let you start agents.', 'warn'); return; }
+        if (!rest) { st.call = c; App.toast('Say what ' + esc(c.name) + ' should do after the colon.'); return; }
+        await ensureConv(st); await startAgent(st, c.name, rest); return;
+      }
+      if (c.kind === 'skill') {
+        await ensureConv(st); await addSkill(st, c.name, 'sticky');
+        st.draft = rest; if (ta) ta.value = rest;
+        if (rest) await send();
+        return;
+      }
+      if (c.kind === 'tool' && !(st.conv && st.conv.profileId)) {
+        // A new conversation has no profile until its first message: the question goes to the model, which is offered
+        // the tool through the profile; "/" calls it directly once the conversation exists.
+        st.draft = rest || text; if (ta) ta.value = st.draft;
+        App.toast(esc(c.name) + ' is on the profile: the model calls it when the question needs it. Type / in the conversation to call it yourself.');
+        await send(); return;
+      }
+      await ensureConv(st); await loadCaps(st);
+      const caps = st.caps && st.caps.caps;
+      const item = c.kind === 'workflow' ? ((caps && caps.workflows) || []).find((w) => w.name === c.name) : ((caps && caps.tools) || []).find((t) => t.name === c.name);
+      if (!item) { App.toast(esc(c.name) + ' cannot be called in this conversation.', 'warn'); return; }
+      st.draft = ''; if (ta) ta.value = '';
+      pickItem(live.ctx, st, c.kind === 'workflow' ? { kind: 'workflow', name: item.name, id: item.id, desc: item.description || '', schema: item.inputSchema, prefill: rest } : { kind: 'tool', name: item.name, desc: item.description || '', side: item.sideEffect, confirm: item.confirm, schema: item.inputSchema, prefill: rest });
+    } catch (err) { handleError(err, 'Could not call ' + c.name); }
+  }
+
   async function send() {
     const st = S(); const ta = document.getElementById('ch-composer');
     const text = ((ta && ta.value) || '').trim();
     if (!text) { App.toast('Type a message first.'); return; }
-    // 1.7.0 (B-4004): "@Agent: what to do" in an open conversation starts a run bound to it.
-    const at = st.convId ? /^@([^:\n]{1,120}):\s*([\s\S]+)$/.exec(text) : null;
-    if (at && App.can('agents:run')) { startAgent(st, at[1].trim(), at[2].trim()); return; }
+    st.sugg = null; paintSuggest(st);
+    // 1.7.0 (B-12301): a call put in the composer from the catalogue, the panel or a suggestion.
+    if (st.call && text.indexOf(st.call.call) === 0) { const c = st.call; st.call = null; await sendCall(st, c, text); return; }
+    st.call = null;
+    // 1.7.0 (B-4004): "@Agent: what to do" starts a run bound to the conversation (a new chat gets one first).
+    const at = /^@([^:\n]{1,120}):\s*([\s\S]+)$/.exec(text);
+    if (at && App.can('agents:run') && (st.convId || App.can('chat:write'))) { try { await ensureConv(st); await startAgent(st, at[1].trim(), at[2].trim()); } catch (err) { handleError(err, 'Could not start the agent'); } return; }
     const p = selProfile(st); if (!p) { App.toast('No profile is available to answer.', 'warn'); return; }
     const block = blocker(st); if (block) { App.toast(esc(block), 'warn'); return; }
     if (st.sending) return;
@@ -786,10 +889,10 @@
           await App.api('PUT', cUrl(c.id) + '/knowledge', { kbIds });
           sent = await App.post(cUrl(c.id) + '/messages', body);
         } catch (err) { await App.del(cUrl(c.id)).catch(() => undefined); throw err; }
-        st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId);
+        st.convId = c.id; st.bound = kbIds; st.newKbs = []; syncUrl(st.convId); keepDismissals(st);
       } else if (!st.convId) {
         const r = await App.post('/api/chat', body); sent = r;
-        st.convId = r.conversationId; st.bound = []; syncUrl(st.convId);
+        st.convId = r.conversationId; st.bound = []; syncUrl(st.convId); keepDismissals(st);
       } else {
         sent = await App.post(cUrl(st.convId) + '/messages', body);
       }
@@ -1154,6 +1257,13 @@
       const wantId = ctx.params.id || ctx.params.convo; // other screens link with ?convo=
       if (wantId && wantId !== st.paramId) { st.paramId = wantId; st.convId = wantId; setConv(st, null); st.loaded = false; }
       if (st.pending === undefined) st.pending = [];
+      // 1.7.0 (B-12301): "Use in Chat" from the catalogue: a new conversation with the composer filled in.
+      if (st.fill) {
+        const f = st.fill; st.fill = null;
+        st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; st.paramId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; st.dismissedNew = []; st.sugg = null;
+        if (f.profile) { const fp = profileOf(st, f.profile); if (fp) { st.profile = fp.name; st.think = fp.thinkDefault; } else if (!st.loaded) st.profile = f.profile; }
+        st.call = { kind: f.kind, name: f.name, call: f.call, id: f.id || null }; st.draft = f.compose; st.focus = true; st.caret = null;
+      }
       if (!st.loaded && !st.loadError) load();
       if (ctx.params.shared && ctx.params.shared !== st.sharedToken) { st.sharedToken = ctx.params.shared; st.sharedView = null; st.sharedError = null; openLink(ctx.params.shared); }
       if (st.sharedList === undefined && App.can('chat:read')) { st.sharedList = []; loadSharedList(); }
@@ -1203,6 +1313,9 @@
         + '.ch-dd .tags{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto}.ch-dd .tags .pill,.ch-dd .tags .label{flex-shrink:0}'
         + '.ch-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:4px 0}.ch-card.awaiting{border-color:var(--warn-fg);background:var(--warn-bg)}.ch-card.held{border-color:var(--info-fg)}.ch-card.denied,.ch-card.failed{border-color:var(--danger-fg)}.ch-card .ch-args{font-size:12px;overflow-wrap:anywhere}.ch-approval{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-tint)}'
         + '.ch-steps{display:flex;flex-direction:column;gap:4px;font-size:13px}.ch-step{display:flex;gap:8px;align-items:center}.ch-step .num{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;display:inline-flex;align-items:center;justify-content:center}.ch-step.waiting{color:var(--warn-fg)}.ch-step.failed,.ch-step.denied{color:var(--danger-fg)}'
+        + '.ch-discover{display:flex;flex-direction:column;gap:10px;margin-top:12px}.ch-discover h2{margin:0}.ch-dcat{display:flex;flex-direction:column;gap:4px}.ch-dcatname{margin:0;font-size:12px;font-weight:600;color:var(--muted)}'
+        + '.ch-ditem{display:flex;flex-direction:column;gap:2px;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:13px;text-align:left;cursor:pointer}.ch-ditem:hover{background:var(--accent-tint)}.ch-ditem .mono{overflow-wrap:anywhere}.ch-ditem .desc{font-size:12px;color:var(--fg2);overflow-wrap:anywhere}.ch-ditem .ex{font-size:12px;font-style:italic;color:var(--muted);overflow-wrap:anywhere}'
+        + '.ch-suggest{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ch-schip{display:inline-flex;align-items:center;gap:2px;max-width:100%}.ch-schip .chip{max-width:100%;overflow-wrap:anywhere}'
         + '.ch-skills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ch-skills:empty{display:none}.ch-skills .ch-x{margin-left:4px;opacity:.7}'
         + '.ch-picker{position:absolute;left:0;bottom:calc(100% + 4px);top:auto;min-width:360px;max-width:min(560px,100%);z-index:30;max-height:50vh;overflow:auto}.ch-picker .dh{display:flex;justify-content:space-between;gap:8px}.ch-picker button{display:block;width:100%;text-align:left}.ch-picker button .desc{display:block;font-size:11px;color:var(--muted);white-space:normal}.ch-picker button .side{float:right;margin-left:8px}'
         + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
@@ -1229,6 +1342,7 @@
         + '<div data-region="cold">' + coldHtml(st) + '</div>'
         + '<div data-region="atts">' + attsHtml(st) + '</div>'
         + '<div class="ch-skills" data-region="skills">' + skillChipsHtml(st) + '</div>'
+        + '<div data-region="suggest">' + suggestHtml(st) + '</div>'
         + '<div class="relative" data-region="picker">' + pickerHtml(st) + '</div>'
         + '<label class="sr" for="ch-composer">Message</label><textarea id="ch-composer" placeholder="' + (canSend ? (st.convId ? 'Ask something. Type / for a tool or workflow, @ for an agent, + for a skill.' : 'Ask something. Attach a text file with the paper clip.') : 'Read only') + '"' + (canSend ? '' : ' disabled') + ' aria-describedby="ch-composer-hint" role="combobox" aria-autocomplete="list" aria-expanded="false"></textarea>'
         + '<span id="ch-composer-hint" class="sr">In an open conversation, slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
@@ -1254,7 +1368,32 @@
         else if (st.picker && open) { st.picker.q = v.slice(1); st.picker.i = 0; }
         else if (st.picker) st.picker = null;
         paintPicker(st);
+        // 1.7.0 (B-12303): suggestions after a pause in typing, never while a picker is open or a call is filled in.
+        clearTimeout(live.sugTimer);
+        if (st.picker || !App.can('chat:write') || v.trim().length < 3 || /^[/@+]/.test(v.trim())) { if (st.sugg) { st.sugg = null; paintSuggest(st); } }
+        else live.sugTimer = setTimeout(() => suggest(st, v), 400);
       });
+      ctx.on('click', '[data-usesug]', (e, t) => {
+        const x = ((st.sugg && st.sugg.list) || []).find((y) => y.key === t.dataset.usesug); if (!x) return;
+        const ta = ctx.$('#ch-composer'); const rest = ((ta && ta.value) || '').trim();
+        fillCall(st, { kind: x.kind, name: x.name, call: x.call, compose: x.kind === 'agent' ? '@' + x.name + ': ' + rest : x.call + ' ' + rest });
+        paintSuggest(st);
+        App.toast(x.kind === 'agent' ? 'Enter starts a run of ' + esc(x.name) + ' with your text.' : x.kind === 'skill' ? 'Enter adds ' + esc(x.name) + ' and sends your text.' : 'Enter opens ' + esc(x.name) + ' with your text.');
+      });
+      ctx.on('click', '[data-dismisssug]', async (e, t) => {
+        const key = t.dataset.dismisssug;
+        if (st.convId) { try { await App.post(cUrl(st.convId) + '/suggestions/dismiss', { key }); } catch (err) { handleError(err, 'Could not dismiss the suggestion'); return; } }
+        else st.dismissedNew = (st.dismissedNew || []).concat([key]);
+        if (st.sugg) st.sugg.list = st.sugg.list.filter((x) => x.key !== key);
+        paintSuggest(st);
+        const ta = document.getElementById('ch-composer'); if (ta) ta.focus();
+        App.toast('Dismissed for the rest of this conversation.');
+      });
+      ctx.on('click', '[data-discover]', (e, t) => {
+        const x = ((st.cat && st.cat.data && st.cat.data.entries) || []).find((y) => y.key === t.dataset.discover); if (!x) return;
+        fillCall(st, { kind: x.kind, name: x.name, call: x.call, id: x.id, compose: x.compose });
+      });
+      ctx.on('click', '[data-gocat]', (e) => { e.preventDefault(); ctx.navigate('catalog'); });
       ctx.on('keydown', '#ch-composer', (e) => {
         if (st.picker) {
           const items = pickerItems(st);
@@ -1291,7 +1430,7 @@
       ctx.on('click', '[data-gorun]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { run: t.dataset.gorun }); });
       ctx.on('click', '[data-gochain]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { chain: t.dataset.gochain }); });
       ctx.on('click', '[data-send]', () => send());
-      ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
+      ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; st.cat = null; st.call = null; st.sugg = null; st.dismissedNew = []; rerender(true); });
       ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; st.sharedView = null; st.sharedError = null; openConv(t.dataset.convo); });
       ctx.on('click', '[data-showlist]', () => { st.showList = !st.showList; const l = ctx.$('.ch-left'); if (l) l.classList.toggle('ch-open', st.showList); });
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
@@ -1399,7 +1538,7 @@
         setTimeout(() => document.addEventListener('click', outside, true), 0);
         d.addEventListener('click', (ev) => {
           const b = ev.target.closest('button'); if (!b) return;
-          if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; }
+          if (b.dataset.prof) { const np = profileOf(st, b.dataset.prof); st.profile = np.name; st.think = np.thinkDefault; st.forceCold = false; st.sugg = null; }
           if (b.dataset.level) st.think = b.dataset.level;
           document.removeEventListener('click', outside, true);
           d.remove();

@@ -6,7 +6,7 @@ test.describe('Runs', () => {
     // A published agent to run: authored by root, approved by root2 (the registry's dual control).
     const author = await apiAs('root');
     const reviewer = await apiAs('root2');
-    const e = await author.post('/api/admin/registry', { kind: 'agent', name: 'Travel desk', version: '1.0.0', description: 'Answers questions about travel bookings and the travel policy for the finance team.', label: 'internal', definition: { profile: 'general', systemPrompt: 'Be exact.', tools: ['calculate'], skills: [], budgets: { steps: 10, tokens: 10000, wallSeconds: 120, toolCalls: 4 } } });
+    const e = await author.post('/api/admin/registry', { kind: 'agent', name: 'Travel desk', version: '1.0.0', description: 'Answers questions about travel bookings and the travel policy for the finance team.', label: 'internal', definition: { profile: 'general', systemPrompt: 'Be exact.', tools: ['calculate'], skills: [], budgets: { steps: 10, tokens: 10000, wallSeconds: 120, toolCalls: 4 } }, purpose: 'Travel questions for the finance team.', examples: ['What is the per diem in Lisbon?'], category: 'Travel' });
     await author.post(`/api/admin/registry/${e.id}/submit`);
     await reviewer.post(`/api/admin/registry/${e.id}/review`, { decision: 'approve', scope: 'tenant', workspaces: [] });
     await author.close();
@@ -44,7 +44,7 @@ test.describe('plan-first runs', () => {
       const p = (await author.post('/api/admin/profiles', { name: 'thinker', displayName: 'Thinker', description: 'Thinks before it answers.', modelId: magistral.id, poolId: general.poolId, label: 'internal', thinkDefault: 'low', thinkCeiling: 'medium', tools: ['calculate'] })) as { id: string };
       await author.post(`/api/admin/profiles/${p.id}/publish`, { status: 'published' });
     }
-    const e = await author.post('/api/admin/registry', { kind: 'agent', name: 'Planner desk', version: '1.0.0', description: 'Plans before it acts: answers travel questions for the finance team after an approved plan.', label: 'internal', definition: { profile: 'thinker', systemPrompt: 'Be exact.', tools: ['calculate'], skills: [], planFirst: true, think: 'low', budgets: { steps: 10, tokens: 10000, wallSeconds: 120, toolCalls: 4 } } });
+    const e = await author.post('/api/admin/registry', { kind: 'agent', name: 'Planner desk', version: '1.0.0', description: 'Plans before it acts: answers travel questions for the finance team after an approved plan.', label: 'internal', definition: { profile: 'thinker', systemPrompt: 'Be exact.', tools: ['calculate'], skills: [], planFirst: true, think: 'low', budgets: { steps: 10, tokens: 10000, wallSeconds: 120, toolCalls: 4 } }, purpose: 'Travel questions for the finance team.', examples: ['What is the per diem in Lisbon?'], category: 'Travel' });
     await author.post(`/api/admin/registry/${e.id}/submit`);
     await reviewer.post(`/api/admin/registry/${e.id}/review`, { decision: 'approve', scope: 'tenant', workspaces: [] });
     await author.close();

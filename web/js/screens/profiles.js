@@ -20,7 +20,9 @@
     others: (p.tools || []).filter((t) => t !== 'calculate'),
     trustMarking: p.trustMarking !== false,
     // 1.7.0 (B-11702 to B-11704): the daily thinking budget, plan first and reflection.
-    thinkingBudget: p.thinkingBudget == null ? '' : String(p.thinkingBudget), planFirst: !!p.planFirst, reflect: !!p.reflect, reflectProfile: p.reflectProfile || ''
+    thinkingBudget: p.thinkingBudget == null ? '' : String(p.thinkingBudget), planFirst: !!p.planFirst, reflect: !!p.reflect, reflectProfile: p.reflectProfile || '',
+    // 1.7.0 (B-12303): composer suggestions from the catalogue.
+    suggestions: p.suggestions !== false
   });
   const num = (v, what, int) => {
     if (String(v).trim() === '') return null;
@@ -36,7 +38,8 @@
     fallback: f.fbProfile ? { profileId: f.fbProfile, afterQueueWaitMs: Math.round((num(f.fbWait, 'Queue wait') || 0) * 1000) } : null,
     tools: (f.calculate ? ['calculate'] : []).concat(f.others || []),
     trustMarking: !!f.trustMarking,
-    thinkingBudget: num(f.thinkingBudget, 'Thinking budget', true), planFirst: !!f.planFirst, reflect: !!f.reflect, reflectProfile: f.reflect && f.reflectProfile ? f.reflectProfile : null
+    thinkingBudget: num(f.thinkingBudget, 'Thinking budget', true), planFirst: !!f.planFirst, reflect: !!f.reflect, reflectProfile: f.reflect && f.reflectProfile ? f.reflectProfile : null,
+    suggestions: !!f.suggestions
   });
 
   function cur(st) { return (st.profiles || []).find((x) => x.id === st.sel) || null; }
@@ -317,6 +320,7 @@
           + UI.field('Thinking ceiling', UI.select(THINK, f.thinkCeiling, 'data-f="thinkCeiling" data-key="thinkCeiling"'), 'Users may choose up to this level')
           + UI.field('Thinking budget per day', UI.input(f.thinkingBudget, { placeholder: 'none', attrs: 'data-f="thinkingBudget" class="input mono" inputmode="numeric"' }).replace('class="input" ', ''), 'Thinking tokens per UTC day; at the limit turns think at low rather than being refused')
           + UI.field('Plan first', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Draft a plan before any tool runs', f.planFirst, 'data-f="planFirst" data-key="planFirst"') + '</div>', 'The plan is a card the person approves, edits or declines; agent runs wait on it as their first step')
+          + UI.field('Composer suggestions', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Suggest catalogue entries while people type', f.suggestions, 'data-f="suggestions" data-key="suggestions"') + '</div>', 'Ranked by the embedding profile; no chat model is called')
           + UI.field('Reflection', '<div style="min-height:30px;display:flex;align-items:center">' + UI.check('Check every answer in a second pass', f.reflect, 'data-f="reflect" data-key="reflect"') + '</div>', 'Against the question, its citations and tool results; findings or a revised answer become the checked badge')
           + UI.field('Reflection by', UI.select([{ value: '', label: 'this profile' }].concat((st.profiles || []).filter((x) => x.id !== p.id && !x.aliasOf).map((x) => ({ value: x.name, label: x.name }))), f.reflectProfile, 'data-f="reflectProfile" data-key="reflectProfile"' + (f.reflect ? '' : ' disabled')), 'Another profile may do the second pass; it is metered to the conversation')
           + UI.field('Fallback after queue wait', '<div class="hstack gap6">' + UI.select(fbOpts, f.fbProfile, 'data-f="fbProfile" data-key="fbProfile" style="flex:1;min-width:0"') + UI.input(f.fbWait, { attrs: 'data-f="fbWait" class="input mono" style="width:64px" inputmode="decimal" aria-label="Seconds of queue wait"' + (f.fbProfile ? '' : ' disabled') }).replace('class="input" ', '') + '<span class="muted">s</span></div>')
@@ -481,8 +485,8 @@
         ctx.on('click', '[data-save]', () => {
           let body; let before;
           try { body = bodyOf(Object.assign({}, formOf(p), st.form[p.id] || {})); before = bodyOf(formOf(p)); } catch (err) { toast(esc(err.message), 'danger'); return; }
-          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', thinkingBudget: 'Thinking budget', planFirst: 'Plan first', reflect: 'Reflection', reflectProfile: 'Reflection by', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools', trustMarking: 'Untrusted content marking' };
-          const show = (k, v) => { if (k === 'trustMarking' || k === 'planFirst' || k === 'reflect') return v ? 'on' : 'off'; if (k === 'reflectProfile') return v || 'this profile'; if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
+          const LBL = { displayName: 'Display name', description: 'Description', modelId: 'Model', poolId: 'Pool', numCtx: 'num_ctx', temperature: 'temperature', label: 'Max label', thinkDefault: 'Thinking default', thinkCeiling: 'Thinking ceiling', thinkingBudget: 'Thinking budget', planFirst: 'Plan first', reflect: 'Reflection', suggestions: 'Composer suggestions', reflectProfile: 'Reflection by', systemPrompt: 'System prompt', fallback: 'Fallback', tools: 'Tools', trustMarking: 'Untrusted content marking' };
+          const show = (k, v) => { if (k === 'trustMarking' || k === 'planFirst' || k === 'reflect' || k === 'suggestions') return v ? 'on' : 'off'; if (k === 'reflectProfile') return v || 'this profile'; if (v == null || (Array.isArray(v) && !v.length)) return 'none'; if (k === 'modelId') return (modelById(v) || { name: v }).name; if (k === 'poolId') return poolName(v); if (k === 'fallback') return (byId(v.profileId) || { name: '?' }).name + ' after ' + v.afterQueueWaitMs / 1000 + ' s'; if (k === 'systemPrompt') return v.length > 60 ? v.slice(0, 60) + '…' : v; return Array.isArray(v) ? v.join(', ') : String(v); };
           const patch = {}; const kv = [];
           Object.keys(body).forEach((k) => { if (JSON.stringify(body[k]) !== JSON.stringify(before[k])) { patch[k] = body[k]; kv.push([LBL[k], esc(show(k, before[k])) + ' → <b>' + esc(show(k, body[k])) + '</b>']); } });
           if (!kv.length) { delete st.form[p.id]; ctx.rerender(); return; }

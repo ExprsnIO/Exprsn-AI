@@ -280,6 +280,8 @@ async function main() {
   await repo.place(vision.id, pool.id, 'cold', 'e2e');
   models['llava:7b'] = vision.id;
   await repo.createProfile(profile('VISION'.padEnd(26, '0'), 'vision', 'Vision', 'llava:7b'));
+  // 1.7.0 (B-12303): the embedding profile composer suggestions rank the catalogue with (DISCOVERY_EMBED_PROFILE).
+  await repo.createProfile(profile('EMBED'.padEnd(26, '0'), 'embed', 'Embed', 'nomic-embed-text'));
   const imageKinds = await s.guard.classifiers.create(tenantId, { name: 'Image kinds', engine: 'vision', labels: ['receipt', 'screenshot'], profile: 'vision', description: 'Whether an image is a receipt or a screenshot, scored by the vision profile.' }, { userId: root.id, name: 'Mara Okafor' });
   await s.db('classifiers').where({ id: imageKinds.id }).update({ status: 'published' });
   await s.gateway.pollAll();

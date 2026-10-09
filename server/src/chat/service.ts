@@ -531,6 +531,8 @@ export class ChatService {
       if (!target || target.alias_of || target.status !== 'published') continue;
       const m = models.find((x) => x.id === target!.model_id);
       if (!m || (m.state !== 'approved' && m.state !== 'deprecated')) continue;
+      // 1.7.0 (B-12303): an embedding-only model (the embedding profile suggestions use) cannot answer a chat.
+      if (m.capabilities.includes('embedding') && !m.capabilities.includes('completion')) continue;
       if (!clears(p.clearance, target.label)) continue;
       out.push({
         id: row.id,

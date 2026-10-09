@@ -11,7 +11,7 @@ import { reflowProblems } from './support/reflow';
 // delete is refused while a published agent lists it.
 
 const BUDGETS = { steps: 10, tokens: 20_000, wallSeconds: 300, toolCalls: 4 };
-const agent = (name: string, systemPrompt: string, def: Record<string, unknown> = {}) => ({ kind: 'agent', name, version: '1.0.0', description: `${name}: works on the September close task it is given and reports the result plainly.`, label: 'internal', definition: { profile: 'general', systemPrompt, tools: [], skills: [], budgets: BUDGETS, ...def } });
+const agent = (name: string, systemPrompt: string, def: Record<string, unknown> = {}) => ({ kind: 'agent', name, version: '1.0.0', description: `${name}: works on the September close task it is given and reports the result plainly.`, label: 'internal', definition: { profile: 'general', systemPrompt, tools: [], skills: [], budgets: BUDGETS, ...def }, purpose: 'Works on the September close.', examples: ['Close September'], category: 'Finance' });
 
 let rootRun = '';
 let workflowId = '';
