@@ -2,6 +2,7 @@ import { ulid } from 'ulid';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, LABELS, labelRank, type Label } from '../authz/labels.js';
+import type { HoldLookup } from '../compliance/holds.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { actorFrom, type AuditLog } from '../audit/chain.js';
 import { csvLine } from '../audit/exports.js';
@@ -173,6 +174,8 @@ export interface MemoryDeps {
   terms: TermKeys;
   log: Logger;
   embed: (tenantId: string, model: string, texts: string[], label: Label, userId: string | null) => Promise<number[][]>;
+  /** 1.6.0 (B-7602): users and workspaces under a legal hold, whose memories are not purged. */
+  holds?: HoldLookup;
 }
 
 /**
@@ -1000,7 +1003,10 @@ export class MemoryService {
   // ---------- expiry ----------
 
   async purgeExpired(tenantId: string): Promise<{ purged: number }> {
-    const rows = ((await this.db('memories').where({ tenant_id: tenantId }).whereNotNull('expires_at').andWhere('expires_at', '<=', Date.now())) as Record<string, unknown>[]).map(fromRow);
+    const held = (await this.d.holds?.held(tenantId)) ?? { users: [], workspaces: [] };
+    const rows = ((await this.db('memories').where({ tenant_id: tenantId }).whereNotNull('expires_at').andWhere('expires_at', '<=', Date.now())) as Record<string, unknown>[])
+      .map(fromRow)
+      .filter((m) => !((m.scope === 'user' && held.users.includes(m.owner_id)) || (m.scope === 'workspace' && held.workspaces.includes(m.owner_id))));
     for (const m of rows) {
       await this.forget(m);
       await this.d.audit.append({ tenantId, action: 'memory.expired', kind: 'system', actor: { service: 'memory.purge' }, target: { memory: m.id, scope: m.scope }, label: m.label });

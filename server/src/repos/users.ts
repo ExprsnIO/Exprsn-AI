@@ -14,6 +14,8 @@ export interface UserRow {
   clearance_direct: Label | null;
   mfa_required: boolean;
   last_login_at: number | null;
+  /** 1.6.0 (B-8101): JSON of attribute name to string, compared by app policies; null when none were set. */
+  attributes: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -92,7 +94,7 @@ export class UserRepo {
     return userFromRow(row);
   }
 
-  async update(tenantId: string, id: string, patch: Partial<Pick<UserRow, 'display_name' | 'email' | 'state' | 'disabled_reason' | 'clearance' | 'clearance_direct' | 'mfa_required' | 'last_login_at'>>): Promise<void> {
+  async update(tenantId: string, id: string, patch: Partial<Pick<UserRow, 'display_name' | 'email' | 'state' | 'disabled_reason' | 'clearance' | 'clearance_direct' | 'mfa_required' | 'attributes' | 'last_login_at'>>): Promise<void> {
     await this.db('users').where({ tenant_id: tenantId, id }).update({ ...patch, updated_at: Date.now() });
   }
 

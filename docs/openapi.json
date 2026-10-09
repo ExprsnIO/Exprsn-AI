@@ -56605,6 +56605,490 @@
         }
       }
     },
+    "/api/apps/{app}/entities/{entity}/policies/explain": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8103 explain: {userId, recordId?, field?} answers {user: {id, username, clearance, roles, groups, workspaces, attributes, designer}, policed, none, rows (the resolved filter), policies: [{id, name, matches, subject, reason, rows}], record: {reachable, by} | null, field: {name, read, unmasked, create, update, mask, by} | null}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/policies": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. The app's row and field policies (B-8101 to B-8103): {policies: [Policy], placeholders}. A Policy is {id, name, description, enabled, entity (null: every entity), subjects: [{kind: everyone | role | group | workspace | user, value?}], rows (a record filter whose values may be $user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces or $user.attributes.<name>; null: every row), fields: {<field>: {read, unmasked, create, update, mask: last4 | hash | hidden}}, otherFields}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. Creates a policy {name, description?, enabled?, entity?, subjects, rows?, fields?, otherFields?}: 201 Policy. 422 when a row condition names a field that is not indexed in every entity it covers, a placeholder is unknown, a list placeholder ($user.roles, $user.groups, $user.workspaces) is compared with anything but in, or a subject names an unknown workspace or user. Audited app.policy.created",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/policies/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. Removes a policy: 204. Audited app.policy.deleted",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. Replaces a policy (the same body and checks as POST). Audited app.policy.updated",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. B-7601: {rules: [Rule], patterns: [Pattern], detectors, scopes, labels}. A Rule is {id, name, enabled, detectors (built-in kinds or pattern:<id>), raiseTo, action: label | redact | hold, scopes: [answer | agent | upload]}; a Pattern {id, name, pattern (RE2), label, enabled}",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp/patterns": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Creates a tenant pattern {name, pattern, label, enabled?}: 201 Pattern; 422 when RE2 rejects the pattern. Audited dlp.pattern.created",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp/patterns/{id}": {
+      "delete": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Removes a pattern: 204; 409 while a rule detects with it. Audited dlp.pattern.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Replaces a pattern. Audited dlp.pattern.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp/rules": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Creates a DLP rule {name, enabled?, detectors, raiseTo, action, scopes}: 201 Rule; 422 for an unknown pattern id. Audited dlp.rule.created",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp/rules/{id}": {
+      "delete": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Removes a DLP rule: 204. Audited dlp.rule.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Replaces a DLP rule. Audited dlp.rule.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/dlp/test": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Tries the tenant's rules on {text, scope?, label?}: {label, raised, action, text (redacted when the action is redact), rules, detections}. Nothing is stored or audited",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/exports": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:export (a person or an API key scoped to it). B-7603: {exports: [Export]}. An Export is {id, params, scope, state: queued | running | ready | failed, label, counts, omitted, createdBy, apiKeyId, error, createdAt, finishedAt, file}",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:export. Queues an export {userId?, workspaceId? (one or both), from, to, kinds?: [conversations | files | memories | runs | users]}: 202 Export. Rows above the requester's clearance are left out and counted. 400 past COMPLIANCE_EXPORT_MAX_DAYS. Audited compliance.export.requested; compliance.exported when written",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/exports/{id}": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:export. One export with its state and counts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/exports/{id}/download": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:export. The export as application/x-ndjson, one object a line ({kind: export | conversation | file | memory | run | user | summary}), streamed part by part; 409 until ready, 403 step clearance below the export's label. Audited compliance.export.downloaded",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/holds": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. B-7602: {holds: [Hold], approvers, scopes}. A Hold is {id, scope: user | workspace, scopeId, subject, reason, state: pending | active | rejected | withdrawn | released, requestedBy, approver, decidedBy, decidedAt, releasedBy, releasedAt, note, createdAt, updatedAt}",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Asks for a legal hold {scope, scopeId, reason, approverId}: 201 Hold (pending). Dual control: the approver is another holder of compliance:manage (403 step dual-control for oneself, 422 otherwise); 409 while a hold on the subject is pending or active. Audited legal_hold.requested; the approver is notified",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/holds/{id}": {
+      "get": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. One hold",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/holds/{id}/decide": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. The approver decides {decision: approved | rejected, note?}: approved suspends every retention purge of the subject's conversations, memories and files at once. 403 step dual-control for the requester; 409 once decided. Audited legal_hold.approved / legal_hold.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/holds/{id}/release": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. Ends an active hold {note?}: the next purge treats the content as before. Audited legal_hold.released",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/compliance/holds/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "compliance"
+        ],
+        "summary": "compliance:manage. The requester withdraws a pending request. Audited legal_hold.withdrawn",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/imports/repositories": {
       "get": {
         "x-exprsn-since": "1.5.0",

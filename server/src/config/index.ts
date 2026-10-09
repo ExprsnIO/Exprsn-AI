@@ -524,6 +524,14 @@ const base = z.object({
      * carries an expiry within it (the default expiry when none is asked). 0: shares may be open-ended.
      */
     VAULT_SHARE_MAX_DAYS: z.coerce.number().int().min(0).max(3650).default(0),
+    /** 1.6.0, Sprint 38c (B-7601): DLP inspects at most this many characters of an answer, output or upload. */
+    DLP_MAX_TEXT_BYTES: z.coerce.number().int().min(10_000).max(50_000_000).default(1_048_576),
+    /**
+     * 1.6.0, Sprint 38c (B-7603): a compliance export writes at most COMPLIANCE_EXPORT_MAX_ROWS objects (conversations
+     * count their messages) and covers at most COMPLIANCE_EXPORT_MAX_DAYS (0: any range).
+     */
+    COMPLIANCE_EXPORT_MAX_ROWS: z.coerce.number().int().min(100).max(10_000_000).default(100_000),
+    COMPLIANCE_EXPORT_MAX_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
     /**
      * 1.6.0, Sprint 37c (B-7201): SCIM 2.0 provisioning at /scim/v2. A list answers at most IDENTITY_SCIM_MAX_RESULTS
      * resources a page (ServiceProviderConfig `filter.maxResults`); each address is limited to

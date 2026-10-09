@@ -107,6 +107,9 @@ import { RotationNotices } from './vault/rotation.js';
 import { RevealWatch } from './vault/anomalies.js';
 import { VaultShares } from './vault/shares.js';
 import { ScimService } from './identity/scim/service.js';
+import { DlpService } from './compliance/dlp.js';
+import { LegalHolds } from './compliance/holds.js';
+import { ComplianceExports } from './compliance/exports.js';
 import { PkiService } from './pki/service.js';
 import { AtprotoService } from './atproto/service.js';
 import { AtprotoAccounts } from './atproto/accounts.js';
@@ -271,6 +274,12 @@ export interface Services {
   vaultShares: VaultShares;
   /** 1.6.0, Sprint 37c (B-7201, B-7202): SCIM 2.0 users and groups pushed to a tenant's SCIM store. */
   scim: ScimService;
+  /** 1.6.0, Sprint 38c (B-7601): DLP rules and patterns; answers, outputs and uploads classified and acted on. */
+  dlp: DlpService;
+  /** 1.6.0, Sprint 38c (B-7602): legal holds on users and workspaces, under dual control, suspending purges. */
+  legalHolds: LegalHolds;
+  /** 1.6.0, Sprint 38c (B-7603): compliance exports for eDiscovery, as sealed JSON Lines. */
+  complianceExports: ComplianceExports;
   /** 1.4.0, Sprint 25 (B-1608 to B-1611): service DIDs, their keys, the signed labeler and trusted external labelers. */
   atproto: AtprotoService;
   /** 1.4.0, Sprint 26 (B-1807, B-1808): user DIDs and handles, and sign-in with AT-Protocol accounts. */
@@ -414,10 +423,16 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   const attachments = new AttachmentService(db, blobs, keys, jobs, bus, { maxBytes: cfg.ATTACHMENT_MAX_BYTES, ...(cfg.CLAMD_HOST ? { clamd: { host: cfg.CLAMD_HOST, port: cfg.CLAMD_PORT } } : {}) });
   const calc = new CalcWorker();
   const guard = createGuardrails({ db, keys, gateway, bus, notifications, jobs, log });
+  // 1.6.0, Sprint 38c: DLP and legal holds read their collaborators lazily; chat, uploads, memory and files take them now.
+  const dlp = new DlpService(() => s);
+  const legalHolds = new LegalHolds(() => s);
+  attachments.dlp = dlp;
   const chat = new ChatService(db, keys, gateway, quotas, audit, bus, attachments, calc, log, guard.engine, {
     store: cfg.REDIS_URL ? new RedisStreamStore(cfg.REDIS_URL, keys, log) : new DbStreamStore(db, keys),
     flags: guard.flags,
     notifications,
+    dlp,
+    legalHolds,
     leaseMs: cfg.CHAT_STREAM_LEASE_SECONDS * 1000,
     // Sprint 16: a prompt a reviewer approved is answered for its owner; the guard model screens streamed answers.
     principalFor: async (tenantId, userId, workspaceId) => {
@@ -494,7 +509,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   // Sprint 36c (B-8802, B-8805): image cases of classifier datasets, and new vision classifier versions re-label images.
   guard.classifiers.blobs = blobs;
   guard.classifiers.onVersion.push(async (c) => void (await knowledge.classifierVersioned(c)));
-  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u) });
+  const memory = new MemoryService({ db, keys, blobs, jobs, gateway, vectors, audit, guard: checkpoint, terms: knowledge.terms, log, embed: (t, m, x, l, u) => knowledge.embed(t, m, x, l, u), holds: legalHolds });
+  agents.dlp = dlp; // 1.6.0, Sprint 38c (B-7601): run outputs classified
   chat.contextProviders.push((r) => knowledge.contextFor(r), (r) => memory.contextFor(r));
   agents.memories = (p, agent, label) => memory.forAgent(p, agent, label);
   agents.proposeMemory = (p, input) => memory.proposeForAgent(p, input);
@@ -595,6 +611,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     revealWatch: new RevealWatch(() => s),
     vaultShares: new VaultShares(() => s),
     scim: new ScimService(() => s),
+    dlp,
+    legalHolds,
+    complianceExports: new ComplianceExports(() => s),
     atproto: new AtprotoService(() => s),
     atprotoAccounts: new AtprotoAccounts(() => s),
     // 1.4.0, Sprint 26d: the file store.
@@ -722,6 +741,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
   s.vaultShares.registerJobs(); // 1.6.0, Sprint 37c (B-4801): expired shares removed
   s.scim.registerJobs(); // 1.6.0, Sprint 37c (B-7202): group mappings re-applied to a SCIM store
+  s.complianceExports.registerJobs(); // 1.6.0, Sprint 38c (B-7603): compliance exports written
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });
     s.chain.useVaultResolver((row) => (ref) => vaultRead(row.tenant_id, row.vault_owner, ref, `identity-provider:${row.id}`));

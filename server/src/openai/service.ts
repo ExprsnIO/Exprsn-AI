@@ -509,6 +509,23 @@ export class OpenAiService {
         content = d.text;
         finishReason = 'content_filter';
       }
+      // 1.6.0 (B-7601): DLP on the answer: the label rises; a hold (or a label above the caller's clearance) withholds
+      // it; a redaction replaces the spans. Audited as the request's label.
+      if (finishReason !== 'content_filter' || !content.startsWith('This answer was withheld.')) {
+        const dlp = await s.dlp.inspect({ tenantId: p.tenantId, text: content, scope: 'answer', label: answerLabel });
+        if (dlp.rules.length) {
+          if (dlp.raised) answerLabel = dlp.label;
+          const names = dlp.rules.map((x) => x.name).join(', ');
+          if (dlp.action === 'hold' || labelRank(dlp.label) > labelRank(p.clearance)) {
+            content = `This answer was withheld. ${dlp.action === 'hold' ? `Held by the DLP rule ${names}.` : `DLP classified it ${dlp.label}, above your clearance.`}`;
+            finishReason = 'content_filter';
+          } else if (dlp.action === 'redact' && dlp.text !== content) {
+            content = dlp.text;
+            finishReason = 'content_filter';
+          }
+          await s.audit.append({ tenantId: p.tenantId, action: 'api.chat.dlp', kind: 'system', actor: actorFrom(p), target: { request: id, profile: r.profile.name }, label: answerLabel, detail: { rules: dlp.rules.map((x) => x.name), action: dlp.action, label: dlp.label } });
+        }
+      }
     }
     // Citations with the passage each knowledge item contributed; none for an answer that was withheld.
     const withheld = finishReason === 'content_filter' && content.startsWith('This answer was withheld.');

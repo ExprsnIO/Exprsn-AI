@@ -8,6 +8,7 @@ import { draft, draftSchema } from '../apps/drafts.js';
 import { formDefinitionSchema, formView } from '../apps/forms.js';
 import { aggregateSchema, filterSchema, sortSchema, type Filter, type Sort } from '../apps/query.js';
 import { entityDefinitionSchema, nameSchema } from '../apps/schema.js';
+import { AppPolicies, policyInputSchema, policyView } from '../apps/policies.js';
 import { appView, entityView, type Actor } from '../apps/service.js';
 import type { Services } from '../services.js';
 
@@ -316,6 +317,39 @@ export function appRoutes(s: Services): Router {
   r.delete('/apps/:app/triggers/:id', design, async (req, res) => {
     await a.triggers.remove(actor(req), param(req, 'app'), parseBody(id26, req.params.id));
     res.status(204).end();
+  });
+
+  // ---------- policies (1.6.0, B-8101 to B-8103) ----------
+  // Row and field policies of an app, kept by its designers; explain shows what one reader gets and why.
+
+  r.get('/apps/:app/policies', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    res.json({ policies: (await a.policies.list(app)).map((x) => policyView(x.policy, x.entityName)), placeholders: [...AppPolicies.placeholders()] });
+  });
+
+  r.post('/apps/:app/policies', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    const body = parseBody(policyInputSchema, req.body);
+    const created = await a.policies.create(actor(req), app, body);
+    res.status(201).json(policyView(created, body.entity));
+  });
+
+  r.put('/apps/:app/policies/:id', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    const body = parseBody(policyInputSchema, req.body);
+    res.json(policyView(await a.policies.update(actor(req), app, parseBody(id26, req.params.id), body), body.entity));
+  });
+
+  r.delete('/apps/:app/policies/:id', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    await a.policies.remove(actor(req), app, parseBody(id26, req.params.id));
+    res.status(204).end();
+  });
+
+  r.post('/apps/:app/entities/:entity/policies/explain', design, async (req, res) => {
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    const body = parseBody(z.object({ userId: id26, recordId: id26.nullable().optional(), field: nameSchema.nullable().optional() }).strict(), req.body);
+    res.json(await a.policies.explain(app, entity, body));
   });
 
   return r;

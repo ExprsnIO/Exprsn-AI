@@ -15,6 +15,7 @@ import type { Services } from '../services.js';
 import { generate } from './ai.js';
 import { AppBundles } from './bundles.js';
 import { AppForms } from './forms.js';
+import { AppPolicies, type Grant, type Mask } from './policies.js';
 import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, countRecords, pageRecords, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
 import {
   checkDefinition,
@@ -152,6 +153,9 @@ export interface RecordView {
   updatedBy: string | null;
   createdAt: number;
   updatedAt: number;
+  /** 1.6.0 (B-8102): fields a policy shows masked, with the format; and fields it hides (absent from `values`). */
+  masked?: Record<string, Mask>;
+  hidden?: string[];
 }
 
 /** Text for a CSV cell: quoted when needed, and a leading = + - @ (or tab, CR) made inert for spreadsheets. */
@@ -172,6 +176,8 @@ export class AppService {
   readonly forms: AppForms;
   readonly triggers: AppTriggers;
   readonly bundles: AppBundles;
+  /** 1.6.0 (B-8101 to B-8103): row and field policies, and the reader's grant on an entity. */
+  readonly policies: AppPolicies;
 
   constructor(
     private readonly s: () => Services,
@@ -180,6 +186,7 @@ export class AppService {
     this.forms = new AppForms(s, this);
     this.triggers = new AppTriggers(s, this);
     this.bundles = new AppBundles(s, this);
+    this.policies = new AppPolicies(s, this);
   }
 
   private get db() {
@@ -421,8 +428,39 @@ export class AppService {
     return json<Values>(await this.s().keys.open(r.tenant_id, r.data, recordAad(r.id)), {});
   }
 
-  async view(app: AppRow, entity: EntityRow, r: RecordRow, values?: Values): Promise<RecordView> {
-    return { id: r.id, app: app.name, entity: entity.name, label: r.label, state: r.state, values: values ?? (await this.open(r)), version: r.version, source: r.source, aiState: r.ai_state, aiError: r.ai_error, createdBy: r.created_by, updatedBy: r.updated_by, createdAt: r.created_at, updatedAt: r.updated_at };
+  async view(app: AppRow, entity: EntityRow, r: RecordRow, values?: Values, grant?: Grant): Promise<RecordView> {
+    const raw = values ?? (await this.open(r));
+    const shown = grant?.policed ? AppPolicies.apply(grant, entity.definition, raw) : null;
+    return {
+      id: r.id,
+      app: app.name,
+      entity: entity.name,
+      label: r.label,
+      state: r.state,
+      values: shown ? shown.values : raw,
+      version: r.version,
+      source: r.source,
+      aiState: r.ai_state,
+      aiError: r.ai_error,
+      createdBy: r.created_by,
+      updatedBy: r.updated_by,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      ...(shown ? { masked: shown.masked, hidden: shown.hidden } : {})
+    };
+  }
+
+  /** The reader's grant on an entity (1.6.0, B-8101): open unless the entity has policies and the reader is no designer. */
+  grantFor(p: Principal, entity: EntityRow): Promise<Grant> {
+    return this.policies.grantFor(p, { tenant_id: entity.tenant_id, id: entity.app_id }, entity);
+  }
+
+  /** Whether one record is among the rows a grant reaches (at labels a clearance clears), for explain and reads. */
+  async reaches(app: Pick<AppRow, 'tenant_id'>, entity: EntityRow, grant: Grant, id: string, clearance: Label): Promise<boolean> {
+    if (grant.none) return false;
+    const who = { tenantId: app.tenant_id, labels: LABELS.filter((l) => clears(clearance, l)) };
+    const filter = AppPolicies.narrow(grant, { field: 'id', op: 'eq', value: id })!;
+    return (await countRecords(who, { filter }, this.qctx(entity))) > 0;
   }
 
   /**
@@ -433,7 +471,11 @@ export class AppService {
     const { app, entity } = await this.resolve(p, appRef, entityRef);
     const ctx = this.qctx(entity);
     if (input.filter) checkFilterSize(input.filter);
-    const match = { ...(input.filter ? { filter: input.filter } : {}), ...(input.q ? { q: input.q } : {}) };
+    // 1.6.0 (B-8101): the rows a policy lets the reader reach narrow the query; hidden fields cannot be filtered or sorted by.
+    const grant = await this.grantFor(p, entity);
+    AppPolicies.checkReadable(grant, input.filter, input.sort);
+    const filter = AppPolicies.narrow(grant, input.filter);
+    const match = { ...(filter ? { filter } : {}), ...(input.q ? { q: input.q } : {}) };
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
     // What `base` reads, for the query builder: the tenant's records (of ctx's entity, not hidden) at cleared labels.
@@ -441,17 +483,18 @@ export class AppService {
     const page = await pageRecords(who, { ...match, sort: input.sort ?? [], limit, offset, ...(input.cursor ? { cursor: input.cursor } : {}) }, ctx);
     const total = input.count === false ? null : await countRecords(who, match, ctx);
     const rows = page.rows.map(recordFrom);
-    return { app, entity, total, limit, offset, nextCursor: page.nextCursor, records: await Promise.all(rows.map((r) => this.view(app, entity, r))) };
+    return { app, entity, total, limit, offset, nextCursor: page.nextCursor, records: await Promise.all(rows.map((r) => this.view(app, entity, r, undefined, grant))) };
   }
 
   async aggregate(p: Principal, appRef: string, entityRef: string, input: AggregateInput) {
     const { entity } = await this.resolve(p, appRef, entityRef);
     const ctx = this.qctx(entity);
+    const grant = await this.grantFor(p, entity);
+    AppPolicies.checkReadable(grant, input.filter, [...(input.groupBy && input.groupBy !== 'state' ? [{ field: input.groupBy }] : []), ...input.metrics.flatMap((m) => (m.op === 'count' ? [] : [{ field: m.field }]))]);
     const q = this.base(p, entity).select('r.id', 'r.state');
-    if (input.filter) {
-      checkFilterSize(input.filter);
-      applyFilter(q, input.filter, ctx);
-    }
+    if (input.filter) checkFilterSize(input.filter);
+    const filter = AppPolicies.narrow(grant, input.filter);
+    if (filter) applyFilter(q, filter, ctx);
     if (input.q) applySearch(q, input.q, ctx);
     if (input.groupBy === 'state' && !entity.definition.states) throw badRequest('This entity has no state machine to group by.');
     return aggregate(q, input, ctx);
@@ -463,15 +506,19 @@ export class AppService {
   }
 
   /** A record the caller can read (cleared, not hidden). */
-  async readable(p: Principal, entity: EntityRow, id: string): Promise<RecordRow> {
+  async readable(p: Principal, entity: EntityRow, id: string, grant?: Grant): Promise<RecordRow> {
     const r = await this.row(p.tenantId, entity, id);
     if (!r || r.hidden || !clears(p.clearance, r.label)) throw notFound('Record');
+    // 1.6.0 (B-8101): a record outside the rows the reader's policies reach does not exist for them.
+    const g = grant ?? (await this.grantFor(p, entity));
+    if (g.policed && !(await this.reaches({ tenant_id: p.tenantId }, entity, g, id, p.clearance))) throw notFound('Record');
     return r;
   }
 
   async get(p: Principal, appRef: string, entityRef: string, id: string): Promise<RecordView> {
     const { app, entity } = await this.resolve(p, appRef, entityRef);
-    return this.view(app, entity, await this.readable(p, entity, id));
+    const grant = await this.grantFor(p, entity);
+    return this.view(app, entity, await this.readable(p, entity, id, grant), undefined, grant);
   }
 
   /** Checks that references, lookups and files point at things that exist and the writer may see. */
@@ -568,6 +615,8 @@ export class AppService {
   async createRecord(actor: Actor, app: AppRow, entity: EntityRow, input: { values: Values; label?: Label }): Promise<RecordView> {
     const id = ulid();
     const label = this.recordLabel(actor, app, entity, input.label);
+    const grant = actor.principal ? await this.grantFor(actor.principal, entity) : undefined;
+    if (grant) AppPolicies.checkWrite(grant, input.values, 'create');
     const prep = await this.prepare(actor, app, entity, id, input.values, null);
     const t = Date.now();
     const by = actor.principal?.userId ?? null;
@@ -577,13 +626,15 @@ export class AppService {
       await this.writeIndex(trx, r, prep, entity);
     });
     await this.after(actor, app, entity, r, 'created', {});
-    return this.view(app, entity, r, prep.values);
+    return this.view(app, entity, r, prep.values, grant);
   }
 
   async updateRecord(actor: Actor, app: AppRow, entity: EntityRow, id: string, input: { values: Values; version?: number }): Promise<RecordView> {
     const r = actor.principal ? await this.readable(actor.principal, entity, id) : await this.row(app.tenant_id, entity, id);
     if (!r) throw notFound('Record');
     if (input.version != null && input.version !== r.version) throw conflict(`The record changed since you read it (version ${r.version}, you have ${input.version}).`);
+    const grant = actor.principal ? await this.grantFor(actor.principal, entity) : undefined;
+    if (grant) AppPolicies.checkWrite(grant, input.values, 'update');
     const existing = await this.open(r);
     const prep = await this.prepare(actor, app, entity, r.id, input.values, existing);
     const fields = Object.keys(input.values).filter((k) => JSON.stringify(existing[k] ?? null) !== JSON.stringify(prep.values[k] ?? null));
@@ -598,7 +649,7 @@ export class AppService {
     });
     const after: RecordRow = { ...r, data: prep.sealed, version: r.version + 1, updated_by: by, updated_at: t, ...(aiNeeded ? { ai_state: 'pending', ai_error: null } : {}) };
     await this.after(actor, app, entity, after, 'updated', { fields }, aiNeeded);
-    return this.view(app, entity, after, prep.values);
+    return this.view(app, entity, after, prep.values, grant);
   }
 
   async removeRecord(actor: Actor & { principal: Principal }, app: AppRow, entity: EntityRow, id: string): Promise<RecordRow> {
@@ -630,7 +681,7 @@ export class AppService {
     if (n !== 1) throw conflict('The record changed while moving it; read it again and retry.');
     const after: RecordRow = { ...r, state: to, version: r.version + 1, updated_by: by, updated_at: now };
     await this.after(actor, app, entity, after, 'transitioned', { from: r.state ?? '', to, ...(t.name ? { transition: t.name } : {}), ...(o.note ? { note: o.note.slice(0, 300) } : {}) });
-    return this.view(app, entity, after);
+    return this.view(app, entity, after, undefined, actor.principal ? await this.grantFor(actor.principal, entity) : undefined);
   }
 
   /**
@@ -645,6 +696,7 @@ export class AppService {
     const ids = [...(ops.update ?? []).map((u) => u.id), ...(ops.delete ?? [])];
     if (new Set(ids).size !== ids.length) throw badRequest('A record appears twice in one bulk write.');
     const t = Date.now();
+    const grant = await this.grantFor(p, entity);
     const created: { r: RecordRow; prep: Prepared }[] = [];
     const updated: { r: RecordRow; prep: Prepared; fields: string[] }[] = [];
     const deleted: RecordRow[] = [];
@@ -656,6 +708,7 @@ export class AppService {
       try {
         const id = ulid();
         const label = this.recordLabel(actor, app, entity, c.label);
+        AppPolicies.checkWrite(grant, c.values, 'create');
         const prep = await this.prepare(actor, app, entity, id, c.values, null);
         created.push({ prep, r: { id, tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, workspace_id: app.workspace_id, label, state: entity.definition.states?.initial ?? null, data: prep.sealed, hidden: false, version: 1, source: actor.source, ai_state: this.hasAi(entity) ? 'pending' : null, ai_error: null, created_by: p.userId, updated_by: p.userId, created_at: t, updated_at: t } });
       } catch (err) {
@@ -664,8 +717,9 @@ export class AppService {
     }
     for (const [i, u] of (ops.update ?? []).entries()) {
       try {
-        const r = await this.readable(p, entity, u.id);
+        const r = await this.readable(p, entity, u.id, grant);
         if (u.version != null && u.version !== r.version) throw conflict(`The record ${r.id} changed (version ${r.version}, you have ${u.version}).`);
+        AppPolicies.checkWrite(grant, u.values, 'update');
         const existing = await this.open(r);
         const prep = await this.prepare(actor, app, entity, r.id, u.values, existing);
         updated.push({ r, prep, fields: Object.keys(u.values).filter((k) => JSON.stringify(existing[k] ?? null) !== JSON.stringify(prep.values[k] ?? null)) });
@@ -675,7 +729,7 @@ export class AppService {
     }
     for (const [i, id] of (ops.delete ?? []).entries()) {
       try {
-        deleted.push(await this.readable(p, entity, id));
+        deleted.push(await this.readable(p, entity, id, grant));
       } catch (err) {
         at('delete', i, err);
       }

@@ -51,6 +51,7 @@ import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import { vaultRoutes } from '../routes/vault.js';
+import { complianceRoutes } from '../routes/compliance.js';
 import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
@@ -266,6 +267,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', zoneClusterRoutes(s));
   // Sprint 24 (B-1701 to B-1703): the secrets vault.
   api.use(vaultRoutes(s));
+  api.use(complianceRoutes(s)); // 1.6.0, Sprint 38c (B-7601 to B-7603): DLP, legal holds, compliance exports
   // Sprint 24 (B-1601 to B-1603): the certificate authority.
   api.use(pkiRoutes(s));
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).
