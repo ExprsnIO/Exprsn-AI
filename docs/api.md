@@ -5439,3 +5439,29 @@ and `APP_EMBED_MAX_TTL_SECONDS`, and ends with its key. It acts as the mapped us
 `records:write` when the app allows writes) under `/api/apps/<the app>` only, on the entities the settings list,
 within the user's policies, clearance and workspaces; anything else is `403 step: scope`. Ended sessions are purged
 after a day.
+
+## Sprint 36b (1.6.0): model thinking templates (B-11707)
+
+Migration `041e_thinking_templates`. No new routes, settings or permissions.
+
+A catalogue entry records how its model is made to think, and every profile on the model inherits it:
+
+| Mode | What it means | How a profile's level is sent |
+| --- | --- | --- |
+| `native` | The server takes a `think` parameter (Qwen 3, gpt-oss, DeepSeek R1 under Ollama) | `think: true` (gpt-oss: the level) when the level is above off, `think: false` otherwise |
+| `template` | The model thinks through a convention in its prompt, as Magistral's `<think>` blocks, which its own default system prompt describes | The convention is appended to the profile's system prompt (one is added when the profile has none) unless the prompt already carries `<think>`; `think: true` when the server claims the thinking capability; `<think>…</think>` in the answer is delivered as thinking. With the level off, a profile without a system prompt gets one asking for a direct answer, so the server substitutes none of its own |
+| `none` | The model does not think | Nothing is sent and the thinking ceiling must be off |
+
+A pull reads the mode from the server's `show`: a default system prompt that asks for `<think>` blocks makes a
+template model and is kept as its convention; the thinking capability alone makes a native one. The mode applies in
+chat and compare, agent runs, evaluations, workflow model steps and the OpenAI-compatible API.
+
+| Method and path | What it does |
+| --- | --- |
+| `PATCH /admin/models/:id` `{thinking?: native\|template\|none\|null, thinkingTemplate?: string\|null, …}` | Overrides the mode (`null` returns to the derived one) and the convention text (at most 4000 characters; empty means the built-in convention). Audited `model.updated` |
+| `GET /admin/models`, `GET /admin/models/:id` | Each model carries `thinking` (the mode in force), `thinkingSet` (what the catalogue records, or `null`) and `thinkingTemplate` |
+
+The profile publish check (`POST /admin/profiles/:id/publish`) refuses a thinking ceiling above off only when the
+model's mode is `none`, whatever its capability list says. The catalogue evaluation (`POST /admin/models/:id/evaluate`)
+sends a system prompt with both its tests, as chat sends a profile's: without one the server substitutes the model's
+own default prompt, under which Magistral answered the tool-calling test in prose and had its tools withheld.

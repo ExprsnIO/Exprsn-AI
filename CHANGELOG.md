@@ -577,6 +577,28 @@
 
 ## 1.5.0
 
+### Model thinking templates (Sprint 36b, B-11707)
+
+- Migration `041e_thinking_templates`: `models.thinking` (native, template, none; null derived from the capabilities)
+  and `models.thinking_template`.
+- A catalogue entry records how its model is made to think, and profiles inherit it (B-11707): a pull reads the mode
+  from the server's `show` (a default system prompt that asks for `<think>` blocks makes a template model and is
+  kept as its convention; the thinking capability alone makes a native one); `PATCH /api/admin/models/:id` overrides
+  `thinking` and `thinkingTemplate`, audited. `server/src/gateway/thinking.ts` turns a profile's level into the
+  request for its model in chat, compare, agent runs, evaluations, workflow model steps and `/v1`: the think
+  parameter for a native model; for a template model the convention appended to the system prompt (added when the
+  profile has none, left alone when it already carries `<think>`), the think flag when the server claims the
+  capability, and the `<think>…</think>` block split out of the answer as thinking across chunk boundaries; with the
+  level off, a direct-answer prompt in place of a missing one, so the server substitutes none of its own. A profile
+  on Magistral thinks without a hand-written convention. The publish check refuses a thinking ceiling only on a
+  `none` model.
+- The catalogue evaluation sends a system prompt with both tests, as chat sends a profile's: without one Ollama
+  substituted the model's own, under which Magistral answered the tool-calling test in prose and had its tools
+  withheld.
+- Console: the model card's "Thinking" row and the edit dialog's mode and convention; the Profiles checks name the
+  inherited mode. The Models board carries the row. `server/test/fake-ollama.ts` has `templateModel`, a
+  Magistral-like model; e2e: `models.spec.ts`, `profiles.spec.ts`.
+
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)
 
 - Built on the chain context of Sprint 32 (B-4101): every link is a node of the caller's chain, acts as the chain's
