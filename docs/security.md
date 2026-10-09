@@ -414,7 +414,62 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
   it ends with its key, with the app's settings turned off, or when the designers end it.
 
-## Deployment hardening
+## Model servers and platform administration (1.6.0, Sprint 35)
+
+- **A server's model is the server's word (B-4301 to B-4307).** A `kind: openai` instance answers Chat Completions
+  on a URL (the egress check and mutual TLS as for Ollama) or a Unix socket (`fm serve --socket`), whose file
+  permissions are its only access control. The gateway never sees the weights: a server-held model has no digest, so
+  approval of such a model is approval of the server's operator, and the probe and the evaluation trust what the
+  server answers. A bearer token is a vault reference resolved as the person who saved it and kept in memory until the
+  instance changes or the server restarts.
+- **Instances report themselves (B-4202, B-4203).** Each process writes its heartbeat and `/readyz` checks; a process
+  that can write the database can report any state for itself. Draining, pausing a job type and running a schedule
+  act on every tenant and need `platform:manage` with a recent sign-in; a tenant admin sees and acts on their own
+  tenant's jobs only. Job payloads are shown as keys only.
+- **Configuration never receives a secret (B-4205).** Instances report secrets as set or unset, their length, file and
+  mode and a fingerprint keyed with `SESSION_SECRET`. Overrides are dual control (a second platform admin, never the
+  proposer) and audited; secrets, the database settings and `INSTANCE_NAME` cannot be overridden, and
+  `PLATFORM_SETTINGS_OVERRIDES=false` keeps every setting in the environment.
+- **Storage changes nothing without a human (B-4204).** The integrity check only reports; orphans are deleted after
+  a dry run by one admin with a reason, within `BLOBS_DRY_RUN_MINUTES`; a blob store migration dual-writes and
+  verifies before it switches, and fails rather than copy when a live instance has not confirmed dual writes.
+- **Tenant templates are code (B-4501).** Their roles hold member-baseline permissions only, their profiles are
+  drafts without a model, and the first admin is a `tenant-admin` who enrols a second factor at first sign-in.
+- **Legal-hold exports of messaging are dual control (B-4206).** Requested with a sealed reason and a recent sign-in,
+  approved by a second platform admin, written sealed by a job and downloadable by the requester alone; the members
+  are not told, by design.
+
+## Groups depth, blob deduplication, held form values and reveal anomalies (1.6.0, Sprint 36)
+
+- **Groups and places (B-4401 to B-4405).** A channel never sits below its group's label, and only the group's
+  readers see it. A place's name is sealed; its coordinates are kept in the clear so the database can filter on
+  them, and a distance filter's order tells a reader roughly where a public group is. Discovery and trending count
+  private groups without naming their members.
+- **Deduplication within one tenant (B-4601).** Identical content is shared only within a tenant and under its own
+  key, never across tenants (that would let anyone who can guess a file confirm a tenant holds it). Every upload still
+  stores and scans its full bytes, the quota counts each version's own size, and nothing a member sees says a version
+  is shared.
+- **Held form values wait sealed (B-4701).** A public submission the guardrail holds waits, its values sealed, until
+  a reviewer in the app's workspace accepts or rejects it; the submitter learns only that it was held. At most
+  `APPS_HELD_MAX_PER_FORM` wait per form.
+- **Reveal anomalies inform, never refuse (B-4803).** A reveal from a new address, at an odd hour or in a burst opens
+  a flag for the secret's owner after the value was answered, so the owner can rotate it. Only reveals over the API
+  carry an address; values the server resolves for `vault:` references are not watched.
+
+## SCIM 2.0, vault sharing, MongoDB leases and quote posts (1.6.0, Sprint 37c)
+
+- **A SCIM token is a bearer secret for one store (B-7201, B-7202).** It is shown once, kept as an HMAC with
+  `SESSION_SECRET`, expires after `IDENTITY_SCIM_TOKEN_MAX_DAYS` and is rate-limited per address. It creates, changes
+  and deprovisions that store's users and, through group mappings, their roles, clearance and workspaces, never more
+  than the mappings name and never a user of another store. Deprovisioning ends sessions, OAuth refresh tokens, API
+  keys and DAV app passwords at once; an issued OAuth access token lasts until it expires.
+- **A share is a policy grant (B-4801).** It widens who reads one exact KV path within what the policy allows: a deny
+  still wins and the label must clear the grantee. A share with a group or workspace reaches whoever is in it at read
+  time; revoking a share does not rotate the secret.
+- **MongoDB accounts carry no expiry (B-4802).** A leased user exists until the sweeper or a revoke drops it; between
+  the lease's expiry and the next sweep its password still works.
+- **Unlisted means out of feeds, not secret (B-4901).** Anyone who may read the workspace or group and has the link
+  opens the post; moderation, the flag queue and exports treat it like any other.
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
 
@@ -450,6 +505,9 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
 the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, empty capability set, system-call
 filter, private `/tmp`, only the state directory writable.
+
+## Deployment hardening
+
 
 ## Known gaps, tracked in the plan
 

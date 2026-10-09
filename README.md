@@ -53,7 +53,7 @@ AI field fills, outside tables, entity APIs and app embedding ([Backlog-1.6.0.md
 | --- | --- |
 | [`server/`](server) | Node.js 22, TypeScript, Express 5 and Socket.io. Users sign in against a per-tenant chain of user stores (OpenLDAP, PostgreSQL / MySQL / SQLite user tables, local accounts), with TOTP, passkeys and recovery codes, role and clearance based access, API keys, and a per-tenant SHA-256 audit chain with signed checkpoints. It is the only component that talks to Ollama. The application database is PostgreSQL, MySQL or SQLite (Knex); Redis, OpenBao, S3 and SMTP are optional |
 | [`web/`](web) | The user workspace and admin console, served by the server. Plain HTML, CSS and JavaScript with no build step and a strict CSP |
-| [`design/prototype/`](design/prototype/README.md) | The clickable specification (27 screens, example data). Open `design/prototype/index.html` in a browser |
+| [`design/prototype/`](design/prototype/README.md) | The clickable specification (51 screens, example data). Open `design/prototype/index.html` in a browser |
 | [`deploy/`](deploy) | Dockerfile; Compose for production, development and GPU hosts; a Helm chart with NetworkPolicies; systemd unit and installer for bare metal; an example identity YAML |
 | [`e2e/`](e2e/README.md) | The Playwright suite that drives every console screen against a real server and test fakes |
 | [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [API](docs/api.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md), [ASVS assessment](docs/asvs.md), [accessibility](docs/accessibility.md), [runbooks](docs/runbooks/README.md), [load testing](docs/loadtest.md) |
@@ -85,7 +85,9 @@ The seed accounts and their development passwords are listed at the top of
 [`deploy/docker/compose.dev.yml`](deploy/docker/compose.dev.yml) (`mokafor` is a system admin on OpenLDAP).
 
 The `exprsn-ai` CLI (`npm run cli -w server -- <command>`, or `node server/dist/cli.js` in the image) has `migrate`,
-`admin:create` and `audit:verify`.
+`admin:create`, `tenant:create` (with `--template` since 1.6.0), `audit:verify`, `audit:verify-export` (an exported JSONL
+window against its checkpoint, 1.6.0), `c2pa:verify` (a generated image's content credentials, 1.6.0), `kms:rotate`,
+`kms:rewrap`, `kms:escrow`, `backup:create` and `backup:restore-drill`.
 
 For production (Docker Compose or bare-metal systemd, TLS, secrets as files, Ollama nodes) see
 [docs/deploy.md](docs/deploy.md).
