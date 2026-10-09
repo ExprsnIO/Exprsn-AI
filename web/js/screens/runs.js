@@ -244,6 +244,7 @@
         page = '<div class="page runs-page">'
           + UI.pagehead('Run ' + shortId(v.id) + ', ' + esc(v.agent) + ' ' + esc(v.agentVersion), 'Started ' + esc(clock(v.startedAt || v.createdAt)) + ' by ' + esc(v.by || '') + ', ' + esc(duration(v)) + ' · ' + statusPill(v.state) + (v.handedTo ? ' · answered by <b>' + esc(v.handedTo.agent) + '</b>, handed off to run <a href="#" data-run="' + esc(v.handedTo.run) + '" class="mono">' + esc(shortId(v.handedTo.run)) + '</a>' : '') + (v.caller ? ' · ' + (v.caller.kind === 'agent-run' ? 'delegated by run <a href="#" data-run="' + esc(v.caller.id) + '" class="mono">' + esc(shortId(v.caller.id)) + '</a>' : v.caller.kind === 'workflow-run' ? 'started by workflow run <a href="#" data-gowfrun="' + esc(v.caller.id) + '" class="mono">' + esc(shortId(v.caller.id)) + '</a>' : 'started by ' + esc(v.caller.kind)) : '') + (v.replayOf ? ' · replay of <a href="#" data-run="' + esc(v.replayOf) + '">' + esc(shortId(v.replayOf)) + '</a> from step ' + v.replayFrom : '') + ' · profile <a href="#" data-goprofile="' + esc(v.profile || '') + '">' + esc(v.profile || '') + '</a>',
             (v.chain ? UI.btn('Chain tree', { icon: 'branch', attrs: 'data-openchain' }) : '') + (canControl && active(v.state) ? UI.btn('Cancel run', { attrs: 'data-cancel' }) : '') + (canControl && steps.length ? UI.btn('Replay from step', { attrs: 'data-replay="' + (steps.find(bad) || { n: 1 }).n + '"' }) : ''))
+          + (v.caller && v.caller.kind === 'chat-turn' ? UI.notice('Started from a conversation. ' + (v.caller.conversationId ? '<a href="#/chat?id=' + esc(v.caller.conversationId) + '" data-goconv="' + esc(v.caller.conversationId) + '">Open the conversation</a>; the answer lands there, attributed to ' + esc(v.agent) + '.' : 'The answer lands there, attributed to ' + esc(v.agent) + '.'), 'info') : '')
           + (st.demoNote ? UI.notice(esc(st.demoNote), 'info') : '')
           + (v.held || []).map((h) => heldNotice(v.chain ? v.chain.id : '', h)).join('')
           + notice
@@ -262,6 +263,7 @@
       const sel = run ? run.steps.find((s) => s.n === st.sel) : null;
       ctx.on('click', '[data-run]', (e, t) => { e.preventDefault(); st.run = t.dataset.run; st.sel = null; st.showAnswer = false; st.view = null; st.demoNote = null; ctx.rerender(); });
       ctx.on('click', '[data-scope] [data-seg]', (e, t) => { st.scope = t.dataset.seg; load(); });
+      ctx.on('click', '[data-goconv]', (e, t) => { e.preventDefault(); ctx.navigate('chat', { id: t.dataset.goconv }); });
       ctx.on('click', '[data-openchain]', () => { if (!run || !run.chain) return; st.chain = run.chain.id; st.node = (run.held || []).length ? run.held[0].node : run.chain.node; st.chainView = null; st.chainError = null; ctx.rerender(); });
       ctx.on('click', '[data-gowfrun]', (e, t) => { e.preventDefault(); ctx.navigate('workflows', { run: t.dataset.gowfrun }); });
       bindHeld(run && run.chain ? run.chain.id : null, (run && run.held) || []);

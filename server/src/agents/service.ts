@@ -263,6 +263,8 @@ export class AgentService {
   async view(p: Principal, id: string) {
     const r = await this.get(p, id);
     const by = (await this.db('users').where({ id: r.user_id }).first('display_name')) as { display_name: string } | undefined;
+    // 1.7.0 (B-4004): a run started from a conversation names it, so the Runs screen links back.
+    const chatTurn = r.caller_kind === 'chat-turn' && r.caller_id ? ((await this.db('messages').where({ id: r.caller_id }).first('conversation_id')) as { conversation_id: string } | undefined) : undefined;
     const steps = await Promise.all(((await this.db('agent_steps').where({ run_id: r.id }).orderBy('n')) as StepRow[]).map((s) => this.stepView(r.tenant_id, s)));
     const lanes = { think: { steps: 0, tokens: 0 }, do: { calls: 0, ms: 0, waiting: 0, denied: 0 }, calc: { results: 0, ms: 0 } };
     for (const s of steps) {
@@ -282,6 +284,7 @@ export class AgentService {
     const checkpoints = ((await this.db('agent_checkpoints').where({ run_id: r.id }).orderBy('n').select('n')) as { n: number }[]).map((c) => Number(c.n));
     return {
       ...this.summary(r, by?.display_name ?? null),
+      ...(chatTurn ? { caller: { kind: 'chat-turn', id: r.caller_id, node: r.caller_node ?? null, conversationId: chatTurn.conversation_id } } : {}),
       input: await this.open<string>(r.tenant_id, `agent-run-input:${r.id}`, r.input, ''),
       output: await this.open<string | null>(r.tenant_id, `agent-run-output:${r.id}`, r.output, null),
       steps,

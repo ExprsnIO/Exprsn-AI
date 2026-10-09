@@ -126,7 +126,8 @@
     const guard = (fn) => (d) => { if (!visible()) { detach(); return; } fn(S(), d || {}); };
     live.handlers = {
       'chat.status': guard(onStatus), 'chat.chunk': guard(onChunk), 'chat.done': guard(onDone), 'chat.released': guard(onReleased),
-      'attachment.state': guard(onAttachment), connect: guard(onReconnect), 'shared.revoked': guard(onSharedRevoked)
+      'attachment.state': guard(onAttachment), connect: guard(onReconnect), 'shared.revoked': guard(onSharedRevoked),
+      'chat.invocation': guard(onInvocation), 'run.step': guard(onRunEvent), 'run.state': guard(onRunEvent)
     };
     Object.keys(live.handlers).forEach((ev) => live.sock.on(ev, live.handlers[ev]));
   }
@@ -255,6 +256,7 @@
     set('actions', actionsHtml(st));
     set('side', sideHtml(st));
     set('cold', coldHtml(st));
+    set('skills', skillChipsHtml(st));
     if (scroller && near) scroller.scrollTop = scroller.scrollHeight;
   }
   function rerender(focusComposer) {
@@ -323,11 +325,13 @@
       + (t.name !== 'calculate' ? ' <span class="muted">' + esc(t.name) + '</span>' : '') + '</div>').join('') + '<div class="muted" style="font-size:11px">Computed by the calculation worker, not by the model.</div></div>';
   }
   function aiHtml(st, conv, m) {
+    if (m.turn === 'tool') return toolTurnHtml(st, conv, m);
     const streaming = active(m);
     const openDefault = streaming && !m.content;
     const open = st.openThink && st.openThink[m.id] !== undefined ? st.openThink[m.id] : openDefault;
     const fb = (st.fallback || {})[m.id];
-    let h = '<div class="ch-msg ch-ai" data-mid="' + esc(m.id) + '">';
+    let h = '<div class="ch-msg ch-ai' + (m.turn ? ' ch-turn' : '') + '" data-mid="' + esc(m.id) + '">';
+    if (m.turn === 'agent' || m.turn === 'workflow') { h += runCardHtml(st, conv, m); if (m.state === 'queued') return h + '<div class="ch-mactions">' + branchSwitch(conv, m) + '</div></div>'; }
     if (fb) h += UI.notice(esc(fb.from) + ' waited too long in the queue, so ' + esc(fb.profile) + ' (<span class="mono">' + esc(fb.model) + '</span>) is answering instead.', 'warn');
     h += statusLine(st, m);
     if (m.thinking) {
@@ -343,6 +347,7 @@
     if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
     if (!streaming) h += artifactChips(st, m.id);
+    if (!streaming) h += proposedCardsHtml(st, m);
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
@@ -371,7 +376,7 @@
     if (!conv || !conv.messages.length) {
       return UI.empty('Start with a question', (st.profiles || []).length ? 'Pick a profile, attach a text file if it helps, and ask. Calculations are done exactly by the calculation worker when the profile allows it.' : 'No profile is published for your clearance yet. A profile admin publishes them under Profiles.');
     }
-    return pathOf(conv).map((m) => (m.role === 'user' ? userHtml(st, conv, m) : aiHtml(st, conv, m))).join('');
+    return pathOf(conv).map((m) => (m.role === 'user' ? userHtml(st, conv, m) : aiHtml(st, conv, m))).join('') + pendingCardsHtml(st);
   }
   function attsHtml(st) {
     const list = st.pending || [];
@@ -421,6 +426,163 @@
     return '<div class="ch-cold">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(p.name) + '</b> uses <span class="mono">' + esc(p.model) + '</span>, which is not loaded on any instance' + (p.residency === 'cold' ? '' : ' in this example; right now it is loaded') + '. Model cold start: the first answer may take a moment while it loads. You can send now; the message queues.</span></div>';
   }
   /** 1.6.0 (B-8001): the chips under an answer for the artifact versions it produced. */
+  // ---------- 1.7.0 (B-4001 to B-4009): tools, agents, skills and workflows from the composer ----------
+  const cardsOf = (st) => (st.conv && st.cards && st.cards.id === st.conv.id ? st.cards.list : []) || [];
+  const cardById = (st, id) => cardsOf(st).find((c) => c.id === id) || null;
+  const cardByMessage = (st, mid) => cardsOf(st).find((c) => c.messageId === mid) || null;
+  const CARD_TONE = { done: 'ok', awaiting: 'warn', held: 'info', running: 'info', denied: 'danger', expired: 'outline', failed: 'danger', cancelled: 'outline' };
+  const sidePill = (side) => (side ? UI.pill(side, side === 'read' ? 'outline' : side === 'write' ? 'warn' : 'danger') : '');
+  const argsText = (args) => (args && typeof args === 'object' ? Object.keys(args).map((k) => k + '=' + JSON.stringify(args[k])).join('  ') : '');
+  async function loadCards(st) {
+    const id = st.convId; if (!id) { st.cards = null; return; }
+    try { const list = await App.get(cUrl(id) + '/invocations'); if (S() === st && st.convId === id) st.cards = { id, list }; } catch (err) { if (S() === st) st.cards = { id, list: [] }; }
+  }
+  async function loadCaps(st) {
+    const id = st.convId; if (!id) { st.caps = null; return; }
+    try { const caps = await App.get(cUrl(id) + '/capabilities'); if (S() === st && st.convId === id) st.caps = { id, caps }; } catch (err) { if (S() === st) st.caps = { id, caps: null, error: err }; }
+  }
+  async function loadRun(st, runId) {
+    st.runViews = st.runViews || {};
+    try { const v = await App.get('/api/runs/' + enc(runId)); st.runViews[runId] = v; } catch (err) { st.runViews[runId] = { error: err }; }
+  }
+  /** A card's own events: a decision, a run ending, a reviewer's call. Cards and the thread are read again. */
+  function onInvocation(st, d) {
+    if (!st.conv || d.conversationId !== st.conv.id) return;
+    Promise.all([loadCards(st), d.messageId ? loadConv(false) : Promise.resolve()]).then(() => { if (d.state === 'done' && d.kind === 'tool') App.toast(esc(d.name) + ' ran; its result is in the conversation.', 'ok'); schedule(); });
+  }
+  function onRunEvent(st, d) {
+    if (!st.conv || !d || !d.runId) return;
+    const card = cardsOf(st).find((c) => c.run && c.run.id === d.runId);
+    if (!card) return;
+    loadRun(st, d.runId).then(schedule);
+  }
+  /** B-4002: a tool turn: the call and its result (or why it did not run), as the model sees it next. */
+  function toolTurnHtml(st, conv, m) {
+    const card = m.invocationId ? cardById(st, m.invocationId) : null;
+    const t = (m.tools || [])[0] || { name: m.profile || 'tool', expression: '' };
+    const state = card ? card.state : t.error ? 'failed' : 'done';
+    let args = t.expression; try { args = argsText(JSON.parse(t.expression)); } catch (e) { /* free text */ }
+    let h = '<div class="ch-msg ch-ai ch-turn" data-mid="' + esc(m.id) + '"><div class="ch-card ' + esc(state) + '" data-card="' + esc(card ? card.id : '') + '"><div class="hstack gap6 wrap">' + UI.icon('tools', 13) + '<b>' + esc(t.name) + '</b>' + sidePill(card && card.sideEffect) + UI.pill(state, CARD_TONE[state] || '') + '<span class="muted" style="font-size:12px">' + (card && card.proposedBy === 'model' ? 'proposed by the model' : 'called by you') + (card && card.decidedBy ? ', decided' : '') + '</span></div>'
+      + (args ? '<div class="mono fg2 ch-args">' + esc(args) + '</div>' : '');
+    if (t.error) h += '<div class="ch-err" style="font-size:13px">' + esc(t.error) + '</div>';
+    else h += '<div class="eyebrow">Result</div>' + UI.code(typeof t.output === 'string' ? t.output : JSON.stringify(t.output != null ? t.output : t.result, null, 2), 'json') + '<div class="muted" style="font-size:11px">The model sees this call and its result on the next turn.</div>';
+    h += '</div>' + branchSwitch(conv, m) + '</div>';
+    return h;
+  }
+  /** B-4004, B-4009: a run card for an agent or workflow turn: its state and steps while it works, the answer when done. */
+  function runCardHtml(st, conv, m) {
+    const card = m.invocationId ? cardById(st, m.invocationId) : null;
+    const run = card && card.run ? card.run : null;
+    const rv = run && st.runViews ? st.runViews[run.id] : null;
+    const state = m.state === 'queued' ? (card ? card.state : 'running') : m.state === 'complete' ? 'done' : m.state === 'stopped' ? 'cancelled' : 'failed';
+    const kind = m.turn === 'agent' ? 'Agent' : 'Workflow';
+    let h = '<div class="ch-card ' + esc(state) + '" data-card="' + esc(card ? card.id : '') + '"><div class="hstack gap6 wrap">' + UI.icon(m.turn === 'agent' ? 'agents' : 'workflows', 13) + '<b>' + esc(m.profile || '') + '</b>' + UI.pill(kind.toLowerCase(), 'outline') + UI.pill(state === 'running' && card && card.runState ? card.runState : state, CARD_TONE[state] || '')
+      + (run ? '<span class="muted" style="font-size:12px">run <a href="#/runs?run=' + esc(run.id) + '" class="mono" data-gorun="' + esc(run.id) + '">' + esc(run.id.slice(-6)) + '</a>' + (card.chain ? ' · <a href="#/runs?chain=' + esc(card.chain) + '" data-gochain="' + esc(card.chain) + '">chain tree</a>' : '') + '</span>' : '') + '</div>';
+    if (m.state === 'queued') {
+      if (rv && rv.steps) h += '<div class="ch-steps">' + rv.steps.map((s) => '<div class="ch-step ' + esc(s.state) + '"><span class="num">' + s.n + '</span><span>' + esc(s.title) + '</span><span class="muted">' + esc(s.lane) + (s.state === 'waiting' ? ', waiting for approval' : s.state === 'ok' ? '' : ', ' + esc(s.state)) + '</span></div>').join('') + '</div>';
+      else if (run && m.turn === 'agent') h += '<div class="muted" style="font-size:12px">Starting…</div>';
+      if (card && (card.approvals || []).length) h += card.approvals.map((a) => '<div class="ch-approval"><div class="hstack gap6"><b>Approval: ' + esc(a.step || '') + '</b>' + (a.role ? UI.pill(a.role, 'outline') : '') + '</div>' + (a.show ? '<div class="fg2" style="font-size:12px">' + esc(typeof a.show === 'string' ? a.show : JSON.stringify(a.show)) + '</div>' : '') + (a.canDecide !== false && App.can('chat:write') ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-wfapprove="' + esc(a.id) + '"' }) + UI.btn('Reject', { kind: 'ghost', size: 'sm', attrs: 'data-wfreject="' + esc(a.id) + '"' }) + '</div>' : '') + '</div>').join('');
+      if (card && (card.held || []).length) h += '<div class="ch-approval"><b>' + card.held.length + ' call' + (card.held.length === 1 ? '' : 's') + ' held in this chain</b><div class="fg2" style="font-size:12px">' + card.held.map((x) => esc(x.callee || x.tool || x.kind || 'call') + (x.path ? ' (' + esc(Array.isArray(x.path) ? x.path.join(' › ') : x.path) + ')' : '')).join(', ') + '. ' + (card.chain ? 'Decide from the <a href="#/runs?chain=' + esc(card.chain) + '" data-gochain="' + esc(card.chain) + '">chain tree</a>.' : '') + '</div></div>';
+      if (App.can('chat:write') && card && card.state === 'running') h += '<div class="hstack gap6">' + UI.btn('Cancel ' + (m.turn === 'agent' ? 'run' : 'workflow'), { kind: 'ghost', size: 'sm', attrs: 'data-cancelrun="' + esc(card.id) + '"' }) + '<span class="muted" style="font-size:12px">' + (m.turn === 'agent' ? 'Budgets, approvals and cancel as in Runs. The answer lands here, attributed to the agent.' : 'Its approvals are decided here; its outcome lands here.') + '</span></div>';
+    } else if (m.state === 'failed') h += UI.notice('<b>' + esc(kind) + ' run failed.</b> ' + esc(m.error || ''), 'danger');
+    else if (m.state === 'stopped') h += '<div class="fg2" style="font-size:13px">Cancelled from the chat' + (m.error ? ': ' + esc(m.error) : '.') + '</div>';
+    return h + '</div>';
+  }
+  /** B-4003: a card the model proposed during this answer, under it, with the owner's decision. */
+  function proposedCardsHtml(st, m) {
+    return cardsOf(st).filter((c) => c.answerId === m.id && c.kind === 'tool' && !c.messageId).map(pendingCardHtml).join('');
+  }
+  /** B-4002, B-4003: cards a person called that have not run yet (awaiting, held, expired) show after the thread. */
+  function pendingCardsHtml(st) {
+    const list = cardsOf(st).filter((c) => c.kind === 'tool' && !c.messageId && !c.answerId);
+    return list.length ? '<div class="ch-msg ch-ai ch-turn ch-pending">' + list.map(pendingCardHtml).join('') + '</div>' : '';
+  }
+  function pendingCardHtml(c) {
+    return [c].map((c) => '<div class="ch-card ' + esc(c.state) + '" data-card="' + esc(c.id) + '"><div class="hstack gap6 wrap">' + UI.icon('tools', 13) + '<b>' + esc(c.name) + '</b>' + sidePill(c.sideEffect) + UI.pill(c.state, CARD_TONE[c.state] || '') + '<span class="muted" style="font-size:12px">' + (c.proposedBy === 'model' ? 'proposed by the model' : 'called by you') + '</span></div>'
+      + (c.arguments ? '<div class="mono fg2 ch-args">' + esc(argsText(c.arguments)) + '</div>' : '')
+      + (c.state === 'awaiting' ? '<div class="fg2" style="font-size:12px">' + (c.approval === 'owner+reviewer' ? 'A destructive or always-confirm tool a rule flagged: your approval first, then the guardrail\'s approver in the Flags queue.' : 'A write tool runs only on your approval. It acts as you and is audited.') + (c.expiresAt ? ' Expires ' + esc(ago(c.expiresAt).replace(' ago', '')) + (Date.now() > c.expiresAt ? ' (past)' : ' from now') : '') + '.</div>' + (App.can('chat:write') ? '<div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-approve="' + esc(c.id) + '"' }) + UI.btn('Deny', { kind: 'ghost', size: 'sm', attrs: 'data-deny="' + esc(c.id) + '"' }) + '</div>' : '')
+        : c.state === 'held' ? '<div class="fg2" style="font-size:12px">' + UI.icon('clock', 12) + ' Held by the tool-call guardrail. It runs when a reviewer approves it in the Flags queue.</div>'
+          : c.state === 'expired' ? '<div class="fg2" style="font-size:12px">The card expired before it was decided. Nothing ran.</div>' : c.error ? '<div class="fg2" style="font-size:12px">' + esc(c.error) + '</div>' : '')
+      + '</div>').join('');
+  }
+  /** B-4005: the skills on the conversation, as chips with their mode. */
+  function skillChipsHtml(st) {
+    const on = st.conv ? st.conv.skills || [] : [];
+    if (!on.length) return '';
+    return '<span class="muted" style="font-size:12px">Skills:</span>' + on.map((s) => UI.chip(UI.icon('skills', 11) + ' ' + esc(s.name) + ' <span class="muted">' + (s.mode === 'once' ? 'this turn' : 'sticky') + '</span>' + (App.can('chat:write') ? '<span class="ch-x" aria-hidden="true">×</span>' : ''), true, 'data-rmskill="' + esc(s.name) + '" aria-label="Remove skill ' + esc(s.name) + '"')).join('');
+  }
+  /** B-4007, B-4008: the picker's items for "/", "@" and "+", from the conversation's capabilities. */
+  function pickerItems(st) {
+    const caps = st.caps && st.caps.caps; const q = ((st.picker && st.picker.q) || '').toLowerCase(); const hit = (x) => !q || x.name.toLowerCase().indexOf(q) >= 0;
+    if (!caps || !st.picker) return [];
+    if (st.picker.key === '/') return caps.tools.filter(hit).map((t) => ({ kind: 'tool', name: t.name, desc: t.description || '', side: t.sideEffect, confirm: t.confirm, schema: t.inputSchema })).concat(caps.workflows.filter(hit).map((w) => ({ kind: 'workflow', name: w.name, id: w.id, desc: w.description || '', schema: w.inputSchema })));
+    if (st.picker.key === '@') return caps.agents.filter(hit).map((a) => ({ kind: 'agent', name: a.name, desc: (a.description || '') + (a.offeredToModel ? ' Also offered to the model.' : '') }));
+    return caps.skills.filter(hit).map((s) => ({ kind: 'skill', name: s.name, desc: s.description || '', active: s.active }));
+  }
+  function pickerHtml(st) {
+    if (!st.picker) return '';
+    const caps = st.caps && st.caps.caps;
+    if (!caps) return '<div class="dropdown ch-picker" role="status"><div class="dh">' + (st.caps && st.caps.error ? 'Could not load what this conversation may call.' : 'Loading…') + '</div></div>';
+    const items = pickerItems(st);
+    const title = st.picker.key === '/' ? 'Tools and workflows this conversation may call' : st.picker.key === '@' ? 'Agents you may start here' : 'Skills to add';
+    const prefix = st.picker.key === '@' ? 'agent:' : st.picker.key === '+' ? 'skill:' : null;
+    const hidden = (caps.hidden || []).filter((h) => (prefix ? h.name.indexOf(prefix) === 0 : h.name.indexOf('agent:') !== 0 && h.name.indexOf('skill:') !== 0));
+    return '<div class="dropdown ch-picker" role="listbox" id="ch-picker" aria-label="' + esc(title) + '"><div class="dh"><span>' + esc(title) + '</span><span class="muted">↑↓ Enter Esc</span></div>'
+      + (items.length ? items.map((it, i) => '<button type="button" role="option" id="ch-pick-' + i + '" aria-selected="' + (i === st.picker.i ? 'true' : 'false') + '" class="' + (i === st.picker.i ? 'on' : '') + '" data-pickitem="' + i + '">' + (it.side ? '<span class="side">' + sidePill(it.side) + '</span>' : it.kind === 'workflow' ? '<span class="side">' + UI.pill('workflow', 'outline') + '</span>' : it.active ? '<span class="side">' + UI.pill(it.active === 'once' ? 'this turn' : 'on', 'ok') + '</span>' : '') + esc(it.name) + (it.desc ? '<span class="desc">' + esc(it.desc) + '</span>' : '') + '</button>').join('') : '<div class="muted" style="padding:8px 12px;font-size:12px">Nothing matches.</div>')
+      + (hidden.length ? '<div class="muted" style="padding:6px 12px;font-size:11px;border-top:1px solid var(--line)">Not listed: ' + hidden.map((h) => esc(h.name.replace(/^(agent|skill|workflow):/, '')) + ' (' + esc(h.reason) + ')').join('; ') + '</div>' : '') + '</div>';
+  }
+  function paintPicker(st) { const host = document.querySelector('[data-region="picker"]'); if (host) host.innerHTML = pickerHtml(st); const ta = document.getElementById('ch-composer'); if (ta) { if (st.picker && st.caps && st.caps.caps) { ta.setAttribute('aria-expanded', 'true'); ta.setAttribute('aria-controls', 'ch-picker'); ta.setAttribute('aria-activedescendant', 'ch-pick-' + st.picker.i); } else { ta.setAttribute('aria-expanded', 'false'); ta.removeAttribute('aria-controls'); ta.removeAttribute('aria-activedescendant'); } } }
+  function closePicker(st) { st.picker = null; paintPicker(st); }
+  /** The form for a tool's or a workflow's input schema: one field per property, required ones marked. */
+  function schemaForm(schema) {
+    const props = (schema && schema.properties) || {}; const req = (schema && schema.required) || [];
+    const keys = Object.keys(props);
+    if (!keys.length) return '<div class="muted" style="font-size:12px">No arguments.</div>';
+    return keys.map((k) => { const p = props[k] || {}; const type = p.type === 'number' || p.type === 'integer' ? 'number' : 'text'; return UI.field(esc(k) + (req.indexOf(k) >= 0 ? ' *' : ''), p.enum ? UI.select(p.enum.map((v) => ({ value: String(v), label: String(v) })), String(p.enum[0]), 'data-arg="' + esc(k) + '" data-type="' + esc(p.type || 'string') + '" aria-label="' + esc(k) + '"') : UI.input('', { type, placeholder: p.description || '', attrs: 'data-arg="' + esc(k) + '" data-type="' + esc(p.type || 'string') + '" aria-label="' + esc(k) + '"' }), p.description && !p.enum ? '' : undefined); }).join('');
+  }
+  function readForm(root) {
+    const out = {}; let any = false;
+    root.querySelectorAll('[data-arg]').forEach((el) => { const v = el.value; if (v === '' || v == null) return; any = true; const t = el.dataset.type; out[el.dataset.arg] = t === 'number' || t === 'integer' ? Number(v) : t === 'boolean' ? v === 'true' : t === 'object' || t === 'array' ? (function () { try { return JSON.parse(v); } catch (e) { return v; } })() : v; });
+    return any ? out : null;
+  }
+  function pickItem(ctx, st, it) {
+    closePicker(st);
+    const ta = ctx.$('#ch-composer');
+    if (it.kind === 'skill') { if (ta) { ta.value = ''; st.draft = ''; } addSkill(st, it.name, 'sticky'); return; }
+    if (it.kind === 'agent') { if (ta) { ta.value = '@' + it.name + ': '; st.draft = ta.value; ta.focus(); } App.toast('Say what ' + esc(it.name) + ' should do. Enter starts a run bound to this conversation.'); return; }
+    if (ta) { ta.value = ''; st.draft = ''; }
+    const isTool = it.kind === 'tool';
+    ctx.modal({
+      title: (isTool ? 'Call ' : 'Start ') + esc(it.name),
+      body: '<div class="vstack gap8">' + (it.desc ? '<div class="fg2" style="font-size:13px">' + esc(it.desc) + '</div>' : '') + (it.side && it.side !== 'read' ? UI.notice('A ' + esc(it.side) + ' tool waits for your approval on a card before it runs' + (it.confirm === 'always' ? ', and for the guardrail\'s approver when a rule says so' : '') + '.', 'warn') : '') + '<form data-argform>' + schemaForm(it.schema) + '</form>' + (isTool ? UI.field('Or describe it', UI.textarea('', { rows: 2, placeholder: 'Free text the profile\'s model turns into arguments', attrs: 'data-text aria-label="Describe the call"' })) : '') + '</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(isTool ? 'Call' : 'Start', { kind: 'primary', attrs: 'data-go' }),
+      onMount(d) {
+        const go = async () => {
+          const args = readForm(d); const text = (d.querySelector('[data-text]') || {}).value;
+          try {
+            if (isTool) { if (!args && !(text || '').trim()) { App.toast('Fill the form or describe the call.', 'warn'); return; } await App.post(cUrl(st.convId) + '/tool-calls', Object.assign({ name: it.name }, args ? { arguments: args } : { text: text.trim() })); }
+            else await App.post(cUrl(st.convId) + '/workflow-runs', { workflow: it.id || it.name, input: args || {} });
+            App.closeOverlay();
+            await Promise.all([loadConv(false), loadCards(st)]); rerender(true);
+          } catch (err) { handleError(err, isTool ? 'Could not call the tool' : 'Could not start the workflow'); }
+        };
+        d.querySelector('[data-go]').addEventListener('click', go);
+        d.querySelector('[data-argform]').addEventListener('submit', (e) => { e.preventDefault(); go(); });
+        const first = d.querySelector('[data-arg], [data-text]'); if (first) first.focus();
+      }
+    });
+  }
+  async function addSkill(st, name, mode) {
+    try { await App.put(cUrl(st.convId) + '/skills', { name, mode }); await Promise.all([loadConv(false), loadCaps(st)]); rerender(true); App.toast('Skill ' + esc(name) + ' added' + (mode === 'once' ? ' for this turn' : ', sticky') + '. Its instructions join the system prompt from the next turn.', 'ok'); } catch (err) { handleError(err, 'Could not add the skill'); }
+  }
+  async function startAgent(st, agent, input) {
+    try {
+      const r = await App.post(cUrl(st.convId) + '/agent-runs', { agent, input, includeTurns: st.includeTurns !== false });
+      st.draft = ''; const ta = document.getElementById('ch-composer'); if (ta) ta.value = '';
+      await Promise.all([loadConv(false), loadCards(st)]); if (r.runId) loadRun(st, r.runId).then(schedule); rerender(true);
+      App.toast('Run started for ' + esc(agent) + '. Its answer lands in this conversation.', 'ok');
+    } catch (err) { handleError(err, 'Could not start the agent'); }
+  }
   function artifactChips(st, messageId) {
     const chips = [];
     artifactsOf(st).forEach((a) => a.versions.forEach((v) => { if (v.messageId === messageId) chips.push(UI.chip(UI.icon(a.kind === 'html' ? 'images' : a.kind === 'document' ? 'knowledge' : 'scripts', 12) + ' ' + esc(a.key) + ' <span class="muted">v' + v.version + '</span>', !!(st.artifact && st.artifact.id === a.id && st.artifact.version === v.version), 'data-art="' + esc(a.id) + '" data-ver="' + v.version + '" aria-label="Open ' + esc(a.key) + ' version ' + v.version + '"')); }));
@@ -532,7 +694,8 @@
       const conv = await App.get(cUrl(id));
       if (S() !== st || st.convId !== id) return;
       setConv(st, conv); st.convError = null;
-      await loadArtifacts(st);
+      await Promise.all([loadArtifacts(st), loadCards(st)]);
+      cardsOf(st).filter((c) => c.run && c.state === 'running' && c.run.kind === 'agent-run').forEach((c) => { if (!st.runViews || !st.runViews[c.run.id]) loadRun(st, c.run.id).then(schedule); });
     } catch (err) {
       if (err.status === 404) { st.convId = null; setConv(st, null); App.toast('That conversation no longer exists.', 'warn'); } else st.convError = err;
     }
@@ -562,6 +725,9 @@
     const st = S(); const ta = document.getElementById('ch-composer');
     const text = ((ta && ta.value) || '').trim();
     if (!text) { App.toast('Type a message first.'); return; }
+    // 1.7.0 (B-4004): "@Agent: what to do" in an open conversation starts a run bound to it.
+    const at = st.convId ? /^@([^:\n]{1,120}):\s*([\s\S]+)$/.exec(text) : null;
+    if (at && App.can('agents:run')) { startAgent(st, at[1].trim(), at[2].trim()); return; }
     const p = selProfile(st); if (!p) { App.toast('No profile is available to answer.', 'warn'); return; }
     const block = blocker(st); if (block) { App.toast(esc(block), 'warn'); return; }
     if (st.sending) return;
@@ -989,6 +1155,10 @@
         + '.ch-dd{max-height:min(480px,70vh);overflow:auto;min-width:340px;max-width:min(480px,calc(100vw - 32px))}.ch-dd button{height:auto;min-height:32px;padding:6px 10px;gap:10px;align-items:center}.ch-dd button:has(.sub){min-height:42px}'
         + '.ch-dd .grow{min-width:0;display:flex;flex-direction:column;line-height:1.3}.ch-dd .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ch-dd .sub{display:block;font-size:11px;color:var(--muted);font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
         + '.ch-dd .tags{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto}.ch-dd .tags .pill,.ch-dd .tags .label{flex-shrink:0}'
+        + '.ch-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:4px 0}.ch-card.awaiting{border-color:var(--warn-fg);background:var(--warn-bg)}.ch-card.held{border-color:var(--info-fg)}.ch-card.denied,.ch-card.failed{border-color:var(--danger-fg)}.ch-card .ch-args{font-size:12px;overflow-wrap:anywhere}.ch-approval{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-tint)}'
+        + '.ch-steps{display:flex;flex-direction:column;gap:4px;font-size:13px}.ch-step{display:flex;gap:8px;align-items:center}.ch-step .num{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;display:inline-flex;align-items:center;justify-content:center}.ch-step.waiting{color:var(--warn-fg)}.ch-step.failed,.ch-step.denied{color:var(--danger-fg)}'
+        + '.ch-skills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ch-skills:empty{display:none}.ch-skills .ch-x{margin-left:4px;opacity:.7}'
+        + '.ch-picker{position:absolute;left:0;bottom:calc(100% + 4px);top:auto;min-width:360px;max-width:min(560px,100%);z-index:30;max-height:50vh;overflow:auto}.ch-picker .dh{display:flex;justify-content:space-between;gap:8px}.ch-picker button{display:block;width:100%;text-align:left}.ch-picker button .desc{display:block;font-size:11px;color:var(--muted);white-space:normal}.ch-picker button .side{float:right;margin-left:8px}'
         + '@media (max-width:900px){.ch-side{display:none}}.ch-listbtn{display:none}@media (max-width:640px){.ch-left{display:none}.ch-listbtn{display:inline-flex}.ch-left.ch-open{display:flex;position:fixed;top:48px;bottom:0;left:0;z-index:30;width:85%;max-width:320px;max-height:none;border-right:1px solid var(--line);box-shadow:var(--shadow)}.ch-thread{padding:14px 12px}.ch-composer{padding:10px 12px}}'
         + '.ch-pick{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin:8px 0}.ch-pickrow{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer}.ch-pickrow:last-child{border-bottom:0}.ch-pickrow input{accent-color:var(--accent)}'
         + '</style>'
@@ -1012,7 +1182,10 @@
         + (p && p.tools && p.tools.indexOf('calculate') >= 0 ? '<span class="muted hstack gap4" style="font-size:12px">' + UI.icon('calc', 12) + ' Exact calculation on</span>' : '') + '</div>'
         + '<div data-region="cold">' + coldHtml(st) + '</div>'
         + '<div data-region="atts">' + attsHtml(st) + '</div>'
-        + '<label class="sr" for="ch-composer">Message</label><textarea id="ch-composer" placeholder="' + (canSend ? 'Ask something. Attach a text file with the paper clip.' : 'Read only') + '"' + (canSend ? '' : ' disabled') + '></textarea>'
+        + '<div class="ch-skills" data-region="skills">' + skillChipsHtml(st) + '</div>'
+        + '<div class="relative" data-region="picker">' + pickerHtml(st) + '</div>'
+        + '<label class="sr" for="ch-composer">Message</label><textarea id="ch-composer" placeholder="' + (canSend ? (st.convId ? 'Ask something. Type / for a tool or workflow, @ for an agent, + for a skill.' : 'Ask something. Attach a text file with the paper clip.') : 'Read only') + '"' + (canSend ? '' : ' disabled') + ' aria-describedby="ch-composer-hint" role="combobox" aria-autocomplete="list" aria-expanded="false"></textarea>'
+        + '<span id="ch-composer-hint" class="sr">In an open conversation, slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
         + '<input type="file" multiple hidden data-file>'
         + '<div class="ch-actions" data-region="actions">' + actionsHtml(st) + '</div>'
         + '</div></div></div>'
@@ -1027,8 +1200,38 @@
       const sc = ctx.$('.ch-scroll'); if (sc) sc.scrollTop = sc.scrollHeight;
 
       // ---- events ----
-      ctx.on('input', '#ch-composer', (e, t) => { st.draft = t.value; });
-      ctx.on('keydown', '#ch-composer', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+      ctx.on('input', '#ch-composer', (e, t) => {
+        st.draft = t.value;
+        // 1.7.0 (B-4008): "/" tools and workflows, "@" agents, "+" skills, from the start of an empty composer.
+        const v = t.value; const open = st.convId && /^[/@+]\S*$/.test(v) ? v.charAt(0) : null;
+        if (open && (!st.picker || st.picker.key !== open)) { st.picker = { key: open, q: v.slice(1), i: 0 }; if (!st.caps || st.caps.id !== st.convId) loadCaps(st).then(() => paintPicker(st)); }
+        else if (st.picker && open) { st.picker.q = v.slice(1); st.picker.i = 0; }
+        else if (st.picker) st.picker = null;
+        paintPicker(st);
+      });
+      ctx.on('keydown', '#ch-composer', (e) => {
+        if (st.picker) {
+          const items = pickerItems(st);
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); st.picker.i = items.length ? (st.picker.i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length : 0; paintPicker(st); return; }
+          if (e.key === 'Escape') { e.preventDefault(); closePicker(st); return; }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (items.length) pickItem(ctx, st, items[st.picker.i]); return; }
+          if (e.key === 'Tab') { closePicker(st); return; }
+        }
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+      });
+      ctx.on('click', '[data-pickitem]', (e, t) => { const items = pickerItems(st); if (items[+t.dataset.pickitem]) pickItem(ctx, st, items[+t.dataset.pickitem]); });
+      ctx.on('click', '[data-rmskill]', async (e, t) => { if (!App.can('chat:write')) return; try { await App.del(cUrl(st.convId) + '/skills/' + enc(t.dataset.rmskill)); await Promise.all([loadConv(false), loadCaps(st)]); rerender(); App.toast('Skill removed. The very next turn goes without its instructions.'); } catch (err) { handleError(err, 'Could not remove the skill'); } });
+      ctx.on('click', '[data-approve], [data-deny]', async (e, t) => {
+        const id = t.dataset.approve || t.dataset.deny; const decision = t.dataset.approve ? 'approve' : 'deny';
+        try { const r = await App.post(cUrl(st.convId) + '/invocations/' + enc(id) + '/decide', { decision }); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'deny' ? 'Denied. Nothing ran; the model is told on the next turn.' : r.state === 'held' ? 'Your approval is recorded; the guardrail\'s approver decides next in the Flags queue.' : r.state === 'done' ? esc(r.name) + ' ran as you; its result is in the conversation.' : esc(r.name) + ' is ' + esc(r.state) + '.', decision === 'deny' ? '' : 'ok'); } catch (err) { handleError(err, 'Could not decide the card'); }
+      });
+      ctx.on('click', '[data-cancelrun]', async (e, t) => { try { await App.post(cUrl(st.convId) + '/invocations/' + enc(t.dataset.cancelrun) + '/cancel', {}); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast('Cancelled from the chat; the Runs screen shows what it reached.'); } catch (err) { handleError(err, 'Could not cancel'); } });
+      ctx.on('click', '[data-wfapprove], [data-wfreject]', async (e, t) => {
+        const id = t.dataset.wfapprove || t.dataset.wfreject; const decision = t.dataset.wfapprove ? 'approve' : 'reject';
+        try { await App.post('/api/workflow-approvals/' + enc(id), { decision, reason: null }); await Promise.all([loadConv(false), loadCards(st)]); rerender(); App.toast(decision === 'approve' ? 'Approved from this conversation; the chain resumes.' : 'Rejected; the run ends and the turn says so.', decision === 'approve' ? 'ok' : ''); } catch (err) { handleError(err, 'Could not decide the approval'); }
+      });
+      ctx.on('click', '[data-gorun]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { run: t.dataset.gorun }); });
+      ctx.on('click', '[data-gochain]', (e, t) => { e.preventDefault(); ctx.navigate('runs', { chain: t.dataset.gochain }); });
       ctx.on('click', '[data-send]', () => send());
       ctx.on('click', '[data-new]', () => { st.showList = false; st.sharedView = null; st.sharedError = null; syncUrl(null); st.convId = null; setConv(st, null); st.notice = null; st.resumed = {}; st.newKbs = []; rerender(true); });
       ctx.on('click', '[data-convo]', (e, t) => { st.showList = false; st.sharedView = null; st.sharedError = null; openConv(t.dataset.convo); });
