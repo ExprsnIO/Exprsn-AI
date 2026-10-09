@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { clears, LABELS } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
-import { badRequest } from '../http/problem.js';
+import { badRequest, notFound } from '../http/problem.js';
 import { draft, draftSchema } from '../apps/drafts.js';
 import { formDefinitionSchema, formView } from '../apps/forms.js';
 import { aggregateSchema, filterSchema, sortSchema, type Filter, type Sort } from '../apps/query.js';
@@ -348,8 +348,10 @@ export function appRoutes(s: Services): Router {
 
   r.post('/apps/:app/entities/:entity/policies/explain', design, async (req, res) => {
     const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
-    const body = parseBody(z.object({ userId: id26, recordId: id26.nullable().optional(), field: nameSchema.nullable().optional() }).strict(), req.body);
-    res.json(await a.policies.explain(app, entity, body));
+    const body = parseBody(z.object({ userId: id26.optional(), username: z.string().trim().min(1).max(100).optional(), recordId: id26.nullable().optional(), field: nameSchema.nullable().optional() }).strict().refine((b) => b.userId || b.username, 'userId or username'), req.body);
+    const userId = body.userId ?? (await s.users.byUsername(principalOf(req).tenantId, body.username!))?.id;
+    if (!userId) throw notFound('User');
+    res.json(await a.policies.explain(app, entity, { userId, recordId: body.recordId ?? null, field: body.field ?? null }));
   });
 
   return r;

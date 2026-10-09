@@ -211,11 +211,12 @@
       } else {
         if (!st.entity || !app.entities.some((e) => e.id === st.entity)) st.entity = app.entities[0] ? app.entities[0].id : null;
         const ent = app.entities.find((e) => e.id === st.entity) || null;
-        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }] : []), st.tab);
+        const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: st.recs && ent && st.recs.ek === app.id + '/' + ent.id ? st.recs.total : null }, { id: 'forms', label: 'Forms', count: app.forms.length }].concat(design ? [{ id: 'policies', label: 'Policies', count: st.polKey === app.id && st.pol ? (st.pol.policies || []).length : null }, { id: 'triggers', label: 'Triggers', count: (app.triggers || []).length }] : []), st.tab);
         let body = '';
         if (st.tab === 'entities') body = renderEntities(ctx, app, ent, design);
         else if (st.tab === 'records') { const r = renderRecords(ctx, app, ent, design, canWrite); body = r.body; inspector = r.inspector; }
         else if (st.tab === 'forms') body = renderForms(ctx, app, design, canWrite);
+        else if (st.tab === 'policies' && design) body = renderPolicies(ctx, app);
         else body = renderTriggers(ctx, app);
         const scope = app.scope === 'tenant' ? 'Tenant-wide' : 'Workspace ' + wsName(app.workspaceId);
         page = UI.pagehead(app.title || app.name, (app.description ? esc(app.description) + ' ' : '') + '<span class="muted">' + esc(scope) + ', by ' + esc(who(app.createdBy)) + ', updated ' + esc(when(app.updatedAt)) + '</span>', UI.label(app.label) + (design ? UI.btn('Edit app', { size: 'sm', icon: 'edit', attrs: 'data-editapp' }) + UI.btn('Delete app', { size: 'sm', kind: 'ghost', attrs: 'data-delapp' }) : ''))
@@ -974,6 +975,144 @@
   }
 
   // ---------- triggers ----------
+  // ---------- Policies tab (1.6.0, B-8101 to B-8103) ----------
+  const MASKS = ['last4', 'hash', 'hidden'];
+  const SUBJECT_KINDS = ['everyone', 'role', 'group', 'workspace', 'user'];
+  const PLACEHOLDER_RE = /^\$user\.(id|username|clearance|roles|groups|workspaces|attributes\.[a-z][a-z0-9_]{0,62})$/;
+  const LIST_PLACEHOLDERS = ['$user.roles', '$user.groups', '$user.workspaces'];
+  const subjectText = (s) => (s.kind === 'everyone' ? 'everyone' : s.kind + ' ' + s.value);
+  const rowsText = (p) => (p.rows ? ('field' in p.rows ? p.rows.field + ' ' + p.rows.op + ' ' + (Array.isArray(p.rows.value) ? p.rows.value.join(', ') : p.rows.value) : JSON.stringify(p.rows)) : 'every row');
+  const fieldsText = (p) => { const named = Object.keys(p.fields || {}); return named.length ? named.map((f) => { const g = p.fields[f]; return f + ': ' + (!g.read ? 'hidden' : !g.unmasked ? 'masked ' + g.mask : 'read') + (g.update === false ? ', no update' : '') + (g.create === false ? ', no create' : ''); }).join('; ') : 'every field in full'; };
+
+  function renderPolicies(ctx, app) {
+    const st = ctx.state;
+    const key = app.id;
+    if (st.polKey !== key && st.polBusy !== key) {
+      st.polBusy = key;
+      App.get(A(app.id) + '/policies')
+        .then((d) => { st.pol = d; st.polKey = key; st.polError = null; })
+        .catch((err) => { st.polError = err; st.polKey = key; })
+        .finally(() => { st.polBusy = null; if (App.state.route === 'apps' && !overlayOpen()) ctx.rerender(); else st.dirty = true; });
+    }
+    if (st.polKey !== key) return UI.notice('Loading policies…', 'info');
+    if (st.polError) return UI.problem('Policies could not be loaded', detailOf(st.polError), traceOf(st.polError)) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-polreload' }) + '</div>';
+    const policies = st.pol.policies || [];
+    const rows = policies.map((p) => ({ cells: ['<b>' + esc(p.name) + '</b>' + (p.description ? '<div class="muted" style="font-size:12px">' + esc(p.description) + '</div>' : ''), p.entity ? esc(p.entity) : '<span class="muted">every entity</span>', esc(p.subjects.map(subjectText).join(', ')), '<span class="mono" style="font-size:12px">' + esc(rowsText(p)) + '</span>', esc(fieldsText(p)), UI.pill(p.enabled ? 'enabled' : 'off', p.enabled ? 'ok' : ''), UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-editpolicy="' + esc(p.id) + '"' }) + ' ' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-delpolicy="' + esc(p.id) + '"' })], attrs: 'data-policy="' + esc(p.id) + '"' }));
+    const table = UI.panel('Row and field policies', UI.notice('A policy names who it applies to, the rows they reach (a condition on an indexed field compared with the reader: <span class="mono">$user.attributes.region</span>, <span class="mono">$user.id</span>, <span class="mono">$user.groups</span>…) and what each field shows: read, read unmasked, create, update, with a mask (<span class="mono">last4</span>, <span class="mono">hash</span>, <span class="mono">hidden</span>) for readers without unmasked. Once an entity has a policy, a reader no policy names reaches nothing. Designers are not subject to policies. Labels still apply first.', 'info')
+      + (st.polProblem ? UI.problem(st.polProblem.title, st.polProblem.text, st.polProblem.trace) : '')
+      + UI.table(['Policy', 'Entity', 'Subjects', 'Rows', 'Fields', 'State', { label: '', right: true }], rows, { clickable: false, minWidth: '960px', emptyTitle: 'No policies', emptyText: 'Every member of the workspace reads every record within their clearance. Add a policy to narrow rows and fields per role, group, workspace or user.' })
+      + '<div class="hstack gap6 wrap">' + UI.btn('New policy', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newpolicy' }) + '</div>');
+
+    // ----- explain (B-8103) -----
+    const ex = st.explain || (st.explain = { username: '', entity: app.entities[0] ? app.entities[0].name : '', recordId: '', field: '' });
+    if (!app.entities.some((e) => e.name === ex.entity)) ex.entity = app.entities[0] ? app.entities[0].name : '';
+    const exEnt = app.entities.find((e) => e.name === ex.entity) || null;
+    const r = st.explainResult && st.explainResult.key === key ? st.explainResult : null;
+    const pillFor = (t) => UI.pill(t, /^no /.test(t) ? 'warn' : /masked/.test(t) ? 'info' : 'ok');
+    const result = !r ? '' : r.error ? UI.problem('Explain failed', detailOf(r.error), traceOf(r.error)) : (() => {
+      const u = r.data.user;
+      const rec = r.data.record;
+      const f = r.data.field;
+      return UI.kv([
+        ['Reader', esc(u.username) + (u.designer ? ' ' + UI.pill('designer', 'accent') : '') + ', clearance ' + UI.label(u.clearance, { sm: true })],
+        ['Compared by', 'roles ' + esc(u.roles.join(', ') || 'none') + '; groups ' + esc(u.groups.join(', ') || 'none') + '; workspaces ' + esc(String(u.workspaces.length)) + '; attributes ' + esc(Object.keys(u.attributes).length ? JSON.stringify(u.attributes) : 'none')],
+        ['Policies on ' + esc(ex.entity), r.data.policed ? (r.data.none ? UI.pill('none name this reader', 'danger') + ' they reach no record' : r.data.policies.filter((p) => p.matches).length + ' of ' + r.data.policies.length + ' name this reader') : u.designer ? 'a designer is not subject to policies' : 'none: every record within their clearance'],
+        ['Record', rec ? (rec.reachable ? UI.pill('reachable', 'ok') + (rec.by ? ' by ' + esc(rec.by) : '') : UI.pill('not reachable', 'danger') + (rec.by ? ' ' + esc(rec.by) : '')) : '<span class="muted">none asked</span>'],
+        ['Field', f ? [f.read ? 'read' : 'no read', f.unmasked ? 'unmasked' : 'masked ' + f.mask, f.create ? 'create' : 'no create', f.update ? 'update' : 'no update'].map(pillFor).join(' ') + (f.by ? ' by ' + esc(f.by) : '') : '<span class="muted">none asked</span>']
+      ], 1) + (r.data.policies.length ? UI.table(['Policy', 'Names the reader', 'Why', 'Rows'], r.data.policies.map((p) => [esc(p.name), p.matches ? UI.pill('yes', 'ok') : UI.pill('no', ''), esc(p.reason), p.rows ? '<span class="mono" style="font-size:12px">' + esc(rowsText({ rows: p.rows })) + '</span>' : '<span class="muted">every row</span>']), { clickable: false, cls: 'bare', minWidth: '0' }) : '');
+    })();
+    const explain = UI.panel('Explain: what a reader gets', '<div class="formgrid">'
+      + UI.field('Reader (username)', UI.input(ex.username, { placeholder: 'ana', attrs: 'data-exuser aria-label="Reader username"' }))
+      + UI.field('Entity', UI.select(app.entities.map((e) => ({ value: e.name, label: e.title || e.name })), ex.entity, 'data-exentity aria-label="Entity"'))
+      + UI.field('Record id (optional)', UI.input(ex.recordId, { placeholder: '26 characters', attrs: 'data-exrecord aria-label="Record id"' }))
+      + UI.field('Field (optional)', UI.select([{ value: '', label: 'none' }].concat(exEnt ? fieldsOf(exEnt).map((f) => ({ value: f.name, label: f.name })) : []), ex.field, 'data-exfield aria-label="Field"'))
+      + '</div><div class="hstack gap6">' + UI.btn('Explain', { size: 'sm', attrs: 'data-explain' }) + '<span class="muted" style="font-size:12px">Which policy names the reader, whether the record is in their reach and what the field shows.</span></div>'
+      + result);
+
+    ctx.on('click', '[data-polreload]', () => { st.polKey = st.polBusy = null; st.polError = null; ctx.rerender(); });
+    ctx.on('input', '[data-exuser]', (e, t) => { ex.username = t.value; });
+    ctx.on('input', '[data-exrecord]', (e, t) => { ex.recordId = t.value.trim(); });
+    ctx.on('change', '[data-exentity]', (e, t) => { ex.entity = t.value; ex.field = ''; ctx.rerender(); });
+    ctx.on('change', '[data-exfield]', (e, t) => { ex.field = t.value; });
+    ctx.on('click', '[data-explain]', async () => {
+      if (!ex.username.trim()) { ctx.toast('Name the reader.', 'warn'); return; }
+      const body = { username: ex.username.trim() }; if (ex.recordId) body.recordId = ex.recordId; if (ex.field) body.field = ex.field;
+      try { const data = await App.post(E(app.id, ex.entity) + '/policies/explain', body); st.explainResult = { key, data }; } catch (err) { st.explainResult = { key, error: err }; }
+      ctx.rerender();
+    });
+    ctx.on('click', '[data-newpolicy]', () => openPolicyModal(ctx, app, null));
+    ctx.on('click', '[data-editpolicy]', (e, t) => openPolicyModal(ctx, app, policies.find((p) => p.id === t.dataset.editpolicy)));
+    ctx.on('click', '[data-delpolicy]', async (e, t) => {
+      const p = policies.find((x) => x.id === t.dataset.delpolicy); if (!p) return;
+      const ok = await ctx.confirm({ title: 'Remove ' + p.name, tone: 'danger', body: '<p class="fg2" style="margin:0">Readers it named lose what it granted at once. Audited app.policy.deleted.</p>', ok: 'Remove' });
+      if (!ok) return;
+      try { await App.del(A(app.id) + '/policies/' + enc(p.id)); st.polKey = null; st.polProblem = null; ctx.rerender(); ctx.toast('Policy ' + esc(p.name) + ' removed. Audited app.policy.deleted.', 'ok'); } catch (err) { App.fail(err, 'Could not remove the policy'); }
+    });
+    return table + explain;
+  }
+
+  function openPolicyModal(ctx, app, existing) {
+    const st = ctx.state;
+    const p = existing ? clone(existing) : { name: '', description: '', enabled: true, entity: app.entities[0] ? app.entities[0].name : null, subjects: [{ kind: 'role', value: 'member' }], rows: null, fields: {}, otherFields: { read: true, unmasked: true, create: true, update: true } };
+    const entOf = (name) => app.entities.find((e) => e.name === name) || null;
+    const leaf = p.rows && 'field' in p.rows ? p.rows : null;
+    const draft = { entity: p.entity || '', subjects: p.subjects.slice(), rowField: leaf ? leaf.field : '', rowOp: leaf ? leaf.op : 'eq', rowValue: leaf ? (Array.isArray(leaf.value) ? leaf.value.join(', ') : String(leaf.value)) : '$user.attributes.region', fields: clone(p.fields || {}), enabled: p.enabled !== false, name: p.name, description: p.description || '' };
+    const body = () => {
+      const ent = entOf(draft.entity);
+      const covered = ent ? [ent] : app.entities;
+      const indexed = covered.length ? covered[0] : null;
+      const fieldNames = ent ? fieldsOf(ent).map((f) => f.name) : app.entities.length ? fieldsOf(app.entities[0]).map((f) => f.name).filter((n) => app.entities.every((e) => fieldsOf(e).some((f) => f.name === n))) : [];
+      const grantRow = (name) => { const g = draft.fields[name] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; const f = ent ? fieldByName(ent, name) : null; return '<tr><td class="mono">' + esc(name) + (f && !(f.indexed || f.unique) ? ' <span class="muted">(not indexed)</span>' : '') + '</td>' + ['read', 'unmasked', 'create', 'update'].map((k) => '<td style="text-align:center"><input type="checkbox" data-grant="' + esc(name) + ':' + k + '"' + (g[k] !== false ? ' checked' : '') + ' aria-label="' + esc(name + ' ' + k) + '"></td>').join('') + '<td>' + UI.select(MASKS, g.mask || 'hidden', 'data-grant="' + esc(name) + ':mask" aria-label="' + esc(name) + ' mask"') + '</td></tr>'; };
+      const subjRows = draft.subjects.map((s, i) => '<div class="hstack gap6" style="margin-bottom:6px">' + UI.select(SUBJECT_KINDS, s.kind, 'data-skind="' + i + '" aria-label="Subject kind"') + UI.input(s.value || '', { placeholder: 'member, finance-ops, a workspace id, a username', attrs: 'data-svalue="' + i + '" aria-label="Subject value"' }) + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-sdel="' + i + '" aria-label="Remove subject"' }) + '</div>').join('');
+      return '<div class="formgrid">' + UI.field('Name', UI.input(draft.name, { attrs: 'data-pname aria-label="Policy name"' })) + UI.field('Description', UI.input(draft.description, { attrs: 'data-pdesc aria-label="Description"' }))
+        + UI.field('Entity', UI.select([{ value: '', label: 'Every entity of the app' }].concat(app.entities.map((e) => ({ value: e.name, label: e.title || e.name }))), draft.entity, 'data-pentity aria-label="Entity"'), 'An app-wide policy may only use fields every entity has.')
+        + UI.field('Enabled', UI.toggle('In force', draft.enabled, 'data-penabled')) + '</div>'
+        + '<div class="eyebrow" style="margin-top:10px">Applies to</div>' + subjRows + UI.btn('Add subject', { size: 'xs', kind: 'ghost', attrs: 'data-sadd' })
+        + '<div class="eyebrow" style="margin-top:10px">Rows</div><div class="hstack gap6 wrap">' + UI.select([{ value: '', label: 'Every row' }].concat((indexed ? fieldNames.filter((n) => covered.every((e) => { const f = fieldByName(e, n); return f && (f.indexed || f.unique); })) : []).concat(SYSTEM_FIELDS).map((n) => ({ value: n, label: n }))), draft.rowField, 'data-prfield aria-label="Row field"') + UI.select(OPS.filter((o) => o !== 'exists'), draft.rowOp, 'data-prop aria-label="Operator"') + UI.input(draft.rowValue, { attrs: 'data-prvalue aria-label="Value"' }) + '</div><div class="muted" style="font-size:12px">Only indexed or unique fields, or id, state, createdAt, updatedAt, createdBy. A value starting with $user. is the reader\'s fact ($user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces, $user.attributes.&lt;name&gt;); the list placeholders go with in. Several values for in: comma-separated.</div>'
+        + '<div class="eyebrow" style="margin-top:10px">Fields' + (ent ? ' of ' + esc(ent.title || ent.name) : ' every entity has') + '</div><div class="tablewrap"><table class="table bare" style="min-width:0"><thead><tr><th>Field</th><th>Read</th><th>Unmasked</th><th>Create</th><th>Update</th><th>Mask</th></tr></thead><tbody>' + fieldNames.map(grantRow).join('') + '</tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">A field left in full stays in full. Masks apply to readers with read but not unmasked: last4 keeps the last four letters or digits (***-**-1234), hash shows a short SHA-256, hidden shows nothing.</div>';
+    };
+    const capture = (m) => {
+      draft.name = m.querySelector('[data-pname]').value; draft.description = m.querySelector('[data-pdesc]').value; draft.entity = m.querySelector('[data-pentity]').value; draft.enabled = m.querySelector('[data-penabled]').classList.contains('on');
+      draft.subjects = [...m.querySelectorAll('[data-skind]')].map((el) => ({ kind: el.value, value: m.querySelector('[data-svalue="' + el.dataset.skind + '"]').value.trim() }));
+      draft.rowField = m.querySelector('[data-prfield]').value; draft.rowOp = m.querySelector('[data-prop]').value; draft.rowValue = m.querySelector('[data-prvalue]').value.trim();
+      const fields = {}; m.querySelectorAll('[data-grant]').forEach((el) => { const i = el.dataset.grant.lastIndexOf(':'); const f = el.dataset.grant.slice(0, i), k = el.dataset.grant.slice(i + 1); fields[f] = fields[f] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; fields[f][k] = k === 'mask' ? el.value : el.checked; });
+      draft.fields = fields;
+    };
+    const repaint = (m) => { capture(m); m.querySelector('[data-pbody]').innerHTML = body(); };
+    modal(ctx, {
+      title: existing ? 'Edit ' + existing.name : 'New policy', cls: 'wide',
+      body: '<div data-pbody>' + body() + '</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(existing ? 'Save' : 'Create policy', { kind: 'primary', attrs: 'data-psave' }),
+      onMount(m) {
+        m.addEventListener('change', (e) => { if (e.target.matches('[data-pentity]')) repaint(m); });
+        m.addEventListener('click', (e) => {
+          const t = e.target.closest('[data-penabled],[data-sadd],[data-sdel]'); if (!t) return;
+          if (t.matches('[data-penabled]')) { t.classList.toggle('on'); t.setAttribute('aria-checked', t.classList.contains('on')); return; }
+          capture(m);
+          if (t.matches('[data-sadd]')) draft.subjects.push({ kind: 'role', value: '' }); else draft.subjects.splice(+t.dataset.sdel, 1);
+          m.querySelector('[data-pbody]').innerHTML = body();
+        });
+        m.querySelector('[data-psave]').addEventListener('click', async () => {
+          capture(m);
+          const name = draft.name.trim(); if (!name) { ctx.toast('A policy needs a name.', 'warn'); return; }
+          const subjects = draft.subjects.map((s) => (s.kind === 'everyone' ? { kind: 'everyone' } : { kind: s.kind, value: s.value })); if (!subjects.length || subjects.some((s) => s.kind !== 'everyone' && !s.value)) { ctx.toast('Every subject other than everyone needs a value.', 'warn'); return; }
+          const v = draft.rowValue;
+          if (v.startsWith('$user.') && !PLACEHOLDER_RE.test(v)) { ctx.toast('Unknown placeholder ' + esc(v) + '. Use $user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces or $user.attributes.<name>.', 'danger', 6000); return; }
+          if (LIST_PLACEHOLDERS.includes(v) && draft.rowOp !== 'in') { ctx.toast(esc(v) + ' is a list: compare it with in.', 'danger'); return; }
+          const ent = entOf(draft.entity); const f = ent && draft.rowField ? fieldByName(ent, draft.rowField) : null;
+          const typed = (x) => (f && f.type === 'number' && x !== '' && !isNaN(Number(x)) ? Number(x) : f && f.type === 'boolean' ? x === 'true' : x);
+          const rows = draft.rowField ? { field: draft.rowField, op: draft.rowOp, value: draft.rowOp === 'in' ? (v.startsWith('$user.') ? [v] : v.split(',').map((x) => typed(x.trim())).filter((x) => x !== '')) : typed(v) } : null;
+          const fields = {}; Object.keys(draft.fields).forEach((k) => { const g = draft.fields[k]; if (!(g.read && g.unmasked && g.create && g.update)) fields[k] = { read: !!g.read, unmasked: !!g.unmasked, create: !!g.create, update: !!g.update, mask: g.mask || 'hidden' }; });
+          const payload = { name, description: draft.description.trim() || null, enabled: draft.enabled, entity: draft.entity || null, subjects, rows, fields, otherFields: p.otherFields || { read: true, unmasked: true, create: true, update: true } };
+          try {
+            if (existing) await App.put(A(app.id) + '/policies/' + enc(existing.id), payload); else await App.post(A(app.id) + '/policies', payload);
+            st.polKey = null; st.polProblem = null; App.closeOverlay(); ctx.rerender(); ctx.toast('Policy ' + esc(name) + (existing ? ' saved' : ' created') + '. Audited app.policy.' + (existing ? 'updated' : 'created') + '.', 'ok');
+          } catch (err) { st.polProblem = { title: existing ? 'Policy not saved' : 'Policy not created', text: detailOf(err), trace: traceOf(err) }; App.closeOverlay(); ctx.rerender(); }
+        });
+      }
+    });
+  }
+
   function renderTriggers(ctx, app) {
     const st = ctx.state;
     const triggers = app.triggers || [];

@@ -56610,7 +56610,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-8103 explain: {userId, recordId?, field?} answers {user: {id, username, clearance, roles, groups, workspaces, attributes, designer}, policed, none, rows (the resolved filter), policies: [{id, name, matches, subject, reason, rows}], record: {reachable, by} | null, field: {name, read, unmasked, create, update, mask, by} | null}",
+        "summary": "apps:design. B-8103 explain: {userId | username, recordId?, field?} answers {user: {id, username, clearance, roles, groups, workspaces, attributes, designer}, policed, none, rows (the resolved filter), policies: [{id, name, matches, subject, reason, rows}], record: {reachable, by} | null, field: {name, read, unmasked, create, update, mask, by} | null}",
         "parameters": [
           {
             "name": "app",
