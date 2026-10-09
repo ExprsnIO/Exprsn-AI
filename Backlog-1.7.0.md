@@ -31,7 +31,7 @@ B-29 PDS, and on 1.6.0's HTTP tool kind (B-89), per-post visibility (B-4901), gr
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
 | 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | **Done** |
-| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (re-planned by usage on 2026-10-09) | B-11701–B-11706, B-11708, B-11901–B-11902, B-11906, B-9201, B-9203, B-9601–B-9602, B-12201 | 68 | **Partly done** (42 of 68 points; B-9201, B-9203, B-11901, B-11902, B-11906 not started) |
+| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (re-planned by usage on 2026-10-09); finding what you can use | B-11701–B-11706, B-11708, B-11901–B-11902, B-11906, B-9201, B-9203, B-9601–B-9602, B-12201, B-12301–B-12304 | 77 | **Partly done** (51 of 77 points with B-123; B-9201, B-9203, B-11901, B-11902, B-11906 not started) |
 | 42 | The vault for signing keys and session tokens; Redis for multi-process installs; workflows calling listed public hosts; dynamic API-key leases | B-9202, B-9204–B-9209, B-9001–B-9002, B-9101–B-9102, B-9301–B-9302 | 60 | Planned |
 | 43 | Groups: the rest of nexus; groups as access subjects; skills from knowledge, second part | B-9701–B-9709, B-9801–B-9805, B-11903–B-11905 | 76 | Planned |
 | 44 | Held messages for review; evidence retention and legal hold; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9401–B-9404, B-9501–B-9504, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 74 | Planned |
@@ -51,7 +51,10 @@ B-115, B-116, B-118, B-120 and B-121 stay unscheduled.
 
 ### Progress
 
-**Sprint 41: partly done** (this PR; 42 of 68 points, the owner's choice). Standing approvals for MCP write calls
+**Sprint 41: partly done** (this PR; 51 of 77 points, the owner's choice, with B-123 added 2026-10-09). Finding what you
+can use (B-12301 to B-12304, migration `043d_discovery`): the Catalogue screen and Chat's "What you can do" panel,
+publish notices with opt-out and digest, embedding-ranked composer suggestions, and purpose, example and category
+required at registry submit for anything offered in chat. Standing approvals for MCP write calls
 (B-12201, migration `043_mcp_standing_approvals`), the guardrail rule builder (B-9601, B-9602) and thinking policy,
 budgets, plan first, reflection, step levels and evaluations with their screens (B-11701 to B-11706, B-11708, migration
 `043c_thinking`). Not started: B-9201, B-9203 (vault system scope and hot path) and B-11901, B-11902, B-11906 (skills
@@ -525,7 +528,7 @@ dual control.
 
 ## Discovery (2026-10-09)
 
-### B-123 Finding what you can use (9 points, unscheduled)
+### B-123 Finding what you can use (9 points, Sprint 41d)
 
 Added 2026-10-09 at the owner's request: how does a person learn that a workflow, agent, tool or skill exists for them?
 Today discovery is pull-only. The Chat composer's `/`, `@` and `+` pickers (B-4001, Sprint 40a) list what a conversation
@@ -572,7 +575,7 @@ clearance, labels and allow-lists) where people look, and asks authors for what 
 - [ ] Learning datasets (B-11804): fine-tuning in scope with the rest of B-118, or stop at eval cases, samples and
   memories until a training worker runs on cluster GPUs (2.0.0's compute pools, B-104)?
 - [ ] Secret ballots (B-11603): ballots shown to the proposer after close (assumed), or to nobody?
-- [ ] Discovery (B-123, 9 points): with the rest of Sprint 41 (its 26 points not started), or a later sprint? Suggestions
+- [x] Discovery (B-123, 9 points): answered 2026-10-09, the owner had it built at once as Sprint 41d. Suggestions
   (B-12303) use the embedding profile only; a chat-model ranking would be better and slower.
 
 ## Risks

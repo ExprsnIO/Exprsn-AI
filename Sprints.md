@@ -51,7 +51,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Usage and audit, Profiles, Registry, Runs, Flags, Apps | **Done** |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Shared, Apps, Settings | **Done** |
 | 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | **Done** |
-| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (1.7.0; re-planned by usage on 2026-10-09) | Profiles, Chat, Runs, Knowledge, Registry, Vault, Guardrails, MCP servers | **Partly done** (42 of 68 points; B-9201, B-9203, B-11901, B-11902, B-11906 not started) |
+| 41 | Thinking policy, budgets, plans and reflection; skills from knowledge; the vault's system scope and hot path; the guardrail rule builder; standing MCP approvals (1.7.0; re-planned by usage on 2026-10-09) | Profiles, Chat, Runs, Knowledge, Registry, Vault, Guardrails, MCP servers | **Partly done** (51 of 77 points with B-123; B-9201, B-9203, B-11901, B-11902, B-11906 not started) |
 | 42 | The vault for signing keys and session tokens; Redis for multi-process installs; workflows calling listed public hosts; dynamic API-key leases (1.7.0) | Vault, Settings, Workflows | Planned |
 | 43 | Groups: the rest of nexus; groups as access subjects; skills from knowledge, second part (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Registry | Planned |
 | 44 | Held messages for review; evidence retention and legal hold; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Messages and feed, Moderation, Files, Jobs and queues, Plugins and events, AT-Protocol | Planned |
@@ -1359,9 +1359,9 @@ Delivered on `sprint-39` and its parts 39a to 39d (PR #70, then #71 onto `main`)
   deployment; rollback restores design, not records; pulls are full reads; a public embed page is reachable by anyone
   who learns its id; the host site is trusted for who is behind the browser.
 
-## Sprint 41: Standing MCP approvals, the guardrail rule builder, thinking (1.7.0, partly done)
+## Sprint 41: Standing MCP approvals, the guardrail rule builder, thinking, discovery (1.7.0, partly done)
 
-The owner chose three of the re-planned sprint's parts (42 of 68 points); the vault's system scope and hot path (B-9201,
+The owner chose three of the re-planned sprint's parts and added B-123 on 2026-10-09 (51 of 77 points); the vault's system scope and hot path (B-9201,
 B-9203) and the first part of skills from knowledge (B-11901, B-11902, B-11906) are not started. **41a** (B-12201,
 migration `043_mcp_standing_approvals`): a person grants their MCP client a standing approval per tool or server for a
 period up to `MCP_STANDING_APPROVAL_MAX_DAYS`, so covered write calls run without a browser approval; every call is still
@@ -1378,8 +1378,14 @@ Settings `MCP_STANDING_APPROVAL_MAX_DAYS`, `THINKING_BUDGET_NOTICE_PERCENT`, `TH
 passed; prototype smoke 51 of 51; the touched screens' specs and the first-look sweep passed (27). The 41c builder ran out
 of credits mid-console and a second builder finished it. Known gaps in [docs/security.md](docs/security.md): plan first
 fails open when the plan draft cannot be parsed; workflow steps, evaluations and the plan and reflection passes are not
-budgeted; thinking tokens are estimated and budgets checked at turn start; run-step thinking is hidden but not purged;
-a draft rule's quality is the model's; a standing approval does not cover a call above its label.
+budgeted; thinking tokens are estimated and budgets checked at turn start; no notice when a profile later lists a tool
+or someone joins a workspace; suggestions rank by embedding similarity only; run-step thinking is hidden but not purged;
+a draft rule's quality is the model's; a standing approval does not cover a call above its label. **41d** (B-12301 to B-12304, migration `043d_discovery`): a
+Catalogue screen and a "What you can do" panel on Chat's empty state from the capabilities data (within clearance,
+labels and allow-lists), one in-app notice per member when an entry is published or offered to their workspace (opt-out
+or weekly digest), up to three composer suggestions ranked by local embedding similarity, and the registry review asking
+for a purpose, an example prompt and a category for anything offered in chat (`REGISTRY_DISCOVERY_REQUIRED`). Unit suite
+after 41d: 1213 passed across 135 files; the touched specs passed (28).
 
 ## Sprint 40: Agents, tools, skills and workflows in chat; dataset import and the Import screen (1.7.0, done)
 
