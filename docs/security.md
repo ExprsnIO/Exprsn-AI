@@ -485,6 +485,26 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   model's own `config.json` and can be renamed on the Classifiers screen; thresholds, eval sets, publication and the
   minimum-sample rule apply as to every engine.
 
+## Standing approvals for MCP write calls (1.7.0, Sprint 41a)
+
+- **A standing approval replaces the per-call click, not the checks (B-12201).** It is a reason for the MCP server to
+  skip the browser approval of a write call; the call still goes through the catalogue (only tools published to the
+  person in that workspace, at the label it publishes), the dispatcher (the tool's ceiling against the call's label,
+  the tool-call guardrail, the rate limit, the chain), the `context` and `untrusted-content` checkpoints on the
+  result, metering and the audit chain. A verdict of `require-approval` from the tool-call guardrail is never covered:
+  the call waits in the Flags queue for a reviewer, as every held call does, and its message says so.
+- **Granted only by the person, only from a browser.** The routes that grant and revoke accept a browser session
+  (`sessionOnly`), never the OAuth token the client holds, so a client cannot widen what it may do on its own, and a
+  stolen MCP token stays bound to what was granted. An approval covers calls made as its owner only; another person's
+  approval never applies, and another person cannot revoke it (an identity admin can, audited with `by: admin`).
+- **Bounded.** One workspace's server; one published write tool or every one; one client (the OAuth client id the
+  client signed in with, as held calls show it) or any; up to `write` or `destructive`; the label the person held in
+  that workspace when they granted it (a call at a higher label is not covered); at most
+  `MCP_STANDING_APPROVAL_MAX_DAYS` days, then expired by the chat sweep and audited. A read tool, a destructive tool
+  under a write-only class, or a period past the longest are refused at grant.
+- **Visible.** Every covered call's `mcp.server.call` event names the approval, the approval counts its uses, revoked
+  and expired approvals stay listed for 30 days, and the identity admin sees the tenant's together.
+
 ## Deployment hardening
 
 ## Model servers and platform administration (1.6.0, Sprint 35)
@@ -631,7 +651,7 @@ filter, private `/tmp`, only the state directory writable.
 - The MCP server and MCP authorization (1.6.0, Sprint 37b, B-7101 to B-7103). The server offers no sessions, no
   event stream and no resources or prompts: a long agent run or a workflow paused on an approval answers with a handle
   after 20 s, and the client asks again with `exprsn_run_status`. Held calls are matched by the arguments' hash, so a
-  client that changes any argument asks again; the approval is per call, with no "trust this client" setting. Agents
+  client that changes any argument asks again; the approval is per call unless the person grants a standing approval (1.7.0, B-12201) for a tool or a server, a client or any, for a period. Agents
   published to a workspace run as tools with their own approvals inside the run (decided on the Runs screen, as in the
   console), not with a held call. The DNS-rebinding check refuses any foreign `Origin`, so a browser-based MCP client
   on another origin cannot use the endpoint. Dynamically registered clients are not removed when unused. On the client

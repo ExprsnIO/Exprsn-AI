@@ -46,6 +46,7 @@ All settings are environment variables. Secrets may be given as `<NAME>_FILE` po
 | `SECRET_REF_ENV` | — | Environment variables user stores and upstream IdPs may reference as `env:NAME`: names or `PREFIX*` patterns, comma-separated. Empty means none. The server's own settings (and their `_FILE` forms) are refused whatever this says |
 | `SECRET_REF_DIRS` | `/run/secrets,/run/credentials,/etc/exprsn-ai/credentials` | Directories `file:` references must resolve inside (symlinks followed); the server's own secret files are refused |
 | `MCP_TIMEOUT_MS`, `MCP_POLL_MINUTES` | `15000`, `15` | MCP request timeout; how often every server's tools are re-listed and re-hashed (0 turns off) |
+| `MCP_STANDING_APPROVAL_MAX_DAYS` | `30` | The MCP server (B-12201): the longest period a standing approval for a client's write calls may run, 1 to 365 days |
 | `SCRIPT_RUNNER` | `auto` | Script sandbox: `docker` or `podman` CLI (`auto` uses whichever answers), or `none` to refuse script runs. The server's user must be allowed to run containers (rootless Podman is recommended) |
 | `SCRIPT_IMAGE_PYTHON`, `SCRIPT_IMAGE_NODE` | `python:3.13-slim`, `node:22-slim` | Images for Python and JavaScript scripts; pin digests and mirror them internally, as nothing is pulled from outside at run time in an air-gapped install |
 | `WORKFLOW_HTTP_HOSTS`, `WORKFLOW_HTTP_ALLOW_LOOPBACK` | —, `false` | Workflow HTTP steps call private addresses only; this comma-separated host list narrows them further |

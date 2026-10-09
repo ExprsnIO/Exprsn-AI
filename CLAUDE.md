@@ -379,6 +379,11 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   engine (B-3806: `config.model` names the staged files, `scoreImported` calls the worker at `CLASSIFIER_WORKER_URL`,
   `createImported`), and `registerClassifier` in `imports/service.ts` for a model import with `target: classifiers`.
   Fakes in `server/test/sprint40b-fakes.ts` (an open-data portal, a dataset hub, a classifier worker).
+- 1.7.0 Sprint 41a: standing approvals in `mcp/server/service.ts` (B-12201: `StandingRow` in `mcp_standing_approvals`,
+  `standingFor` consulted by `call` when no per-call approval was claimed, `grantStanding`, `writeTools` for the grant
+  form, `standing` and `standingAll` views, `revokeStanding`, `expireStanding` from the chat sweep) behind
+  `routes/mcp-access.ts`; `ToolCallContext.standing` in `registry/dispatch.ts` covers the side effect and a
+  `confirm: always` tool but never a `require-approval` verdict.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

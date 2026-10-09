@@ -5594,3 +5594,30 @@ its labels from the model's `config.json` (`id2label`) and its files named by th
 revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
 classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
 eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.
+
+## Sprint 41a (1.7.0): standing approvals for MCP write calls (B-12201)
+
+Migration `043_mcp_standing_approvals`. Setting `MCP_STANDING_APPROVAL_MAX_DAYS` (30): the longest period an approval
+may run.
+
+A standing approval stands in for the per-call approval of Sprint 37b: while one covers a call, the MCP server runs
+the call at once instead of holding it. It covers calls made as the person who granted it, in one workspace's MCP
+server, for one published write tool (`tool`) or every one (`null`), from one client (`client`, the OAuth client id
+the client signed in with) or any (`null`), up to a side-effect class (`write`, or `destructive` which includes
+write), at the clearance the person held in that workspace when they granted it (a call above it is not covered),
+until `expiresAt`. A call the tool-call guardrail holds is never covered: it waits in the Flags queue as before, and
+its message names the guardrail. Read tools never wait and cannot be named.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/me/mcp-server` | Also carries `approvals` (below) and `standingMaxDays` |
+| `GET /api/me/mcp-approvals` | `{approvals: [{id, workspaceId, workspace, client, tool, sideEffect, label, reason, state: active \| revoked \| expired, uses, lastUsedAt, expiresAt, createdAt, revokedAt}], maxDays}`, the caller's own, newest first; revoked and expired ones stay for 30 days |
+| `GET /api/me/mcp-approvals/tools?workspaceId=` | The write and destructive tools the caller may call in that workspace's published server: `{tools: [{name, title, group, sideEffect}]}` |
+| `POST /api/me/mcp-approvals` `{workspaceId, tool?, clientId?, sideEffect: write \| destructive, days, reason?}` | Browser session only (a client's token can never grant itself one). 404 for an unpublished server or an unknown tool, 409 for a read tool, a destructive tool under `write`, or `days` outside 1 to the longest. `201 {id, workspaceId, client, tool, sideEffect, label, state, expiresAt, createdAt}`; audited `mcp.server.standing.granted` |
+| `DELETE /api/me/mcp-approvals/:id` | Browser session only; revokes the caller's own (404 for another's, 409 when not active); the next covered call waits again. Audited `mcp.server.standing.revoked` (`by: owner`) |
+| `GET /api/admin/mcp-server` | Also carries `standingApprovals` (every one of the tenant, with `userId` and `username`) and `standingMaxDays` (`identity:manage`) |
+| `DELETE /api/admin/mcp-server/approvals/:id` | An identity admin revokes any of the tenant's (browser session). Audited `mcp.server.standing.revoked` (`by: admin`) |
+
+A covered call's `mcp.server.call` audit event carries `detail.standing` (the approval's id); the approval's `uses`
+and `lastUsedAt` follow. The chat sweep (every 15 minutes) marks approvals past their period `expired`, audited
+`mcp.server.standing.expired` once each; a call meanwhile is not covered either way.

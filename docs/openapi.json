@@ -16021,10 +16021,11 @@
     },
     "/api/admin/mcp-server/approvals/{id}": {
       "delete": {
+        "x-exprsn-since": "1.7.0",
         "tags": [
           "admin/mcp-server"
         ],
-        "summary": "See docs/api.md",
+        "summary": "identity:manage, browser session: revokes any standing approval of the tenant. Audited mcp.server.standing.revoked, by: admin (B-12201)",
         "parameters": [
           {
             "name": "id",
@@ -44517,10 +44518,11 @@
     },
     "/api/me/mcp-approvals": {
       "get": {
+        "x-exprsn-since": "1.7.0",
         "tags": [
           "me"
         ],
-        "summary": "See docs/api.md",
+        "summary": "The caller's standing approvals for MCP write calls, newest first; revoked and expired ones stay 30 days. {approvals: [{id, workspaceId, workspace, client, tool, sideEffect, label, reason, state, uses, lastUsedAt, expiresAt, createdAt, revokedAt}], maxDays} (B-12201)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -44528,23 +44530,73 @@
         }
       },
       "post": {
+        "x-exprsn-since": "1.7.0",
         "tags": [
           "me"
         ],
-        "summary": "See docs/api.md",
+        "summary": "Browser session only: grants a standing approval for the caller's write calls in one workspace's MCP server (one tool or every one, one client or any, up to write or destructive, 1 to MCP_STANDING_APPROVAL_MAX_DAYS days, at the caller's clearance there). 404 unpublished server or unknown tool; 409 read tool, class too low, or days out of range. Audited mcp.server.standing.granted (B-12201)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "workspaceId",
+                  "days"
+                ],
+                "properties": {
+                  "workspaceId": {
+                    "type": "string"
+                  },
+                  "tool": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 140
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 100
+                  },
+                  "sideEffect": {
+                    "type": "string",
+                    "enum": [
+                      "write",
+                      "destructive"
+                    ],
+                    "default": "write"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365
+                  },
+                  "reason": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 300
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         }
       }
     },
     "/api/me/mcp-approvals/tools": {
       "get": {
+        "x-exprsn-since": "1.7.0",
         "tags": [
           "me"
         ],
-        "summary": "See docs/api.md",
+        "summary": "The write and destructive tools the caller may call in a workspace's published MCP server, for the grant form: ?workspaceId= -> {tools: [{name, title, group, sideEffect}]} (B-12201)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -44554,10 +44606,11 @@
     },
     "/api/me/mcp-approvals/{id}": {
       "delete": {
+        "x-exprsn-since": "1.7.0",
         "tags": [
           "me"
         ],
-        "summary": "See docs/api.md",
+        "summary": "Browser session only: revokes the caller's own standing approval; the next covered call waits for a per-call approval again. 404 another person's, 409 not active. Audited mcp.server.standing.revoked, by: owner (B-12201)",
         "parameters": [
           {
             "name": "id",
