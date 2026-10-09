@@ -352,6 +352,35 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   remote URL. The push writes the package's files, nothing else, under the path given, and a path that leaves the
   tree is refused.
 
+## Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c)
+
+- **A draft is a proposal (B-8301).** The description passes the `user-input` checkpoint and the model's answer the
+  `model-output` one, as any app draft does; the draft is validated with the same schema and checks as a saved
+  entity, against the app's entities and each other, and nothing is written until a designer accepts it. Accepting
+  never removes a field or a state: fields the draft omits are listed and kept, so a model cannot drop data; a type
+  change on an entity with records is refused by the entity update as always. Triggers are created only for workflows
+  the designer may already see, and only `record` triggers: a draft cannot name a schedule.
+- **AI prompts read fields through the formula engine (B-8401).** A placeholder is a field name or a formula over the
+  entity's plain fields and the formula functions, compiled by the same parser that refuses everything but fields and
+  listed functions, so a prompt can no more reach a global than a formula field can; an unreadable placeholder is
+  refused when the entity is saved and renders empty if one slips through. Only the fields whose prompts read a changed
+  value regenerate, and a burst of edits asks the model once per field (`APPS_AI_DEBOUNCE_MS`), which bounds what one
+  editor can spend; the fill still runs as the record's last editor, within their clearance and the profile's.
+- **A fill over every row is one metered, cancellable job (B-8402).** It needs `apps:design`, shows its estimate first
+  (and the money when the tenant priced the model), runs one record at a time through the profile's guardrails and the
+  tenant's quota (the quota refuses the next record when it runs out), and stops between records when cancelled; one
+  fill per field at a time. Its token totals are on the fill and in the audit events; the answers themselves are
+  sealed in the records like any value.
+- **An outside table is read unmasked, by designers who also manage connections (B-8501).** The connection's PII
+  masking is for ad-hoc queries and knowledge; records of a sourced entity carry the rows as they are, so attaching
+  one needs `connections:manage` beside `apps:design`, the table must be on the connection's allow-list, and the
+  entity's label must cover the connection's: the rows land sealed under at least the label the connection carries,
+  policed, labelled and audited like any record. Pulls are audited with their counts, never their values. Writes
+  through to the table run only when the designer turned them on, through parameterised statements on plain column
+  names (quoted identifiers, values as parameters) in their own transaction, before anything changes locally: a
+  refused write leaves the app as it was. The connection's own account decides what the writes may do; a read-only
+  account makes writes fail with `502` and the app untouched.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1483,3 +1512,13 @@ filter, private `/tmp`, only the state directory writable.
   instances goes through git export and import, which is not two-way (a change in the repository is imported as a new
   app, not merged). Git pushes dial out through the address checks but not through the tenant's allowed-host list.
   Deployment history is pruned on read, not by a job.
+
+- Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c). A draft is only as good as the model: it may
+  name fields that validate but mean little, and the diff shows what changes, not whether it is sensible. Debounced
+  AI regeneration keys its window on the clock, so two edits either side of a window boundary ask twice; a fill's
+  estimate samples prompts and assumes `maxLength` or 600 characters of output, and the cost uses the tenant's price
+  at the time (B-7402's known gap applies). A pull reads at most `APPS_SOURCE_PULL_MAX_ROWS` rows and then stops
+  deleting (a capped pull never removes records); pulls are full reads, not change streams; a write through to the
+  table that succeeds but whose local write then fails leaves the row outside ahead of the app until the next pull;
+  CSV imports into a sourced entity write through row by row (slow, and partial on a refusal); records above the
+  connection's label that the designer created locally are pushed to a table that carries no labels.

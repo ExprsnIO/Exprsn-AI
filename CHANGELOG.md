@@ -270,6 +270,35 @@
   rollback; the page refreshes while a deployment is going. Prototype board first; `e2e/tests/apps-deployments.spec.ts`
   with axe-core.
 
+### Data model generation, AI fields and outside database sync (Sprint 39c, B-8301, B-8401, B-8402, B-8501)
+
+- Migration `041c_model_gen_sync`: `app_ai_fills`, `app_entity_sources`, `app_records.ai_pending` and
+  `app_records.external_key`. Settings `APPS_AI_DEBOUNCE_MS`, `APPS_AI_FILL_MAX_ROWS`, `APPS_SOURCE_PULL_MAX_ROWS`.
+  Jobs `apps.ai-fill-all`, `apps.source-pull`, `apps.source-schedules`.
+- Data model drafts (B-8301): a description of an app becomes a draft of its whole data model from a local model
+  through a published profile (entities, typed fields, relations, formulas, state machines, record triggers naming
+  existing workflows), validated like a saved entity and shown as a diff per entity (new, changed, fields added,
+  changed, omitted but kept, states); accepting it creates the new entities in dependency order, extends existing ones
+  without removing anything and creates the triggers whose workflow exists, in one request. `POST
+  /api/apps/{app}/model/draft` and `/model/apply`; audited `app.model.drafted` / `app.model.applied`.
+- AI field prompts (B-8401) take field names and formulas over fields as placeholders (`{{upper(name)}}`), checked when
+  the entity is saved; an edit regenerates only the AI fields that read a changed field, once per quiet window.
+- AI fills over every row (B-8402): fill the empty values or refresh every record of one AI field as a job with an
+  estimate first (records, tokens, the cost at the tenant's model price), progress and token totals on the fill, and a
+  cancel between records; `/api/apps/{app}/entities/{entity}/ai/estimate|fills`; audited `app.ai.fill.started` /
+  `cancelled` / `finished`.
+- Outside tables as entities (B-8501): an entity backed by a table of a PostgreSQL or MySQL data connection: a pull (on
+  demand or every N minutes) brings its rows in as records keyed by the key column, typed by the fields, with the
+  state from a mapped column and rows gone removed; with writes on, a record created, changed, moved or deleted in
+  the app reaches the table first (insert, update, delete through the drivers' new row mutation) so a refused outside
+  write changes nothing here; attaching needs `apps:design` and `connections:manage` and an entity label covering the
+  connection's. `/api/apps/{app}/entities/{entity}/source` and `/source/pull`; audited
+  `app.entity.source.set` / `updated` / `removed` / `pulled` / `pull_failed`.
+- Console (Apps screen): the draft dialog with its diff and editable JSON, an "AI fills over every row" panel and an
+  "Outside table" panel on the Entities tab; prototype boards first; `e2e/tests/apps-model.spec.ts` with axe-core.
+- Unit tests on SQLite (the outside table as a SQLite stand-in behind the real connection flow) and an integration
+  test through the real PostgreSQL and MySQL drivers.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,

@@ -13,13 +13,16 @@ import type { JobContext } from '../platform/jobs.js';
 import type { Workspace } from '../repos/tenants.js';
 import type { Services } from '../services.js';
 import { generate } from './ai.js';
+import { AppAiFills } from './ai-fills.js';
 import { AppBundles } from './bundles.js';
+import { ModelDrafts } from './model-drafts.js';
 import { AppForms } from './forms.js';
 import { AppPackages, type GitOptions } from './packages.js';
 import { AppPipelines } from './pipelines.js';
 import { AppPolicies, type Grant, type Mask } from './policies.js';
 import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, countRecords, pageRecords, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
 import {
+  aiFieldsAffected,
   checkDefinition,
   computeFormulas,
   entityDefinitionSchema,
@@ -27,6 +30,7 @@ import {
   indexRows,
   isComputed,
   normText,
+  renderAiPrompt,
   titleFieldOf,
   transitionFor,
   uniqueKeys,
@@ -37,6 +41,7 @@ import {
   type IndexRow,
   type Values
 } from './schema.js';
+import { AppSources } from './sources.js';
 import { AppTriggers } from './triggers.js';
 
 /*
@@ -95,6 +100,10 @@ export interface RecordRow {
   source: RecordSource;
   ai_state: string | null;
   ai_error: string | null;
+  /** 1.6.0 (B-8401): the AI fields a change left to regenerate (JSON list); null: every AI field. */
+  ai_pending?: string | null;
+  /** 1.6.0 (B-8501): the outside row's key for a record of a sourced entity. */
+  external_key?: string | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: number;
@@ -153,6 +162,8 @@ export interface RecordView {
   source: RecordSource;
   aiState: string | null;
   aiError: string | null;
+  /** 1.6.0 (B-8501): the outside row's key for a record of a sourced entity. */
+  externalKey: string | null;
   createdBy: string | null;
   updatedBy: string | null;
   createdAt: number;
@@ -186,6 +197,12 @@ export class AppService {
   readonly packages: AppPackages;
   /** 1.6.0 (B-8202, B-8203): environments, promotion with approval, deployment history and rollback. */
   readonly pipelines: AppPipelines;
+  /** 1.6.0 (B-8402): fills of one AI field over every record, as jobs with an estimate first. */
+  readonly aiFills: AppAiFills;
+  /** 1.6.0 (B-8501): entities backed by a table in an outside database. */
+  readonly sources: AppSources;
+  /** 1.6.0 (B-8301): a whole data model drafted from a description, as a diff to accept. */
+  readonly modelDrafts: ModelDrafts;
 
   constructor(
     private readonly s: () => Services,
@@ -197,6 +214,9 @@ export class AppService {
     this.policies = new AppPolicies(s, this);
     this.packages = new AppPackages(s, this, o.git);
     this.pipelines = new AppPipelines(s, this, this.packages);
+    this.aiFills = new AppAiFills(s, this);
+    this.sources = new AppSources(s, this);
+    this.modelDrafts = new ModelDrafts(s, this);
   }
 
   private get db() {
@@ -211,6 +231,8 @@ export class AppService {
     jobs.register('apps.export', (p, ctx) => this.runExport(String(p.transferId), ctx), { timeoutMs: 60 * 60_000 });
     this.triggers.registerJobs();
     this.pipelines.registerJobs();
+    this.aiFills.registerJobs();
+    this.sources.registerJobs();
   }
 
   // ---------- access ----------
@@ -453,6 +475,7 @@ export class AppService {
       source: r.source,
       aiState: r.ai_state,
       aiError: r.ai_error,
+      externalKey: r.external_key ?? null,
       createdBy: r.created_by,
       updatedBy: r.updated_by,
       createdAt: r.created_at,
@@ -628,10 +651,13 @@ export class AppService {
     const label = this.recordLabel(actor, app, entity, input.label);
     const grant = actor.principal ? await this.grantFor(actor.principal, entity) : undefined;
     if (grant) AppPolicies.checkWrite(grant, input.values, 'create');
-    const prep = await this.prepare(actor, app, entity, id, input.values, null);
+    const src = await this.sources.writable(entity, 'create');
+    const values = src ? this.sources.withKey(src, id, input.values) : input.values;
+    const prep = await this.prepare(actor, app, entity, id, values, null);
     const t = Date.now();
     const by = actor.principal?.userId ?? null;
-    const r: RecordRow = { id, tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, workspace_id: app.workspace_id, label, state: entity.definition.states?.initial ?? null, data: prep.sealed, hidden: false, version: 1, source: actor.source, ai_state: this.hasAi(entity) ? 'pending' : null, ai_error: null, created_by: by, updated_by: by, created_at: t, updated_at: t };
+    const externalKey = src ? await this.sources.push(app, entity, src, { kind: 'insert', id, values: prep.values, state: entity.definition.states?.initial ?? null }) : null;
+    const r: RecordRow = { id, tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, workspace_id: app.workspace_id, label, state: entity.definition.states?.initial ?? null, data: prep.sealed, hidden: false, version: 1, source: actor.source, ai_state: this.hasAi(entity) ? 'pending' : null, ai_error: null, ai_pending: null, external_key: externalKey, created_by: by, updated_by: by, created_at: t, updated_at: t };
     await this.db.transaction(async (trx) => {
       await trx('app_records').insert(r);
       await this.writeIndex(trx, r, prep, entity);
@@ -646,25 +672,33 @@ export class AppService {
     if (input.version != null && input.version !== r.version) throw conflict(`The record changed since you read it (version ${r.version}, you have ${input.version}).`);
     const grant = actor.principal ? await this.grantFor(actor.principal, entity) : undefined;
     if (grant) AppPolicies.checkWrite(grant, input.values, 'update');
+    const src = await this.sources.writable(entity, 'update');
+    if (src) this.sources.checkKeyUnchanged(src, r, input.values);
     const existing = await this.open(r);
     const prep = await this.prepare(actor, app, entity, r.id, input.values, existing);
     const fields = Object.keys(input.values).filter((k) => JSON.stringify(existing[k] ?? null) !== JSON.stringify(prep.values[k] ?? null));
-    const aiNeeded = this.hasAi(entity) && fields.some((k) => entity.definition.fields.find((f) => f.name === k)?.type !== 'ai');
+    // 1.6.0 (B-8401): only the AI fields that read a changed field regenerate; the rest keep their value.
+    const affected = this.hasAi(entity) ? aiFieldsAffected(entity.definition, new Set(fields.filter((k) => entity.definition.fields.find((f) => f.name === k)?.type !== 'ai'))) : [];
+    const aiNeeded = affected.length > 0;
+    const pending = aiNeeded ? JSON.stringify([...new Set([...json<string[]>(r.ai_pending ?? null, []), ...affected])]) : (r.ai_pending ?? null);
+    if (src && fields.length) await this.sources.push(app, entity, src, { kind: 'update', id: r.id, key: r.external_key ?? null, values: Object.fromEntries(fields.map((k) => [k, prep.values[k] ?? null])), state: r.state });
     const t = Date.now();
     const by = actor.principal?.userId ?? null;
     await this.db.transaction(async (trx) => {
-      const n = await trx('app_records').where({ id: r.id, version: r.version }).update({ data: prep.sealed, version: r.version + 1, updated_by: by, updated_at: t, ...(aiNeeded ? { ai_state: 'pending', ai_error: null } : {}) });
+      const n = await trx('app_records').where({ id: r.id, version: r.version }).update({ data: prep.sealed, version: r.version + 1, updated_by: by, updated_at: t, ...(aiNeeded ? { ai_state: 'pending', ai_error: null, ai_pending: pending } : {}) });
       if (n !== 1) throw conflict('The record changed while saving; read it again and retry.');
       await this.clearIndex(trx, r.id);
       await this.writeIndex(trx, r, prep, entity);
     });
-    const after: RecordRow = { ...r, data: prep.sealed, version: r.version + 1, updated_by: by, updated_at: t, ...(aiNeeded ? { ai_state: 'pending', ai_error: null } : {}) };
+    const after: RecordRow = { ...r, data: prep.sealed, version: r.version + 1, updated_by: by, updated_at: t, ...(aiNeeded ? { ai_state: 'pending', ai_error: null, ai_pending: pending } : {}) };
     await this.after(actor, app, entity, after, 'updated', { fields }, aiNeeded);
     return this.view(app, entity, after, prep.values, grant);
   }
 
   async removeRecord(actor: Actor & { principal: Principal }, app: AppRow, entity: EntityRow, id: string): Promise<RecordRow> {
     const r = await this.readable(actor.principal, entity, id);
+    const src = await this.sources.writable(entity, 'delete');
+    if (src) await this.sources.push(app, entity, src, { kind: 'delete', id: r.id, key: r.external_key ?? null, values: {}, state: r.state });
     await this.db.transaction(async (trx) => {
       await this.clearIndex(trx, r.id);
       await trx('app_records').where({ id: r.id }).delete();
@@ -686,6 +720,8 @@ export class AppService {
       throw new HttpProblem(409, 'Illegal transition', `${entity.name} records cannot go from ${r.state ?? 'no state'} to ${to}.${allowed.length ? ` From ${r.state} they can go to ${[...new Set(allowed)].join(', ')}.` : ''}`, { extensions: { from: r.state, to, allowed: [...new Set(allowed)] } });
     }
     if (t.roles?.length && actor.principal && !actor.principal.roles.some((x) => t.roles!.includes(x) || x === 'system-admin')) throw forbidden(`Only ${t.roles.join(', ')} may move a record to ${to}.`, { step: 'role' });
+    const src = await this.sources.writable(entity, 'update');
+    if (src?.state_column) await this.sources.push(app, entity, src, { kind: 'update', id: r.id, key: r.external_key ?? null, values: {}, state: to });
     const now = Date.now();
     const by = actor.principal?.userId ?? null;
     const n = await this.db('app_records').where({ id: r.id, version: r.version, state: r.state }).update({ state: to, version: r.version + 1, updated_by: by, updated_at: now });
@@ -708,6 +744,7 @@ export class AppService {
     if (new Set(ids).size !== ids.length) throw badRequest('A record appears twice in one bulk write.');
     const t = Date.now();
     const grant = await this.grantFor(p, entity);
+    const src = await this.sources.writable(entity, 'create');
     const created: { r: RecordRow; prep: Prepared }[] = [];
     const updated: { r: RecordRow; prep: Prepared; fields: string[] }[] = [];
     const deleted: RecordRow[] = [];
@@ -720,7 +757,7 @@ export class AppService {
         const id = ulid();
         const label = this.recordLabel(actor, app, entity, c.label);
         AppPolicies.checkWrite(grant, c.values, 'create');
-        const prep = await this.prepare(actor, app, entity, id, c.values, null);
+        const prep = await this.prepare(actor, app, entity, id, src ? this.sources.withKey(src, id, c.values) : c.values, null);
         created.push({ prep, r: { id, tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, workspace_id: app.workspace_id, label, state: entity.definition.states?.initial ?? null, data: prep.sealed, hidden: false, version: 1, source: actor.source, ai_state: this.hasAi(entity) ? 'pending' : null, ai_error: null, created_by: p.userId, updated_by: p.userId, created_at: t, updated_at: t } });
       } catch (err) {
         at('create', i, err);
@@ -731,6 +768,7 @@ export class AppService {
         const r = await this.readable(p, entity, u.id, grant);
         if (u.version != null && u.version !== r.version) throw conflict(`The record ${r.id} changed (version ${r.version}, you have ${u.version}).`);
         AppPolicies.checkWrite(grant, u.values, 'update');
+        if (src) this.sources.checkKeyUnchanged(src, r, u.values);
         const existing = await this.open(r);
         const prep = await this.prepare(actor, app, entity, r.id, u.values, existing);
         updated.push({ r, prep, fields: Object.keys(u.values).filter((k) => JSON.stringify(existing[k] ?? null) !== JSON.stringify(prep.values[k] ?? null)) });
@@ -745,13 +783,20 @@ export class AppService {
         at('delete', i, err);
       }
     }
+    if (src) {
+      // Outside rows first (B-8501): a refused write stops the batch before anything local changes.
+      for (const d of deleted) await this.sources.push(app, entity, src, { kind: 'delete', id: d.id, key: d.external_key ?? null, values: {}, state: d.state });
+      for (const u of updated) if (u.fields.length) await this.sources.push(app, entity, src, { kind: 'update', id: u.r.id, key: u.r.external_key ?? null, values: Object.fromEntries(u.fields.map((k) => [k, u.prep.values[k] ?? null])), state: u.r.state });
+      for (const c of created) c.r.external_key = await this.sources.push(app, entity, src, { kind: 'insert', id: c.r.id, values: c.prep.values, state: c.r.state });
+    }
     await this.db.transaction(async (trx) => {
       for (const d of deleted) {
         await this.clearIndex(trx, d.id);
         await trx('app_records').where({ id: d.id }).delete();
       }
       for (const u of updated) {
-        const n = await trx('app_records').where({ id: u.r.id, version: u.r.version }).update({ data: u.prep.sealed, version: u.r.version + 1, updated_by: p.userId, updated_at: t });
+        const affected = this.hasAi(entity) ? aiFieldsAffected(entity.definition, new Set(u.fields)) : [];
+        const n = await trx('app_records').where({ id: u.r.id, version: u.r.version }).update({ data: u.prep.sealed, version: u.r.version + 1, updated_by: p.userId, updated_at: t, ...(affected.length ? { ai_state: 'pending', ai_error: null, ai_pending: JSON.stringify([...new Set([...json<string[]>(u.r.ai_pending ?? null, []), ...affected])]) } : {}) });
         if (n !== 1) throw conflict(`The record ${u.r.id} changed while saving; nothing was written.`);
         await this.clearIndex(trx, u.r.id);
       }
@@ -763,7 +808,7 @@ export class AppService {
     });
     const quiet: Actor = { ...actor };
     for (const c of created) await this.after(quiet, app, entity, c.r, 'created', {}, true, false);
-    for (const u of updated) await this.after(quiet, app, entity, { ...u.r, version: u.r.version + 1, updated_at: t, updated_by: p.userId }, 'updated', { fields: u.fields }, this.hasAi(entity) && u.fields.length > 0, false);
+    for (const u of updated) await this.after(quiet, app, entity, { ...u.r, version: u.r.version + 1, updated_at: t, updated_by: p.userId }, 'updated', { fields: u.fields }, this.hasAi(entity) && aiFieldsAffected(entity.definition, new Set(u.fields)).length > 0, false);
     for (const d of deleted) await this.after(quiet, app, entity, d, 'deleted', {}, false, false);
     await this.audit(actor, app.tenant_id, 'app.records.bulk', { app: app.id, entity: entity.id }, highest(entity.label, ...created.map((c) => c.r.label), ...updated.map((u) => u.r.label), ...deleted.map((d) => d.label)), {
       created: created.map((c) => c.r.id).slice(0, 500),
@@ -783,7 +828,22 @@ export class AppService {
     if (event === 'transitioned') Object.assign(data, { from: String(extra.from ?? ''), to: String(extra.to ?? '') });
     s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: r.tenant_id, type: `record.${event}`, label: r.label, id: `record.${event}:${ulid()}`, data } satisfies IntegrationEvent);
     await this.triggers.onRecordEvent(app, entity, r, event, extra, actor).catch((err: Error) => s.log.warn({ record: r.id, err: err.message }, 'record triggers not queued'));
-    if (ai && this.hasAi(entity) && event !== 'deleted') await s.jobs.enqueue({ tenantId: r.tenant_id, type: 'apps.ai-fill', payload: { recordId: r.id }, createdBy: actorId, maxAttempts: 3 });
+    if (ai && this.hasAi(entity) && event !== 'deleted') await this.queueAiFill(r, actorId);
+  }
+
+  /**
+   * Queues the AI fill of a record (1.6.0, B-8401): edits within APPS_AI_DEBOUNCE_MS of each other share one job (a
+   * dedupe key per quiet window) that runs when the window ends, so a burst of edits regenerates each field once.
+   */
+  async queueAiFill(r: Pick<RecordRow, 'id' | 'tenant_id'>, createdBy: string | null): Promise<void> {
+    const s = this.s();
+    const quiet = s.cfg.APPS_AI_DEBOUNCE_MS;
+    if (!quiet) {
+      await s.jobs.enqueue({ tenantId: r.tenant_id, type: 'apps.ai-fill', payload: { recordId: r.id }, createdBy, maxAttempts: 3 });
+      return;
+    }
+    const bucket = Math.floor(Date.now() / quiet);
+    await s.jobs.enqueue({ tenantId: r.tenant_id, type: 'apps.ai-fill', payload: { recordId: r.id }, createdBy, maxAttempts: 3, dedupeKey: `apps.ai-fill:${r.id}:${bucket}`, runAt: (bucket + 1) * quiet });
   }
 
   // ---------- lookups (B-2203) ----------
@@ -838,7 +898,8 @@ export class AppService {
     const entity = await this.entityById(r.tenant_id, r.entity_id);
     const app = await this.appById(r.tenant_id, r.app_id);
     if (!entity || !app) return { skipped: 'gone' };
-    const fields = entity.definition.fields.filter((f): f is Extract<Field, { type: 'ai' }> => f.type === 'ai');
+    const pending = r.ai_pending ? new Set(json<string[]>(r.ai_pending, [])) : null;
+    const fields = entity.definition.fields.filter((f): f is Extract<Field, { type: 'ai' }> => f.type === 'ai' && (!pending || pending.has(f.name)));
     if (!fields.length) return { skipped: 'no AI fields' };
     const values = await this.open(r);
     const principal = r.updated_by ? await loadPrincipal(s, r.tenant_id, r.updated_by, {}) : null;
@@ -846,10 +907,7 @@ export class AppService {
     const filled: Record<string, string> = {};
     const failed: Record<string, string> = {};
     for (const f of fields) {
-      const prompt = f.prompt.replace(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g, (_m, k: string) => {
-        const v = values[k];
-        return v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
-      });
+      const prompt = renderAiPrompt(entity.definition, f, values);
       try {
         const text = (await generate(s, { tenantId: r.tenant_id, workspaceId: app.workspace_id, profile: f.profile, prompt, label: r.label, principal, userId: r.updated_by, source: { kind: 'app-record', id: r.id } })).trim();
         if (text) filled[f.name] = [...text].slice(0, f.maxLength).join('');
@@ -870,7 +928,7 @@ export class AppService {
     const sealed = await s.keys.seal(r.tenant_id, JSON.stringify(curValues), recordAad(r.id));
     const errText = Object.keys(failed).length ? Object.entries(failed).map(([k, v]) => `${k}: ${v}`).join('; ').slice(0, 300) : null;
     await this.db.transaction(async (trx) => {
-      const n = await trx('app_records').where({ id: cur.id, version: cur.version }).update({ data: sealed, version: cur.version + 1, ai_state: errText ? 'failed' : 'filled', ai_error: errText, updated_at: Date.now() });
+      const n = await trx('app_records').where({ id: cur.id, version: cur.version }).update({ data: sealed, version: cur.version + 1, ai_state: errText ? 'failed' : 'filled', ai_error: errText, ai_pending: null, updated_at: Date.now() });
       if (n !== 1) throw new Error('the record changed while its AI fields were filled; retrying');
       await trx('app_record_values').where({ record_id: cur.id }).delete();
       const rows = indexRows(entity.definition, curValues);
@@ -883,6 +941,75 @@ export class AppService {
       s.bus.emitLocal(TOPICS.integrationEvent, { tenantId: r.tenant_id, type: 'record.updated', label: r.label, id: `record.updated:${ulid()}`, data: { app: app.id, entity: entity.name, record: r.id, workspace: app.workspace_id, actor: null, fields: Object.keys(filled) } } satisfies IntegrationEvent);
     }
     return { filled: Object.keys(filled), failed: Object.keys(failed) };
+  }
+
+  // ---------- helpers for fills and sources (1.6.0, B-8402, B-8501) ----------
+
+  /** Writes one AI field's value (or its failure) into a record as the fill job does, keeping the index in step. */
+  async writeAiField(recordId: string, field: string, text: string | null, error: string | null): Promise<boolean> {
+    const s = this.s();
+    const raw = await this.db('app_records').where({ id: recordId }).first();
+    if (!raw) return false;
+    const cur = recordFrom(raw);
+    const entity = await this.entityById(cur.tenant_id, cur.entity_id);
+    if (!entity) return false;
+    const values = await this.open(cur);
+    if (text != null) values[field] = text;
+    else delete values[field];
+    const sealed = await s.keys.seal(cur.tenant_id, JSON.stringify(values), recordAad(cur.id));
+    return this.db.transaction(async (trx) => {
+      const n = await trx('app_records').where({ id: cur.id, version: cur.version }).update({ data: sealed, version: cur.version + 1, ai_state: error ? 'failed' : 'filled', ai_error: error ? `${field}: ${error}`.slice(0, 300) : null, updated_at: Date.now() });
+      if (n !== 1) return false;
+      await trx('app_record_values').where({ record_id: cur.id }).delete();
+      const rows = indexRows(entity.definition, values);
+      if (rows.length) await trx('app_record_values').insert(rows.map((x) => ({ record_id: cur.id, tenant_id: cur.tenant_id, entity_id: cur.entity_id, ...x })));
+      return true;
+    });
+  }
+
+  /** The records of an entity by their outside key (sourced entities). */
+  async recordsByExternalKey(entity: EntityRow): Promise<Map<string, RecordRow>> {
+    const rows = ((await this.db('app_records').where({ entity_id: entity.id }).whereNotNull('external_key')) as Record<string, unknown>[]).map(recordFrom);
+    return new Map(rows.map((r) => [r.external_key!, r]));
+  }
+
+  /** A pulled row written as a record of a sourced entity (no write-through, audited as a batch by the pull). */
+  async upsertFromSource(actor: Actor, app: AppRow, entity: EntityRow, externalKey: string, values: Values, existing: RecordRow | null, state: string | null): Promise<'created' | 'updated' | 'unchanged'> {
+    const t = Date.now();
+    if (!existing) {
+      const id = ulid();
+      const prep = await this.prepare(actor, app, entity, id, values, null);
+      const r: RecordRow = { id, tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, workspace_id: app.workspace_id, label: entity.label, state: state ?? entity.definition.states?.initial ?? null, data: prep.sealed, hidden: false, version: 1, source: 'import', ai_state: this.hasAi(entity) ? 'pending' : null, ai_error: null, ai_pending: null, external_key: externalKey, created_by: null, updated_by: null, created_at: t, updated_at: t };
+      await this.db.transaction(async (trx) => {
+        await trx('app_records').insert(r);
+        await this.writeIndex(trx, r, prep, entity);
+      });
+      await this.after(actor, app, entity, r, 'created', {}, true, false);
+      return 'created';
+    }
+    const before = await this.open(existing);
+    const prep = await this.prepare(actor, app, entity, existing.id, values, before);
+    const fields = Object.keys(values).filter((k) => JSON.stringify(before[k] ?? null) !== JSON.stringify(prep.values[k] ?? null));
+    const stateChange = state != null && state !== existing.state ? state : null;
+    if (!fields.length && !stateChange) return 'unchanged';
+    const affected = this.hasAi(entity) ? aiFieldsAffected(entity.definition, new Set(fields)) : [];
+    await this.db.transaction(async (trx) => {
+      const n = await trx('app_records').where({ id: existing.id, version: existing.version }).update({ data: prep.sealed, version: existing.version + 1, updated_at: t, ...(stateChange ? { state: stateChange } : {}), ...(affected.length ? { ai_state: 'pending', ai_error: null, ai_pending: JSON.stringify(affected) } : {}) });
+      if (n !== 1) throw conflict(`The record ${existing.id} changed while the pull wrote it.`);
+      await this.clearIndex(trx, existing.id);
+      await this.writeIndex(trx, existing, prep, entity);
+    });
+    await this.after(actor, app, entity, { ...existing, version: existing.version + 1, updated_at: t, ...(stateChange ? { state: stateChange } : {}) }, 'updated', { fields }, affected.length > 0, false);
+    return 'updated';
+  }
+
+  /** A record whose outside row is gone (no write-through). */
+  async deleteFromSource(actor: Actor, app: AppRow, entity: EntityRow, r: RecordRow): Promise<void> {
+    await this.db.transaction(async (trx) => {
+      await this.clearIndex(trx, r.id);
+      await trx('app_records').where({ id: r.id }).delete();
+    });
+    await this.after(actor, app, entity, r, 'deleted', {}, false, false);
   }
 
   // ---------- reindex ----------

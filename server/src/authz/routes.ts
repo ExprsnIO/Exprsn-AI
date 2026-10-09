@@ -1390,6 +1390,18 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['PUT /api/apps/{app}/policies/{id}', 'apps:design'],
   ['PUT /api/compliance/dlp/patterns/{id}', 'compliance:manage'],
   ['PUT /api/compliance/dlp/rules/{id}', 'compliance:manage'],
+  // 1.6.0, Sprint 39c (B-8301, B-8402, B-8501): data model drafts, AI fills over every row, outside tables.
+  ['DELETE /api/apps/{app}/entities/{entity}/source', 'apps:design'],
+  ['GET /api/apps/{app}/entities/{entity}/ai/fills', 'apps:design'],
+  ['GET /api/apps/{app}/entities/{entity}/ai/fills/{id}', 'apps:design'],
+  ['GET /api/apps/{app}/entities/{entity}/source', 'apps:design'],
+  ['POST /api/apps/{app}/entities/{entity}/ai/estimate', 'apps:design'],
+  ['POST /api/apps/{app}/entities/{entity}/ai/fills', 'apps:design'],
+  ['POST /api/apps/{app}/entities/{entity}/ai/fills/{id}/cancel', 'apps:design'],
+  ['POST /api/apps/{app}/entities/{entity}/source/pull', 'apps:design'],
+  ['POST /api/apps/{app}/model/apply', 'apps:design'],
+  ['POST /api/apps/{app}/model/draft', 'apps:design'],
+  ['PUT /api/apps/{app}/entities/{entity}/source', 'apps:design'],
   // ---- end of routes ----
 ];
 

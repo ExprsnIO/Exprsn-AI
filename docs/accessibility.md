@@ -174,6 +174,16 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   it; promotion and rollback go through a confirm dialog that says what will happen. A refused package is a problem
   panel on the page. `e2e/tests/apps-deployments.spec.ts` runs axe-core on the tab with a pipeline and with a refused
   package.
+
+- **Apps: the data model draft, AI fills and the outside table** (B-8301, B-8402, B-8501, Sprint 39c): the draft
+  dialog is a labelled form (profile, label, description) whose answer is a table (entity, change as a pill with its
+  word, fields added, changed and omitted as pills, states, problems) with the triggers as a list and the draft JSON in
+  a native `details` element the designer can edit; the live region announces the model's progress. The AI fills
+  panel lists each field with text buttons (Estimate, Fill empty, Refresh all), the estimate as a notice, and the fills
+  as a table whose running row carries a `meter` with its text beside it and a Cancel button; a confirm dialog states
+  the estimate before a fill starts. The outside table panel is a key-value list and text buttons; the attach dialog
+  is a labelled form (connection, table, key column, key field, state column, pull interval, column mapping, two
+  checkboxes). `e2e/tests/apps-model.spec.ts` runs axe-core on the draft dialog, the fills panel and the source panel.
 - **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
   exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
   label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,

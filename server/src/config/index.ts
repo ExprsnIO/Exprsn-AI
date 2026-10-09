@@ -707,6 +707,14 @@ const base = z.object({
     APPS_HELD_MAX_PER_FORM: z.coerce.number().int().min(0).max(100_000).default(200),
     APPS_HELD_KEEP_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
     /**
+     * 1.6.0, Sprint 39c (B-8401, B-8402, B-8501): an edit of a field an AI field reads regenerates it once after
+     * APPS_AI_DEBOUNCE_MS of quiet (0: at once, every time); a fill of an AI field over every row covers at most
+     * APPS_AI_FILL_MAX_ROWS records; a pull from an outside table reads at most APPS_SOURCE_PULL_MAX_ROWS rows.
+     */
+    APPS_AI_DEBOUNCE_MS: z.coerce.number().int().min(0).max(600_000).default(2000),
+    APPS_AI_FILL_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(10_000),
+    APPS_SOURCE_PULL_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(10_000),
+    /**
      * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
      * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of
      * WORKFLOW_EVENT_MAX_DEPTH workflows is dropped (the cap B-4101's chain context keeps for this kind). Schedule

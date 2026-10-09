@@ -128,7 +128,16 @@ export function checkDefinition(def: EntityDefinition, entities: ReadonlySet<str
       }
     }
     if (f.type === 'ai') {
-      for (const m of f.prompt.matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) if (!plain.has(m[1]!)) problems.push(`${f.name}: the prompt reads {{${m[1]}}}, which is not a field it can read.`);
+      // 1.6.0 (B-8401): a placeholder is a field name or a formula over the plain fields and the formula functions.
+      for (const m of f.prompt.matchAll(PLACEHOLDER)) {
+        const expr = m[1]!.trim();
+        if (plain.has(expr)) continue;
+        try {
+          compileFormula(expr, plain);
+        } catch (err) {
+          problems.push(`${f.name}: the prompt reads {{${expr}}}: ${err instanceof FormulaError ? err.message : 'not a field or a formula it can read.'}`);
+        }
+      }
     }
   }
   if (def.titleField && !names.has(def.titleField)) problems.push(`titleField: there is no field ${def.titleField}.`);
@@ -292,6 +301,47 @@ export function fromCell(f: Field, cell: string): unknown {
     }
   }
   return cell;
+}
+
+const PLACEHOLDER = /\{\{\s*([^}]*?)\s*\}\}/g;
+
+/** The plain fields an AI field's prompt reads, directly or through a formula placeholder (1.6.0, B-8401). */
+export function aiPromptRefs(def: EntityDefinition, f: Extract<Field, { type: 'ai' }>): Set<string> {
+  const plain = new Set(def.fields.filter((x) => !COMPUTED.includes(x.type)).map((x) => x.name));
+  const refs = new Set<string>();
+  for (const m of f.prompt.matchAll(PLACEHOLDER)) {
+    const expr = m[1]!.trim();
+    if (plain.has(expr)) refs.add(expr);
+    else {
+      try {
+        for (const r of compileFormula(expr, plain).refs) refs.add(r);
+      } catch {
+        // checked when the entity was saved; an unreadable placeholder renders empty
+      }
+    }
+  }
+  return refs;
+}
+
+/** The AI fields whose prompts read any of `changed` (every AI field when `changed` is null). */
+export function aiFieldsAffected(def: EntityDefinition, changed: ReadonlySet<string> | null): string[] {
+  return def.fields.filter((f): f is Extract<Field, { type: 'ai' }> => f.type === 'ai').filter((f) => !changed || [...aiPromptRefs(def, f)].some((r) => changed.has(r))).map((f) => f.name);
+}
+
+/** An AI field's prompt with its placeholders filled from the record (fields as text, formulas evaluated). */
+export function renderAiPrompt(def: EntityDefinition, f: Extract<Field, { type: 'ai' }>, values: Values): string {
+  const plain = new Set(def.fields.filter((x) => !COMPUTED.includes(x.type)).map((x) => x.name));
+  const input = new Map<string, unknown>(Object.entries(values).filter(([k]) => plain.has(k)));
+  const text = (v: unknown) => (v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v));
+  return f.prompt.replace(PLACEHOLDER, (_m, raw: string) => {
+    const expr = raw.trim();
+    if (plain.has(expr)) return text(values[expr]);
+    try {
+      return text(compileFormula(expr, plain).evaluate(input));
+    } catch {
+      return '';
+    }
+  });
 }
 
 const formulaCache = new Map<string, Formula>();

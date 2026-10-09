@@ -69,6 +69,7 @@ import * as m040b from './040b_redteam_agents.js';
 import * as m040c from './040c_policies_dlp.js';
 import * as m041 from './041_provenance_artifacts.js';
 import * as m041b from './041b_app_packages.js';
+import * as m041c from './041c_model_gen_sync.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -146,7 +147,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '040b_redteam_agents': m040b,
   '040c_policies_dlp': m040c,
   '041_provenance_artifacts': m041,
-  '041b_app_packages': m041b
+  '041b_app_packages': m041b,
+  '041c_model_gen_sync': m041c
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {
