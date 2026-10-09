@@ -16019,6 +16019,29 @@
         }
       }
     },
+    "/api/admin/mcp-server/approvals/{id}": {
+      "delete": {
+        "tags": [
+          "admin/mcp-server"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/admin/mcp-server/settings": {
       "put": {
         "x-exprsn-since": "1.6.0",
@@ -44475,6 +44498,66 @@
           "me"
         ],
         "summary": "Cancels one of them",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals/tools": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/me/mcp-approvals/{id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "See docs/api.md",
         "parameters": [
           {
             "name": "id",

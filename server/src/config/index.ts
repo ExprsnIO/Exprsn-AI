@@ -106,6 +106,8 @@ const base = z.object({
     CONNECTIONS_ALLOWED_HOSTS: z.string().default(''),
     MCP_TIMEOUT_MS: z.coerce.number().int().min(250).max(600_000).default(15_000),
     MCP_POLL_MINUTES: z.coerce.number().int().min(0).max(24 * 60).default(15),
+    /** The MCP server (B-12201): the longest period a standing approval for a client's write calls may run, in days. */
+    MCP_STANDING_APPROVAL_MAX_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     /** Script sandbox: docker or podman CLI (auto picks whichever is installed), or none. */
     SCRIPT_RUNNER: z.enum(['auto', 'docker', 'podman', 'none']).default('auto'),
     SCRIPT_IMAGE_PYTHON: z.string().default('python:3.13-slim'),

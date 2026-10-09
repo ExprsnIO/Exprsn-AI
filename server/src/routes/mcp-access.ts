@@ -19,7 +19,7 @@ const id26 = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
  */
 export function mcpAccessRoutes(s: Services): Router {
   const r = Router();
-  r.use(['/admin/mcp-server', '/me/mcp-server', '/me/mcp-holds', '/mcp-oauth/start'], noStore);
+  r.use(['/admin/mcp-server', '/me/mcp-server', '/me/mcp-holds', '/me/mcp-approvals', '/mcp-oauth/start'], noStore);
   const identity = requirePermission(s, 'identity:manage');
   const invoke = requirePermission(s, 'tools:invoke');
   const audit = (req: Request, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>) => {
@@ -40,6 +40,8 @@ export function mcpAccessRoutes(s: Services): Router {
       dynamicRegistration: await s.mcpServer.dynamicRegistration(p.tenantId),
       registrationEndpoint: t ? `${t.issuer}/oauth/register` : null,
       publications: await s.mcpServer.overview(p.tenantId, p.tenantSlug),
+      standingApprovals: await s.mcpServer.standingAll(p.tenantId),
+      standingMaxDays: s.cfg.MCP_STANDING_APPROVAL_MAX_DAYS,
       clients: clients.map((c) => ({ id: c.id, clientId: c.client_id, name: c.name, type: c.type, redirectUris: c.redirect_uris, scopes: c.scopes, status: c.status, lastUsedAt: c.last_used_at, createdAt: c.created_at }))
     });
   });
@@ -76,11 +78,47 @@ export function mcpAccessRoutes(s: Services): Router {
     res.json({ asYou: true, label: caller.clearance, groups: pub.groups, tools: tools.map((t) => ({ name: t.name, title: t.title, group: t.group, sideEffect: t.sideEffect, description: t.description, published: t.group === 'status' || pub.groups.includes(t.group) })) });
   });
 
+  /** B-12201: an identity admin revokes any standing approval of the tenant. */
+  r.delete('/admin/mcp-server/approvals/:id', requireAuth({ sessionOnly: true }), identity, async (req, res) => {
+    const p = principalOf(req);
+    const a = await s.mcpServer.revokeStanding(p, parseBody(id26, req.params.id), true);
+    await audit(req, 'mcp.server.standing.revoked', { standing: a.id, workspace: a.workspace_id, user: a.user_id }, { tool: a.tool, client: a.client_id, sideEffect: a.side_effect, by: 'admin' });
+    res.status(204).end();
+  });
+
   // ---------- each user ----------
 
   r.get('/me/mcp-server', requireAuth(), async (req, res) => {
     const p = principalOf(req);
-    res.json({ servers: await s.mcpServer.forUser(p), holds: await s.mcpServer.holds(p, 'pending') });
+    res.json({ servers: await s.mcpServer.forUser(p), holds: await s.mcpServer.holds(p, 'pending'), approvals: await s.mcpServer.standing(p), standingMaxDays: s.cfg.MCP_STANDING_APPROVAL_MAX_DAYS });
+  });
+
+  // ---------- standing approvals (B-12201) ----------
+
+  r.get('/me/mcp-approvals', requireAuth(), async (req, res) => {
+    res.json({ approvals: await s.mcpServer.standing(principalOf(req)), maxDays: s.cfg.MCP_STANDING_APPROVAL_MAX_DAYS });
+  });
+
+  /** The write tools a standing approval could name in one workspace's server, as the caller may call them. */
+  r.get('/me/mcp-approvals/tools', requireAuth(), async (req, res) => {
+    const q = parseBody(z.object({ workspaceId: id26 }), req.query);
+    res.json({ tools: await s.mcpServer.writeTools(principalOf(req), q.workspaceId) });
+  });
+
+  /** Only a browser session grants: a client's token can never grant itself a standing approval. */
+  r.post('/me/mcp-approvals', requireAuth({ sessionOnly: true }), async (req, res) => {
+    const p = principalOf(req);
+    const b = parseBody(z.object({ workspaceId: id26, clientId: z.string().max(100).nullable().optional(), tool: z.string().max(140).nullable().optional(), sideEffect: z.enum(['write', 'destructive']).default('write'), days: z.number().int().min(1).max(365), reason: z.string().max(300).nullable().optional() }).strict(), req.body);
+    const a = await s.mcpServer.grantStanding(p, b);
+    await audit(req, 'mcp.server.standing.granted', { standing: a.id, workspace: a.workspace_id, user: a.user_id }, { tool: a.tool, client: a.client_id, sideEffect: a.side_effect, days: b.days, expiresAt: a.expires_at, label: a.label });
+    res.status(201).json({ id: a.id, workspaceId: a.workspace_id, client: a.client_id, tool: a.tool, sideEffect: a.side_effect, label: a.label, state: a.state, expiresAt: a.expires_at, createdAt: a.created_at });
+  });
+
+  r.delete('/me/mcp-approvals/:id', requireAuth({ sessionOnly: true }), async (req, res) => {
+    const p = principalOf(req);
+    const a = await s.mcpServer.revokeStanding(p, parseBody(id26, req.params.id));
+    await audit(req, 'mcp.server.standing.revoked', { standing: a.id, workspace: a.workspace_id, user: a.user_id }, { tool: a.tool, client: a.client_id, sideEffect: a.side_effect, by: 'owner' });
+    res.status(204).end();
   });
 
   r.get('/me/mcp-holds', requireAuth(), async (req, res) => {
