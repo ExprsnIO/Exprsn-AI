@@ -637,7 +637,8 @@
 
 - Sprints 35 to 39 as above, released on 2026-10-09 (PR #71). Dropped: B-5001, capability tokens (owner, 2026-10-07).
   Partial: B-7202, SCIM against the Entra ID and Okta validators (a local conformance suite stands in). B-11707
-  (Sprint 36b, model thinking templates) was pulled forward from 1.7.0 on 2026-10-08 and lands after the release.
+  (Sprint 36b, model thinking templates) was pulled forward from 1.7.0 on 2026-10-08 and landed after the release
+  (migration `041e_thinking_templates`, the Sprint 36b section below).
 - Checks on the release tree: lint, typecheck and the console parse check; 1170 unit and API tests across 126 files,
   1 skipped; the PostgreSQL integration suite (52 files); the prototype smoke (51 screens); the full Playwright
   console suite run locally, 168 passed, 0 failed, after fixes to the sweep's screen list, the e2e harness driver,
