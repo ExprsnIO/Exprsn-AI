@@ -302,6 +302,16 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
   read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
   parts) behind `routes/compliance.ts`.
+- 1.6.0 Sprint 39d: `apps/key-scope.ts` (B-8601: `appScopeGuard` on both apps routers and `underApps` in
+  `authenticate`, for API keys with `app_scope` and embedded sessions); `routes/apps-entity-api.ts` (the entity API at
+  `/apps/:app/:entity`, mounted after `routes/apps.ts`, plus the schema, OpenAPI, client and embed admin routes);
+  `apps/schema-api.ts` (`s.apps.schema`, B-8602, B-8603: `record` called by `createEntity`, `updateEntity`,
+  `removeEntity` and the forms service for every design change with `describeEntityChange`, the schema API's own
+  changes, `openapi` and `client` computed from the design); `apps/embeds.ts` (`s.apps.embeds`, B-8701, B-8702:
+  settings, keys, pages, the host-token `exchange` with `verifyWith` per algorithm and the tenant CA's `x5c`,
+  `resolveSession` for `exe_` bearers) behind `routes/apps-embed-public.ts` (`/embed/...` pages with their own CSP
+  and `/api/public/embeds/*`, outside `/api`); `web/js/embed.js` is the pages' script. `server/test/sprint39d-helpers.ts`
+  mints host tokens and builds a tenant CA without the signer.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

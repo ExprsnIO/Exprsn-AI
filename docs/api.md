@@ -5169,3 +5169,95 @@ counted (`omitted`); the export's label is the highest it carries. More than `CO
 | `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
 | `GET /api/compliance/exports/:id` | One export |
 | `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
+
+## Sprint 39d (1.6.0): entity APIs, the schema API, OpenAPI and the client per app, app embedding (B-8601 to B-8603, B-8701, B-8702)
+
+Migration `041d_entity_api_embeds` (`api_keys.app_scope`, `app_schema_versions`, `app_embeds`, `app_embed_keys`,
+`app_embed_pages`, `app_embed_sessions`). New settings: `APP_EMBED_MAX_TTL_SECONDS` (3600) and
+`APP_EMBED_SESSION_PER_MINUTE` (30). No new permissions: the entity API is `records:read` and `records:write`, the
+schema API and the embed settings `apps:design` (the backlog's `apps:manage` is this catalogue's `apps:design`).
+
+### The entity API (B-8601)
+
+`server/src/routes/apps-entity-api.ts`, mounted after the app's own routes: `/api/apps/:app/<segment>` reaches an
+entity only when the segment is none of the app's own (`entities`, `forms`, `policies`, `triggers`, `export`,
+`schema`, `embed`, `openapi.json`, `client.ts`, `client.js`, `transfers`, `drafts`, `import`, `held`); an entity with
+one of those names is reached through `/entities/:entity/records` as before. Every call is the same service as the
+records routes, so the Sprint 38c policies and masks, labels, workspaces and audit apply unchanged; `app` and `entity`
+may be ids or names.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/:entity?filter&where&sort&q&limit&offset&cursor&include` | `records:read`. A page: `{total, limit, offset, nextCursor, records}`. `filter` is a record filter as JSON; `where` (repeatable) is `field:op:value` with the ops `eq, ne, gt, gte, lt, lte, in, contains, startsWith, exists` (`in` takes a comma-separated list; numbers and booleans are typed), every `where` and the `filter` combined with and; `sort` is `field:asc,field:desc` (at most three); `limit` 1 to 200 (50); `offset` or `cursor` (keyset paging); `include=related` adds `related: {<field>: Record | null}` for the reference and entity-lookup fields, each the record as the reader may read it (null when they may not) |
+| `POST /api/apps/:app/:entity` `{values, label?}` | `records:write`. `201` the record. `400` on a value that fails its field, `403 step: policy` outside the reader's policies |
+| `GET /api/apps/:app/:entity/:id?include=related` | `records:read`. The record (`404` outside the reader's reach) |
+| `PATCH /api/apps/:app/:entity/:id` `{values, version?}` | `records:write`. The record; `409` when `version` is behind |
+| `DELETE /api/apps/:app/:entity/:id` | `records:write`. `204` |
+| `POST /api/apps/:app/:entity/:id/transition` `{to, version?, note?}` | `records:write`. The record in its new state; `409` on an illegal transition |
+
+**Keys limited to one app or entity.** `POST /api/me/api-keys` takes `app: {app, entity?}` (the app the owner can see,
+by id or name, and optionally one of its entities): the key's scopes must then be within `records:read` and
+`records:write` (`400` otherwise), and the key is stored with `appScope: {app, entity}` (ids), listed by `GET
+/api/me/api-keys` and audited in `apikey.created`. Such a key is accepted under `/api/apps` only (`403 step: scope`
+elsewhere, `/v1` and the MCP server included), refused on another app, and with an entity refused on anything but
+that entity's records (`/api/apps/:app/:entity…` and `/api/apps/:app/entities/:entity/records…`), the app's
+documents included. Holders of `apps:design` are not subject to policies on the screen, but a key leaves
+`apps:design` out, so the owner's own app-limited key reads masked like a member.
+
+### The schema API and schema versions (B-8602)
+
+`server/src/apps/schema-api.ts` (`s.apps.schema`). Every change to an app's design, whichever route makes it (the
+Apps screen, these routes, a package import), is one row of `app_schema_versions`: the next version number, what
+changed (`entity.created | entity.updated | entity.deleted | field.added | field.updated | field.removed | states.set
+| form.created | form.updated | form.deleted`), its target, a summary, the change as JSON, the SHA-256 of the whole
+design afterwards (entities with their definitions and forms, by name) and the source (`api`, `schema-api`,
+`package`), audited `app.schema.versioned`. `AppSchema.current(app)` gives `{version, hash, changedAt}` for the app
+package to carry. All `apps:design`, on an app within the caller's clearance.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/schema` | `{app, version, hash, changedAt, entities: [Entity], forms: [Form]}` |
+| `GET /api/apps/:app/schema/versions?limit` | `{versions: [{version, kind, target, summary, change, hash, source, createdBy, createdAt}]}`, newest first (100) |
+| `GET /api/apps/:app/schema/versions/:version` | One version |
+| `PUT /api/apps/:app/schema/entities/:entity` `{title?, label?, definition}` | Creates the entity (`201`) or replaces its definition (`200`); the answer carries `schema: {version, hash}` |
+| `DELETE /api/apps/:app/schema/entities/:entity` | `204`; `409` while another entity refers to it |
+| `POST /api/apps/:app/schema/entities/:entity/fields` `{field, rev?}` | Adds a field (`201`); `409` when the name is taken or `rev` is behind; `400` for a reserved name or an invalid field |
+| `PATCH /api/apps/:app/schema/entities/:entity/fields/:field` `{patch, rev?}` | Changes a field's settings (the name and type stay); the whole field is checked again |
+| `DELETE /api/apps/:app/schema/entities/:entity/fields/:field` | Removes the field (records keep their stored values; the index drops it on reindex) |
+| `PUT /api/apps/:app/schema/entities/:entity/states` `{states \| null, rev?}` | Sets or removes the state machine |
+| `PUT /api/apps/:app/schema/forms/:form` `{title?, entity, definition, ratePerMinute?}` | Creates (`201`) or replaces (`200`) a form |
+| `DELETE /api/apps/:app/schema/forms/:form` | `204` |
+
+### OpenAPI and the client per app (B-8603)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/openapi.json` | `records:read`. An OpenAPI 3.1 document of the app's entity API, typed from the entity definitions (`<Entity>Values`, `<Entity>Input`, `<Entity>`, `<Entity>Page`, the transition states as an enum), `info.version` the schema version and `x-exprsn-schema-hash` the hash, computed on each read; `ETag` is the hash and `If-None-Match` answers `304` |
+| `GET /api/apps/:app/client.ts`, `GET /api/apps/:app/client.js` | `records:read`. A client generated from the same design: `createClient({baseUrl, token, workspace?, fetch?})` with `<entity>.list(q) / get(id, include) / create(values, label) / update(id, values, version) / delete(id) / transition(id, to, version, note)`, `schemaVersion` and `schemaHash`; typed in the TypeScript file (`<Entity>Values`, `<Entity>Input`, `<Entity>Record`, `Page`, `ApiError`), the same code without types in the JavaScript one. A refusal is thrown as `ApiError {status, problem}` |
+
+### App embedding (B-8701, B-8702)
+
+`server/src/apps/embeds.ts` (`s.apps.embeds`) and `routes/apps-embed-public.ts`. Settings and keys are `apps:design`
+on an app within the caller's clearance; the pages and the exchange are public.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/embed` | The settings `{publicEnabled, allowedHosts, signedEnabled, claimName, claimMatch (username \| email \| id), maxTtlSeconds, write, entities (null: every entity), audience, signedUrl, frameAncestors}` with `keys: [{id, kid, alg, publicKey, state, createdBy, createdAt, revokedAt}]`, `pages: [{id, form, formId, formTitle, entity, enabled, public, url, createdBy, createdAt}]` and the last 50 `sessions: [{id, user, username, key, host, expiresAt, createdAt, lastSeenAt, revokedAt}]` |
+| `PUT /api/apps/:app/embed` `{publicEnabled?, allowedHosts?, signedEnabled?, claimName?, claimMatch?, maxTtlSeconds?, write?, entities?}` | Changes the settings. `allowedHosts` are origins (`https://host[:port]`, at most 50); `entities` names entities of the app (`400` otherwise). Audited `app.embed.updated` |
+| `POST /api/apps/:app/embed/keys` `{kid, alg: ES256 \| RS256 \| EdDSA \| HS256 \| x5c, publicKey?, secret?}` | `201` the key. ES256 (P-256), RS256 (2048 bits or more) and EdDSA take the public key (PEM, SPKI); HS256 takes a base64url secret of at least 32 bytes or generates one, answered once as `secret`; `x5c` needs no material but an active tenant CA (`409` without). `409` when the `kid` exists on the app. Audited `app.embed.key.created` |
+| `DELETE /api/apps/:app/embed/keys/:id` | Revokes the key and every session it opened. Audited `app.embed.key.revoked` |
+| `POST /api/apps/:app/embed/pages` `{form}` | `201` `{id, url, …}`: the public form published as an embed page under a random id (the same page when one exists); `409` when the form has no public link. Audited `app.embed.page.created` |
+| `DELETE /api/apps/:app/embed/pages/:id` | `204`. Audited `app.embed.page.removed` |
+| `POST /api/apps/:app/embed/sessions/revoke` `{id?}` | Ends one or every embedded session of the app: `{revoked}`. Audited `app.embed.sessions.revoked` |
+| `GET /embed/:id` | Public. The embed page of a public form (HTML), served with `Content-Security-Policy: … frame-ancestors 'self' <allowed hosts>`, no `X-Frame-Options`, `X-Robots-Tag: noindex, nofollow`; `404` when public pages are off, the form is no longer public, or the page is gone |
+| `POST /api/public/embeds/open` `{embed}` | Public, rate-limited per address. The form's fields as `/api/public/forms/open` gives them, plus `form` |
+| `POST /api/public/embeds/submit` `{embed, values}` | Public. The same path as a public link submission (per-address and per-form limits, the `user-input` checkpoint, `202` when held); the form's link token is never on the page |
+| `GET /embed/app/:tenant/:app` | Public. The signed-embed page of an app (HTML, the same headers), `404` while signed embeds are off. The host site opens it with its token in the fragment (`#token=<jwt>`), never a query string |
+| `POST /api/public/embeds/session` `{tenant, app, token}` | Public, `APP_EMBED_SESSION_PER_MINUTE` per address. Verifies the host token and opens an embedded session: `{token (exe_…), expiresAt, app, user, write, entities: [{name, title, fields, states}]}`. The token's `kid` names a key of the app and `alg` must match it (`x5c` keys take ES256 or RS256 with the certificate chain in `x5c`, verified against the tenant's active intermediate and its revocations); `aud` must include `exprsn-ai:app:<app id>`; `exp` is required (a minute of skew), `iat` and `nbf` are honoured, `jti` is required and accepted once per key; the `claimName` claim names the person by `claimMatch` (an active user of the tenant). `401 invalid_token` with the reason otherwise; every exchange is audited `app.embed.session.created` or `app.embed.session.refused` (the kid and the reason, never the token) |
+
+An embedded session is a bearer credential of its own (`Authorization: Bearer exe_…`): no cookie, no CSRF token, apart
+from console sessions and their revocation; it lives for the shorter of the token's `exp`, the app's `maxTtlSeconds`
+and `APP_EMBED_MAX_TTL_SECONDS`, and ends with its key. It acts as the mapped user with `records:read` (and
+`records:write` when the app allows writes) under `/api/apps/<the app>` only, on the entities the settings list,
+within the user's policies, clearance and workspaces; anything else is `403 step: scope`. Ended sessions are purged
+after a day.

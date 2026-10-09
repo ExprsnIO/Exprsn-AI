@@ -211,6 +211,43 @@
   patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
   `e2e/tests/compliance.spec.ts`.
 
+### Entity APIs and app embedding (Sprint 39d, B-8601 to B-8603, B-8701, B-8702)
+
+- Migration `041d_entity_api_embeds`: `api_keys.app_scope`, `app_schema_versions`, `app_embeds`, `app_embed_keys`,
+  `app_embed_pages`, `app_embed_sessions`. New settings `APP_EMBED_MAX_TTL_SECONDS` (3600) and
+  `APP_EMBED_SESSION_PER_MINUTE` (30).
+- The entity API (B-8601): every entity of an app is a REST resource at `/api/apps/:app/:entity`: list with a JSON
+  `filter`, `where=field:op:value` conditions, `sort`, `q`, `limit`, `offset` or `cursor`, and `include=related` for the
+  records the reference and lookup fields point at; read, create, update with `version`, transition and delete. The
+  same service as the records routes, so policies, masks, labels, workspaces and audit apply unchanged. API keys may
+  be limited to one app or one entity (`POST /api/me/api-keys {app: {app, entity?}}`, `records:read` and
+  `records:write` only): accepted under `/api/apps` alone and refused on another app or entity.
+- Schema versions and the schema API (B-8602): every design change, whichever route makes it, records a version
+  with a hash of the whole design (`app_schema_versions`, audited `app.schema.versioned`); `/api/apps/:app/schema`
+  reads the design and its versions, and creates, replaces or deletes entities, fields, state machines and forms.
+- OpenAPI and a client per app (B-8603): `GET /api/apps/:app/openapi.json`, an OpenAPI 3.1 document typed from the
+  entity definitions with the schema version and hash (its `ETag`), and `client.ts` or `client.js`, a generated
+  client that creates a record against a fresh app with no hand-written code.
+- Public embeds (B-8701): a public form published as an embed page under a random id (`/embed/:id`), served with
+  `frame-ancestors` naming the app's allowed host sites and no `X-Frame-Options`; opened and submitted by that id
+  through `/api/public/embeds`, on the public submission path, with the form's link token never on the page.
+- Signed embeds (B-8702): keys registered per app (ES256, RS256, EdDSA public keys, an HS256 secret shown once, or
+  the tenant CA verifying the token's `x5c`); a host token with the app as audience, `exp`, `jti` (once per key) and
+  the claim that names the person is exchanged at `/api/public/embeds/session` for an embedded session, a bearer of
+  its own apart from console sessions, inside the app's entities, read-only unless the app allows writes, capped by
+  the app's limit and the server's; revoking a key ends its sessions; every exchange is audited.
+- Console: the Apps screen's API tab (routes per entity, a curl, the schema version and hash, the downloads, the
+  versions table) and Embed tab (settings, keys, pages with their iframe snippet, sessions); the embed pages
+  (`web/js/embed.js`); Settings lets a key be limited to an app and an entity.
+- Prototype boards for the two tabs and the key option; `e2e/tests/apps-api.spec.ts` with axe-core on the tabs and
+  the embed page; unit tests `sprint39d-entity-api`, `sprint39d-schema-api` (the generated client runs against the
+  test server), `sprint39d-embeds` (every key kind, a tenant CA built in the test); an integration test for
+  PostgreSQL and MySQL.
+- Known gaps in `docs/security.md`: an entity named like one of the app's own route segments is reached only through
+  the records routes; a schema version holds the whole definition, not a diff, and nothing restores one; an
+  app-limited key is refused on `/v1` and the MCP server outright; the tenant CA path checks one intermediate and
+  no OCSP; the session's `host` is the token's `iss`; a reload of an embed page needs a new host token.
+
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 
 - Migration `038c_knowledge_images`: the base's vision profile and image classifiers, image documents (`parent_id`,
