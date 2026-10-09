@@ -302,6 +302,16 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
   read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
   parts) behind `routes/compliance.ts`.
+- 1.6.0 Sprint 39c: `apps/model-drafts.ts` (`s.apps.modelDrafts`, B-8301: a whole data model drafted through
+  `apps/ai.ts`, diffed against the app with `diffEntity` and `mergeDefinition`, applied in dependency order);
+  `aiPromptRefs`, `aiFieldsAffected` and `renderAiPrompt` in `apps/schema.ts` with `queueAiFill` in `apps/service.ts`
+  (B-8401: formula placeholders, `app_records.ai_pending`, one `apps.ai-fill` job per record and quiet window);
+  `apps/ai-fills.ts` (`s.apps.aiFills`, B-8402: the `apps.ai-fill-all` job, estimates priced through
+  `s.analytics.prices`, `writeAiField` on the service); `apps/sources.ts` (`s.apps.sources`, B-8501: `app_entity_sources`,
+  the `apps.source-pull` job and `apps.source-schedules` tick, `push` before every record write in `apps/service.ts`,
+  `upsertFromSource` and `deleteFromSource`) over `readRowsForApp` and `mutateRow` in `connections/service.ts` and the
+  drivers' `mutate` (`RowMutation`, `checkMutation`). `server/test/sprint39c-helpers.ts` has `SqliteTableDriver`, the
+  outside table the unit tests and the e2e server use.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

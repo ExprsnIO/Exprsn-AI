@@ -5169,3 +5169,73 @@ counted (`omitted`); the export's label is the highest it carries. More than `CO
 | `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
 | `GET /api/compliance/exports/:id` | One export |
 | `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
+
+## Sprint 39c (1.6.0): data model generation, AI field upgrades, outside database sync (B-8301, B-8401, B-8402, B-8501)
+
+Migration `041c_model_gen_sync` (`app_ai_fills`, `app_entity_sources`, `app_records.ai_pending` and `external_key`).
+New settings: `APPS_AI_DEBOUNCE_MS` (2000), `APPS_AI_FILL_MAX_ROWS` (10 000), `APPS_SOURCE_PULL_MAX_ROWS` (10 000).
+Jobs: `apps.ai-fill-all`, `apps.source-pull`, `apps.source-schedules`. Every route below needs `apps:design`.
+
+### Data model drafts (B-8301)
+
+`server/src/apps/model-drafts.ts` (`s.apps.modelDrafts`). A description of the app goes to a local model through the
+gateway and a published profile (the description passes the `user-input` checkpoint first, the answer the
+`model-output` one). The model answers with entities (typed fields, `reference` fields as relations, `formula` fields,
+a state machine) and record triggers naming workflows; the draft is validated with the entity schema and
+`checkDefinition` against the app's entities and each other, compared with the saved entities, and returned. Nothing
+is saved until the draft is accepted.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/model/draft` `{prompt, profile, label?}` | `{draft: {entities: [{name, title?, definition}], triggers: [{entity, events, workflow}]}, diff: [{entity, change: new \| changed \| same, addedFields, changedFields, removedFields, states: added \| changed \| same \| null, problems}], triggers: [{entity, events, workflow, ok, problem}], valid, problems}`. `removedFields` are the saved fields the draft omits: listed, never removed. A trigger whose workflow does not exist is reported on the trigger and skipped at apply; it does not make the draft invalid. `422` when the model's answer is unusable (what parses on its own is still returned for editing) or the description is refused; `503` when the model is unavailable. Audited `app.model.drafted` |
+| `POST /api/apps/:app/model/apply` `{entities, triggers?}` | Accepts a draft, edited or as returned: new entities are created in dependency order (a cycle of references is created without the references first, then completed), existing ones gain the drafted fields (by name, replacing a field of the same name) and the drafted state machine, nothing is removed, and triggers whose workflow exists are created. `{created, updated, unchanged, triggers: [{entity, workflow, created, reason}]}`. `422 {problems}` when the draft is not valid; the usual `409`s of entity updates (a type change on an entity with records) apply. Audited `app.model.applied` on top of each entity's own events |
+
+### AI field prompts and regeneration (B-8401)
+
+An AI field's prompt holds placeholders that are a plain field name or a formula over the plain fields and the formula
+functions: `Summarise {{name}} worth {{round(amount * 1.2, 2)}} ({{upper(name)}})`. They are checked when the entity
+is saved (an unreadable placeholder is a `400` problem naming it) and rendered with the formula engine when the fill
+runs. An update regenerates only the AI fields whose prompts read a changed field (`app_records.ai_pending` holds the
+list; a new record regenerates every AI field); edits within `APPS_AI_DEBOUNCE_MS` of each other share one
+`apps.ai-fill` job (a dedupe key per record and quiet window) that runs when the window ends, so a burst of edits asks
+the model once per field. Metering, the `model-output` checkpoint and the audit events are as before
+(`app.record.ai.filled`, `app.record.ai.failed`).
+
+### AI fills over every row (B-8402)
+
+`server/src/apps/ai-fills.ts` (`s.apps.aiFills`). One AI field of an entity is filled (where empty) or refreshed (every
+record) as the job `apps.ai-fill-all`, one record at a time through the profile's guardrails, the tenant's quota and
+metering, with the fill's token totals kept on the fill.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/entities/:entity/ai/estimate` `{field, scope: empty \| all}` | `{records, capped, promptTokens, outputTokens, model, currency, cost}`: the records the fill would cover (at most `APPS_AI_FILL_MAX_ROWS`; `capped` when more exist), tokens from a sample of up to 50 rendered prompts and the field's `maxLength`, and the cost when the tenant has a price for the profile's model (`usage_prices`, B-7402); `cost` is null otherwise. `400` when the field is not an AI field |
+| `GET /api/apps/:app/entities/:entity/ai/fills` | The last 20 fills, newest first: `{fills: [Fill]}`, a Fill being `{id, field, scope, state: queued \| running \| succeeded \| failed \| cancelled, total, done, failed, skipped, promptTokens, outputTokens, estimate, jobId, startedBy, error, createdAt, startedAt, finishedAt}` |
+| `POST /api/apps/:app/entities/:entity/ai/fills` `{field, scope}` | Estimates, then starts the job: `202` Fill. `409` while a fill of that field is queued or running. Audited `app.ai.fill.started` with the estimate |
+| `GET /api/apps/:app/entities/:entity/ai/fills/:id` | One fill with its counters; `done`, `failed`, `skipped` and the token totals advance as it runs, and the job carries progress |
+| `POST /api/apps/:app/entities/:entity/ai/fills/:id/cancel` | Stops a queued or running fill: the job's signal is aborted and the fill is marked cancelled, so it stops after the record it is on; filled values stay. `409` once finished. Audited `app.ai.fill.cancelled`; the job's end is audited `app.ai.fill.finished` with the state and counts |
+
+### Outside tables as entities (B-8501)
+
+`server/src/apps/sources.ts` (`s.apps.sources`). An entity can be backed by a table (or view) of a PostgreSQL or
+MySQL data connection. A **pull** (`apps.source-pull`: on demand, or every `pullMinutes` from the `apps.source-schedules`
+tick, which runs with the trigger schedules every `APPS_SCHEDULE_TICK_SECONDS`) reads the allow-listed table unmasked
+(`ConnectionService.readRowsForApp`, at most `APPS_SOURCE_PULL_MAX_ROWS` rows) and writes the rows as records keyed by
+the key column (`app_records.external_key`): values typed by the fields (numbers, booleans, dates to the field's
+precision, JSON parsed), a column mapping where a field's column has another name, the state from `stateColumn`, rows
+gone from the table removing their records when `deleteMissing` is on; a row a field refuses is counted and reported
+(up to 20 problems) and the rest are written. With **writes** on, a record created, changed, moved through its state
+machine or deleted in the app (the API, a form, a workflow step, a bulk write) reaches the table first through the
+driver's row mutation (`mutate` on the PostgreSQL and MySQL drivers: a parameterised insert, update or delete in its
+own transaction; `ConnectionService.mutateRow`), so a refused outside write fails the request (`502 Write failed`, or
+`409 Row missing outside`) and nothing changes locally; with writes off, record writes are refused with `409`. The key
+of a new record is the key field's value, or the record id when no key field is mapped (the column must take text).
+Pulled records are written as source `import` without a person, fire the entity's triggers and queue AI fills like an
+import. Attaching needs `apps:design` and `connections:manage`, and the entity's label must cover the connection's.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/entities/:entity/source` | `{entity, connectionId, connection, engine, object, keyColumn, keyField, columns, stateColumn, writes, deleteMissing, pullMinutes, enabled, nextPullAt, lastPullAt, lastPull: {rows, created, updated, deleted, unchanged, failed, capped, ms, error?, problems?}, updatedAt}`; `404` when the entity has none. `GET /api/apps/:app` also lists `sources` for designers |
+| `PUT /api/apps/:app/entities/:entity/source` `{connectionId, object, keyColumn, keyField?, columns?, stateColumn?, writes, deleteMissing, pullMinutes?, enabled}` | Attaches or changes the source. `403 step: permission` without `connections:manage`; `400` when the key field is not a string or number field, a mapped field is computed or missing, or a state column is given without a state machine; `409` for an engine other than PostgreSQL or MySQL, an object outside the connection's allow-list, or a connection labelled above the entity. Audited `app.entity.source.set` / `updated` |
+| `DELETE /api/apps/:app/entities/:entity/source` | Detaches; the records stay as ordinary records. Audited `app.entity.source.removed` |
+| `POST /api/apps/:app/entities/:entity/source/pull` | Queues a pull now: `202 {jobId}`. The result lands on the source; audited `app.entity.source.pulled` (or `pull_failed`) with the counts |
