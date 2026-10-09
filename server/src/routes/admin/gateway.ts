@@ -90,6 +90,8 @@ export const profileView = (p: ProfileRow) => ({
   fallback: p.fallback,
   canary: p.canary,
   tools: p.tools,
+  agents: p.agents ?? [],
+  skills: p.skills ?? null,
   trustMarking: p.trust_marking !== false,
   label: p.label,
   status: p.status,
@@ -611,6 +613,10 @@ export function gatewayAdminRoutes(s: Services): Router {
     fallback: fallbackSchema,
     // calculate, or published registry and MCP tools by name (Sprint 7)
     tools: z.array(z.string().trim().regex(/^[A-Za-z0-9][\w.:-]{0,119}$/)).max(32),
+    // 1.7.0 (B-4006): agents offered to the model as agent:<name> tools (published agents by name)
+    agents: z.array(z.string().trim().min(1).max(120)).max(16),
+    // 1.7.0 (B-4005): the skills a conversation may add; null for any published skill
+    skills: z.array(z.string().trim().min(1).max(120)).max(32).nullable(),
     // B-6901: datamark untrusted content for this profile's model (on by default)
     trustMarking: z.boolean(),
     label: z.enum(LABELS)
@@ -698,6 +704,8 @@ export function gatewayAdminRoutes(s: Services): Router {
       fallback: body.fallback ?? null,
       canary: null,
       tools: body.tools ?? [],
+      agents: body.agents ?? [],
+      skills: body.skills ?? null,
       trust_marking: body.trustMarking ?? true,
       label: body.label ?? 'internal',
       status: body.aliasOf ? 'published' : 'draft',
@@ -753,7 +761,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       if (!target || target.alias_of || target.id === before.id) throw badRequest('An alias must point at a real profile.');
     }
     const patch: Partial<ProfileRow> = {};
-    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['trustMarking', 'trust_marking'], ['label', 'label'], ['aliasOf', 'alias_of']];
+    const map: [keyof typeof body, keyof ProfileRow][] = [['displayName', 'display_name'], ['description', 'description'], ['modelId', 'model_id'], ['poolId', 'pool_id'], ['numCtx', 'num_ctx'], ['temperature', 'temperature'], ['thinkDefault', 'think_default'], ['agents', 'agents'], ['skills', 'skills'], ['thinkCeiling', 'think_ceiling'], ['systemPrompt', 'system_prompt'], ['fallback', 'fallback'], ['tools', 'tools'], ['trustMarking', 'trust_marking'], ['label', 'label'], ['aliasOf', 'alias_of']];
     for (const [a, b] of map) if (body[a] !== undefined) (patch as Record<string, unknown>)[b] = body[a];
     if (patch.model_id && patch.model_id !== before.model_id) {
       const m = await g.repo.model(patch.model_id);

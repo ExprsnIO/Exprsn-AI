@@ -131,6 +131,10 @@ export interface ProfileRow {
   fallback: { profileId: string; afterQueueWaitMs: number } | null;
   canary: { modelId: string; percent: number } | null;
   tools: string[];
+  /** 1.7.0 (B-4006): agents the profile offers the model as `agent:<name>` tools, and that `@agent` may start on it. */
+  agents?: string[];
+  /** 1.7.0 (B-4005): the published skills a conversation on this profile may add; unset, any published skill. */
+  skills?: string[] | null;
   /**
    * 1.6.0 (B-6901): untrusted content (retrieved chunks, crawled pages, tool, MCP and HTTP results) reaches the model
    * datamarked inside its delimiters. On when unset (rows written before the column, test seeds).
@@ -182,6 +186,8 @@ export const profileFrom = (r: Record<string, unknown>): ProfileRow => ({
   fallback: json<ProfileRow['fallback']>(r.fallback, null),
   canary: json<ProfileRow['canary']>(r.canary, null),
   tools: json<string[]>(r.tools, []),
+  agents: json<string[]>(r.agents, []),
+  skills: json<string[] | null>(r.skills, null),
   trust_marking: r.trust_marking == null ? true : r.trust_marking === true || r.trust_marking === 1 || r.trust_marking === '1' || r.trust_marking === 't',
   version: Number(r.version),
   created_at: Number(r.created_at),
@@ -368,7 +374,7 @@ export class GatewayRepo {
 
   private serialise(p: Partial<ProfileRow>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(p)) out[k] = ['fallback', 'canary', 'tools'].includes(k) ? (v == null ? null : JSON.stringify(v)) : v;
+    for (const [k, v] of Object.entries(p)) out[k] = ['fallback', 'canary', 'tools', 'agents', 'skills'].includes(k) ? (v == null ? null : JSON.stringify(v)) : v;
     return out;
   }
 

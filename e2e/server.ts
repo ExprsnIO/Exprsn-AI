@@ -40,6 +40,8 @@ import { createDrivers } from '../server/src/connections/drivers.js';
 import { parseAllowList } from '../server/src/mcp/hosts.js';
 import Database from 'better-sqlite3';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
+import { startFakeDataHub, startFakePortal } from '../server/test/sprint40b-fakes.js';
+import { loadPrincipal } from '../server/src/http/middleware.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
 import { FakePlcDirectory } from '../server/test/sprint25b-fakes.js';
 import { startSigner } from '../server/src/signer/server.js';
@@ -108,6 +110,9 @@ async function main() {
   const plc = new FakePlcDirectory();
   await plc.start();
   let baseUrl = url;
+  // 1.7.0 (B-3804 to B-3807): an open-data portal (CKAN with a datastore, SDMX) and a hub with dataset repositories
+  // for the Import screen; both are proposed and confirmed below.
+  const [portal, dataHub] = await Promise.all([startFakePortal(), startFakeDataHub()]);
   const acme = await startFakeAcme(async (_domain, token) => {
     const r = await fetch(`${baseUrl}/.well-known/acme-challenge/${token}`);
     return r.status === 200 ? r.text() : null;
@@ -144,6 +149,10 @@ async function main() {
     // AT-Protocol (Sprints 25 and 31): the PLC directory double, and a handle domain for the PDS (the AT-Protocol screen).
     ATPROTO_PLC_URL: plc.url,
     PDS_HANDLE_DOMAIN: 'pds.example.test',
+    // 1.7.0 (B-3807): imports reach the fakes on loopback; harvests run when a repository is confirmed, not on a tick.
+    IMPORT_ALLOWED_HOSTS: '127.0.0.1',
+    IMPORT_HARVEST_TICK_MINUTES: '0',
+    IMPORT_BUNDLE_POLL_MINUTES: '0',
     // Every browser test signs in from 127.0.0.1; the per-address limiter must not throttle the suite.
     LOCKOUT_MAX_ATTEMPTS: '50',
     ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('E2E_ENV_')).map(([k, v]) => [k.slice(8), v]))
@@ -259,6 +268,20 @@ async function main() {
   const imageKinds = await s.guard.classifiers.create(tenantId, { name: 'Image kinds', engine: 'vision', labels: ['receipt', 'screenshot'], profile: 'vision', description: 'Whether an image is a receipt or a screenshot, scored by the vision profile.' }, { userId: root.id, name: 'Mara Okafor' });
   await s.db('classifiers').where({ id: imageKinds.id }).update({ status: 'published' });
   await s.gateway.pollAll();
+
+  // ---- import repositories (1.7.0, B-3807): proposed by root, confirmed by root2, harvested by the job queue ----
+  {
+    const proposer = (await loadPrincipal(s, tenantId, root.id, {}))!;
+    const confirmer = (await loadPrincipal(s, tenantId, (await s.users.byUsername(tenantId, 'root2'))!.id, {}))!;
+    for (const body of [
+      { name: 'Open data portal', type: 'ckan' as const, baseUrl: `${portal.url}/api/3`, region: 'US', harvestMinutes: null },
+      { name: 'Eurostat (SDMX)', type: 'sdmx' as const, baseUrl: `${portal.url}/sdmx`, region: 'EU', options: { licence: 'cc-by-4.0' }, harvestMinutes: null },
+      { name: 'Hub with datasets', type: 'hf' as const, baseUrl: dataHub.url, region: 'Global', kinds: ['model', 'dataset'] as ('model' | 'dataset')[], harvestMinutes: null }
+    ]) {
+      const r = await s.imports.repositories.propose(proposer, body);
+      await s.imports.repositories.confirm(confirmer, r.id, null);
+    }
+  }
 
   // ---- HTTP ----
   const app = createApp(s);

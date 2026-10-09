@@ -544,6 +544,11 @@ references, and the tool-call guardrail.
 | --- | --- | --- |
 | B-5101 | Version `1.6.0`, the CHANGELOG, `docs/api.md`, `docs/permissions.md`, `docs/accessibility.md` and the known-gaps sections updated as each item lands; the full Playwright suite run locally at the end of the release, its findings fixed and the cross-screen sweeps (`a-first-look`, `zz-every-screen`, `y-accessibility`, `y-reflow`, `y-reflow-overlays`) green (owner, 2026-10-06: sprints run only the specs of the screens they change) (Sprint 39; was Sprint 37 before the gaps were merged on 2026-10-07) | The full Playwright suite passes locally and in CI |
 
+B-5101 done 2026-10-09 (PR #71, version 1.6.0): the full Playwright suite ran locally at the release, 168 passed and 0
+failed, after fixes to the sweep's screen list, the e2e harness driver, an Analytics reload race and the data model
+draft dialog's accessibility pass; the sweeps `a-first-look`, `zz-every-screen`, `y-accessibility`, `y-reflow` and
+`y-reflow-overlays` are green. See the Release 1.6.0 section in Sprints.md.
+
 ---
 
 ## Still deferred
@@ -569,22 +574,28 @@ references, and the tool-call guardrail.
 
 - [x] Capability tokens (B-5001): closed; B-5001 was dropped on 2026-10-07 (port decision D3), so share links and
   scoped API keys keep their own tables.
-- [ ] Group locations (B-4403): is a location visible to every member who can see the group, or only to members?
+- [x] Group locations (B-4403): is a location visible to every member who can see the group, or only to members?
+  Resolved by the build on 2026-10-09, not the owner: a place is shown to readers of the group's content, so for a
+  public group to everyone in the workspace (`docs/security.md`, Sprint 36a). Members-only is a one-line change if the
+  owner prefers it.
 - [ ] Model servers (B-43): is Apple's on-device model also offered as a `classify` fallback beside TEV on Apple
   silicon nodes?
 - [x] Industry gaps: a fourth sprint for 1.6.0, or move P2 gap epics to 1.7? Answered 2026-10-07: the owner merged the
   gaps into 1.6.0, now Sprints 37 to 39 after Sprint 36 took image classification.
 - [ ] Injection classifier (B-6902): a guard model through the existing guard-model path, or a trained classifier
   (weak below 200 labels a class, a 1.4.0 known gap)?
-- [ ] App promotion (B-82): an in-product pipeline with fixed packages and approvals, like Power Platform (assumed),
-  or git-backed releases across instances, like Retool?
+- [x] App promotion (B-82): an in-product pipeline with fixed packages and approvals, like Power Platform (assumed),
+  or git-backed releases across instances, like Retool? Resolved by the build on 2026-10-09, not the owner: Sprint 39b
+  built the in-product pipeline (three app slots of one tenant, promotion under an approval workflow) with git export
+  and import as the cross-instance path (B-8204, one way). Git-backed releases across instances stay unscheduled.
 - [ ] Workbench mockups (provisional B-63 to B-68): schedule them in 1.6.0 or 1.7? Whole-app generation and the
   visual builder wait for B-63, and so do custom code components (sandboxed in an iframe or under CSP, approved per
   tenant), which the second research pass found at ToolJet and Budibase.
 - [x] A fifth sprint (39) for the second-pass items and the release? Answered 2026-10-07: yes, Sprint 39 carries them and the
   release.
-- [ ] HTTP tool kind (B-89): one tenant list of allowed public hosts shared with workflow HTTP steps (B-9101, 1.7.0), as
-  assumed, or a host list per tool?
+- [x] HTTP tool kind (B-89): one tenant list of allowed public hosts shared with workflow HTTP steps (B-9101, 1.7.0), as
+  assumed, or a host list per tool? Resolved by the build on 2026-10-09, not the owner: Sprint 37a built the one tenant
+  list (Registry, Allowed hosts), which B-9101 reuses; a per-tool list can be added on top if the owner wants it.
 
 ## Risks
 

@@ -195,7 +195,7 @@
         + (st.member ? UI.notice('You are viewing as a member. Sources and documents are read-only; relabel, reindex and source changes need the knowledge curator role.', 'info', '<a href="#" data-leavemember>Back to curator view</a>') : '')
         + (st.demoNote ? UI.notice(esc(st.demoNote), 'info', UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-dismissnote' })) : '')
         + (kb ? UI.pagehead(esc(kb.name), 'Embedding ' + esc(kb.embedModel) + ', index v' + (serving ? serving.version : '–') + ', vector plus full-text · ' + UI.pill(kb.status, kb.status === 'published' ? 'ok' : '') + (kb.description ? '<div class="muted" style="font-size:12px">' + esc(kb.description) + '</div>' : ''),
-          manage ? UI.btn('Edit', { kind: 'ghost', attrs: 'data-editkb' }) + UI.btn('Image settings', { icon: 'images', attrs: 'data-imagesettings' }) + (kb.status === 'draft' ? UI.btn('Publish', { attrs: 'data-publish' }) : '') + UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }) : '')
+          manage ? UI.btn('Edit', { kind: 'ghost', attrs: 'data-editkb' }) + (App.canOpen('import') ? UI.btn('Dataset', { kind: 'ghost', attrs: 'data-goimport title="Create a knowledge set from a dataset in this base"' }) : '') + UI.btn('Image settings', { icon: 'images', attrs: 'data-imagesettings' }) + (kb.status === 'draft' ? UI.btn('Publish', { attrs: 'data-publish' }) : '') + UI.btn('Reindex', { attrs: 'data-reindex' }) + UI.btn('Add source', { kind: 'primary', attrs: 'data-addsource' }) : '')
           + (kb.status === 'draft' ? UI.notice('This knowledge base is a draft. Chat retrieves only from published bases.', 'warn') : '')
           + (building && st.tab !== 'index' ? UI.notice('Index v' + building.version + ' is building beside v' + (serving ? serving.version : '?') + ': ' + building.progress + '% complete. Retrieval keeps using v' + (serving ? serving.version : '?') + ' until the atomic switch.', 'info', '<a href="#" data-tab="index">Index</a>') : '')
           + (quarantinedDocs.length ? UI.notice('<b>' + esc(quarantinedDocs[0].name) + '</b>' + (quarantinedDocs.length > 1 ? ' and ' + (quarantinedDocs.length - 1) + ' more are' : ' is') + ' held in quarantine until the malware scan and classification pass. It cannot be attached or indexed yet.', 'warn', '<a href="#" data-doc="' + esc(quarantinedDocs[0].id) + '">Details</a>') : '')
@@ -374,6 +374,7 @@
       });
 
       ctx.on('click', '[data-addsource]', () => openAdd());
+      ctx.on('click', '[data-goimport]', () => ctx.navigate('import', { kind: 'dataset', target: 'knowledge' }));
       function openAdd() {
         const needConns = () => (st.conns ? Promise.resolve(st.conns) : App.get('/api/knowledge/connections').then((c) => { st.conns = c; return c; }).catch(() => { st.conns = []; return []; }));
         ctx.drawer({ title: 'Add source to ' + esc(kb.name), body: UI.field('Type', UI.select([{ value: 'upload', label: 'Upload' }, { value: 's3', label: 'S3 prefix' }, { value: 'git', label: 'Git repository' }, { value: 'database', label: 'Database table, view or collection' }, { value: 'web', label: 'Internal web site' }], 's3', 'data-type'))

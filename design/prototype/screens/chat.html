@@ -758,8 +758,34 @@ table.dt .actions{white-space:nowrap}
     { id: 'c3', title: 'Rewrite onboarding email', meta: 'fast, yesterday', label: 'public', profile: 'fast' },
     { id: 'c4', title: 'Reconcile card feed', meta: 'Data analyst agent, Mon', label: 'confidential', profile: 'Data analyst agent' },
     { id: 'c5', title: 'Policy wording check', meta: 'chat-default, Mon', label: 'internal', profile: 'chat-default' },
-    { id: 'c6', title: 'Landing page draft', meta: 'coder, Tue', label: 'internal', profile: 'coder' }
+    { id: 'c6', title: 'Landing page draft', meta: 'coder, Tue', label: 'internal', profile: 'coder' },
+    { id: 'c7', title: 'Vendor onboarding (tools and agents)', meta: 'chat-default, 5 min ago', label: 'confidential', profile: 'chat-default' }
   ];
+  // 1.7.0 (B-4001): what this conversation may call: the profile's tools, the published agents and skills within the
+  // conversation's ceiling, the workspace's published workflows. Hidden entries carry the reason.
+  const CAPS = {
+    tools: [
+      { name: 'calculate', side: 'read', confirm: 'never', desc: 'Exact arithmetic by the calculation worker.' },
+      { name: 'jira-internal.lookup_issue', side: 'read', confirm: 'never', desc: 'Looks up an issue by key.', schema: ['key'] },
+      { name: 'jira-internal.create_issue', side: 'write', confirm: 'always', desc: 'Creates an issue.', schema: ['project', 'summary'] },
+      { name: 'vendors.delete_record', side: 'destructive', confirm: 'always', desc: 'Deletes a vendor record.', schema: ['vendor'] }
+    ],
+    agents: [{ name: 'Data analyst agent', desc: 'Pulls the ledger and reconciles figures.', offered: true }, { name: 'Vendor desk', desc: 'Onboards a vendor: checks, forms, approvals.', offered: false }],
+    skills: [{ name: 'Finance tone', desc: 'Answers in the finance team\'s house style.' }, { name: 'One sentence', desc: 'Answers in one sentence.' }, { name: 'Cite everything', desc: 'Every figure cites a source.' }],
+    workflows: [{ name: 'vendor-onboarding v4', desc: 'Checks, the DPA, a sign-off, then the record.', schema: ['vendor', 'country'] }, { name: 'quarterly-variance v1', desc: 'Variance report from the ledger.', schema: ['quarter'] }],
+    hidden: [{ name: 'agent:Payroll agent', reason: 'its ceiling is internal; the conversation is confidential' }, { name: 'skill:Public voice', reason: 'its ceiling is internal; the conversation is confidential' }]
+  };
+  // 1.7.0 (B-4002 to B-4009): the conversation's cards, as the invocations endpoint lists them.
+  const CARDS = {
+    c7: [
+      { id: 'i1', kind: 'tool', name: 'jira-internal.lookup_issue', side: 'read', by: 'user', state: 'done', args: { key: 'FIN-1188' }, result: '{"key":"FIN-1188","status":"Open","assignee":"m.okafor"}' },
+      { id: 'i2', kind: 'tool', name: 'jira-internal.create_issue', side: 'write', by: 'model', state: 'awaiting', approval: 'owner', args: { project: 'FIN', summary: 'Vendor onboarding: Fabrikam' }, expires: 'in 23 h' },
+      { id: 'i3', kind: 'agent', name: 'Vendor desk', by: 'user', state: 'running', run: 'r-7f31', chain: 'ch-2a19', steps: [{ n: 1, lane: 'think', title: 'Plan', state: 'ok' }, { n: 2, lane: 'do', title: 'vendors.lookup', state: 'ok' }, { n: 3, lane: 'do', title: 'vendors.create_record', state: 'waiting' }] },
+      { id: 'i4', kind: 'workflow', name: 'vendor-onboarding v4', by: 'user', state: 'running', run: 'wf-c044', chain: 'ch-2a19', approvals: [{ id: 'ap-1', step: 'Sign-off', role: 'workflow-admin', shows: 'DPA for Fabrikam, country DE' }] }
+    ]
+  };
+  const SKILLS_ON = { c7: [{ name: 'Finance tone', mode: 'sticky' }, { name: 'One sentence', mode: 'once' }] };
+
   const PROFILES = [
     { id: 'analyst', model: 'qwen2.5:32b-q4_K_M', ceiling: 'confidential', thinking: 'high' },
     { id: 'chat-default', model: 'llama3.1:8b-q5_K_M', ceiling: 'confidential', thinking: 'medium' },
@@ -817,14 +843,25 @@ table.dt .actions{white-space:nowrap}
       ] }
     ]
   };
+  THREADS.c7 = [
+    { role: 'user', text: '/tool jira-internal.lookup_issue key=FIN-1188' },
+    { role: 'tool', card: 'i1' },
+    { role: 'user', text: 'Open the onboarding issue for Fabrikam and get the vendor desk started.' },
+    { role: 'assistant', paras: ['I have drafted the Jira issue, which waits for your approval on the card below, and I can hand the onboarding to the vendor desk once you confirm.'], meta: 'chat-default, llama3.1:8b, 310 tokens, 2.1 s', proposed: 'i2' },
+    { role: 'user', text: '@Vendor desk: Onboard Fabrikam GmbH (DE), include the recent turns.' },
+    { role: 'agent', card: 'i3' },
+    { role: 'user', text: '/workflow vendor-onboarding v4 vendor=Fabrikam country=DE' },
+    { role: 'workflow', card: 'i4' }
+  ];
   const SOURCES = {
     c1: [{ n: 1, title: 'ledger.query result', sub: 'Tool result, 14 rows, this turn' }, { n: 2, title: 'Q3 cost centre review.pdf', sub: 'Finance KB, page 4, score 0.83' }],
     c2: [{ n: 1, title: 'Fabrikam MSA 2025.pdf', sub: 'Contracts KB, page 3, score 0.91' }, { n: 2, title: 'Fabrikam MSA 2025.pdf', sub: 'Contracts KB, page 11, score 0.88' }],
+    c7: [{ n: 1, title: 'jira-internal.lookup_issue result', sub: 'Tool result, this turn' }],
     c3: [], c4: [{ n: 1, title: 'cards.query ⋈ ledger.query', sub: 'Tool result, 3 rows, this turn' }], c5: [{ n: 2, title: 'Travel policy v7.md', sub: 'Policy KB, section 4.3, score 0.94' }], c6: []
   };
 
   App.register({
-    id: 'chat', title: 'Chat', summary: 'Conversation list, thinking trace, citations, tool confirmations, memory proposals',
+    id: 'chat', title: 'Chat', summary: 'Conversation list, thinking trace, citations, tools, agents, skills and workflows from the composer, approval and run cards, memory proposals',
     crumb: (st) => ['Chat', (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).title],
     label: (st) => (CONVOS.find((c) => c.id === (st.convo || 'c1')) || CONVOS[0]).label,
     commands: [
@@ -837,6 +874,15 @@ table.dt .actions{white-space:nowrap}
       { title: 'Stream resumed', tone: 'info', text: 'Connection dropped at event 212 and resumed with no duplicate text. A quiet marker shows the gap.', apply(ctx) { ctx.state.resumed = true; ctx.rerender(); } },
       { title: 'Ungrounded figure', tone: 'warn', text: 'A number with no calc result or cited source gets a dotted underline and a flag entry.', apply(ctx) { ctx.state.ungrounded = true; ctx.rerender(); } },
       { title: 'Artifact edited in a later turn', tone: 'info', text: 'An answer that changes index.html adds version 2; version 1 stays in the switcher. HTML renders in a sandboxed frame, code as text.', apply(ctx) { ctx.state.convo = 'c6'; ctx.state.artifact = { id: 'a1', version: 2 }; ctx.rerender(); } },
+      { title: 'Write tool awaiting approval', tone: 'warn', text: 'The model proposed jira-internal.create_issue mid-answer. A write tool runs only on the owner\'s approval; the card waits a day, then expires and is recorded.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = {}; ctx.rerender(); } },
+      { title: 'Tool call held for review', tone: 'info', text: 'A rule on the tool-call checkpoint held the call. It shows as held and runs only when a reviewer approves it in the Flags queue.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = { i2: 'held' }; ctx.rerender(); } },
+      { title: 'Card denied', tone: 'danger', text: 'A denied card leaves no side effect; the turn records it so the model does not try again blindly.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = { i2: 'denied' }; ctx.rerender(); } },
+      { title: 'Card expired', tone: 'neutral', text: 'Nobody decided the card within its day: expired, audited, nothing ran.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = { i2: 'expired' }; ctx.rerender(); } },
+      { title: 'Agent run from the chat', tone: 'info', text: '@Vendor desk started a run bound to this conversation; its steps stream into the card, it shows in Runs with a link back, and cancel stops it.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = {}; ctx.rerender(); } },
+      { title: 'Agent answered', tone: 'neutral', text: 'The run ended: its answer is a turn attributed to the agent, which the next turn sees as such.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.cards = { i3: 'done' }; ctx.rerender(); } },
+      { title: 'Workflow waiting on an approval', tone: 'info', text: '/workflow started vendor-onboarding v4; its sign-off is a card here, and approving it here resumes the chain. A call held anywhere in the chain is decided from this root too.', apply(ctx) { ctx.state.convo = 'c7'; ctx.state.wfDecided = {}; ctx.rerender(); } },
+      { title: 'Skill for one turn', tone: 'neutral', text: '"One sentence" is on for this turn only; "Finance tone" is sticky. Removing a chip leaves its instructions out of the very next turn.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); } },
+      { title: 'Hidden above the ceiling', tone: 'warn', text: 'The pickers never list an agent or skill whose ceiling is below the conversation\'s label; calling one by name is refused the same way.', apply(ctx) { ctx.state.convo = 'c7'; ctx.rerender(); setTimeout(() => { const ta = ctx.$('#composer'); if (ta) { ta.value = '@'; ta.dispatchEvent(new Event('input', { bubbles: true })); } }, 30); } },
       { title: 'Artifact open for a share reader', tone: 'neutral', text: 'A reader of a shared conversation sees the versions of the shown turns, read only, with the same sandboxed render.', apply(ctx) { ctx.state.convo = 'c6'; ctx.state.artifact = { id: 'a2', version: 1 }; ctx.state.readerView = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -852,7 +898,49 @@ table.dt .actions{white-space:nowrap}
       const sources = SOURCES[convo.id] || [];
       const list = CONVOS.filter((c) => !st.query || c.title.toLowerCase().includes(st.query.toLowerCase()));
 
+      const cardsOf = CARDS[convo.id] || [];
+      const cardState = (c) => (st.cards && st.cards[c.id]) || c.state;
+      const sidePill = (side) => UI.pill(side, side === 'read' ? 'outline' : side === 'write' ? 'warn' : 'danger');
+      const stateTone = { done: 'ok', awaiting: 'warn', held: 'info', running: 'info', denied: 'danger', expired: 'neutral', failed: 'danger', cancelled: 'neutral' };
+      const argsText = (args) => Object.keys(args || {}).map((k) => k + '=' + JSON.stringify(args[k])).join('  ');
+      /** B-4002, B-4003: a tool card: the call, who proposed it, its state and the decision buttons or the result. */
+      const toolCard = (c) => {
+        const state = cardState(c);
+        let h = '<div class="card ' + state + '" data-card="' + c.id + '"><div class="hstack gap6"><b>' + esc(c.name) + '</b>' + sidePill(c.side) + UI.pill(state, stateTone[state]) + '<span class="muted" style="font-size:12px">' + (c.by === 'model' ? 'proposed by the model' : 'called by you') + '</span></div>'
+          + '<div class="mono fg2" style="font-size:12px">' + esc(argsText(c.args)) + '</div>';
+        if (state === 'awaiting') h += '<div class="fg2" style="font-size:12px">' + (c.approval === 'owner+reviewer' ? 'A destructive tool a rule flagged: your approval first, then the guardrail\'s approver in the Flags queue.' : 'A write tool runs only on your approval. Acts as you; audited.') + ' Expires ' + esc(c.expires || 'in 24 h') + '.</div><div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-approve="' + c.id + '"' }) + UI.btn('Deny', { kind: 'ghost', size: 'sm', attrs: 'data-deny="' + c.id + '"' }) + '</div>';
+        else if (state === 'held') h += '<div class="fg2" style="font-size:12px">' + UI.icon('clock', 12) + ' Held by the tool-call guardrail. It runs when a reviewer approves it in the Flags queue (F-2301).</div>';
+        else if (state === 'done') h += '<div class="eyebrow">Result</div>' + UI.code(c.result || '{"ok":true}', 'json') + '<div class="muted" style="font-size:11px">The model sees this call and its result on the next turn.</div>';
+        else if (state === 'denied') h += '<div class="fg2" style="font-size:12px">' + UI.icon('x', 12) + ' Denied by you. Nothing ran; the model is told on the next turn.</div>';
+        else if (state === 'expired') h += '<div class="fg2" style="font-size:12px">The card expired before it was decided. Nothing ran.</div>';
+        else if (state === 'failed') h += '<div class="fg2" style="font-size:12px">' + esc(c.error || 'The tool failed.') + '</div>';
+        return h + '</div>';
+      };
+      /** B-4004: an agent run bound to the conversation: its steps stream in; the answer becomes the turn. */
+      const agentCard = (c) => {
+        const state = cardState(c);
+        let h = '<div class="card ' + state + '" data-card="' + c.id + '"><div class="hstack gap6">' + UI.icon('agents', 13) + '<b>' + esc(c.name) + '</b>' + UI.pill(state, stateTone[state]) + '<span class="muted" style="font-size:12px">run <a href="#" class="mono" data-goruns>' + esc(c.run) + '</a>' + (c.chain ? ' · <a href="#" data-gochain>chain tree</a>' : '') + '</span></div>';
+        if (state === 'running') h += UI.timeline(c.steps.map((s) => ({ title: s.n + '. ' + s.title, text: s.lane + (s.state === 'waiting' ? ', waiting for approval (decide on the Runs screen or from the chain)' : ''), tone: s.state === 'ok' ? 'ok' : s.state === 'waiting' ? 'warn' : 'info' }))) + '<div class="hstack gap6">' + UI.btn('Cancel run', { kind: 'ghost', size: 'sm', attrs: 'data-cancelrun="' + c.id + '"' }) + '<span class="muted" style="font-size:12px">Budgets, approvals and cancel as in Runs. The answer lands here, attributed to the agent.</span></div>';
+        else if (state === 'done') h += '<div class="answer serif"><p>Fabrikam GmbH is onboarded as vendor V-2291: tax id checked, DPA on file, bank details verified. The record awaits the finance sign-off.</p></div><div class="muted" style="font-size:12px">Answer by agent ' + esc(c.name) + '. The next turn sees it attributed.</div>';
+        else if (state === 'cancelled') h += '<div class="fg2" style="font-size:12px">Cancelled from the chat. The run stopped; what it reached is on the Runs screen.</div>';
+        return h + '</div>';
+      };
+      /** B-4009: a workflow run started here: its approvals are cards; approving resumes the chain. */
+      const wfCard = (c) => {
+        const state = cardState(c);
+        const decided = st.wfDecided && st.wfDecided[c.id];
+        let h = '<div class="card ' + state + '" data-card="' + c.id + '"><div class="hstack gap6">' + UI.icon('workflows', 13) + '<b>' + esc(c.name) + '</b>' + UI.pill(state, stateTone[state]) + '<span class="muted" style="font-size:12px">run <span class="mono">' + esc(c.run) + '</span> · <a href="#" data-gochain>chain tree</a></span></div>';
+        if (state === 'running' && !decided) h += c.approvals.map((a) => '<div class="approval"><div class="hstack gap6"><b>Approval: ' + esc(a.step) + '</b>' + UI.pill(a.role, 'outline') + '</div><div class="fg2" style="font-size:12px">' + esc(a.shows) + '</div><div class="hstack gap6">' + UI.btn('Approve', { kind: 'primary', size: 'sm', attrs: 'data-wfapprove="' + c.id + '"' }) + UI.btn('Reject', { kind: 'ghost', size: 'sm', attrs: 'data-wfreject="' + c.id + '"' }) + '<span class="muted" style="font-size:12px">A call held anywhere in this chain is decided from here too.</span></div></div>').join('');
+        else if (state === 'running' && decided) h += UI.timeline([{ title: 'Checks', text: 'passed', tone: 'ok' }, { title: 'Sign-off', text: 'approved by you, from this conversation', tone: 'ok' }, { title: 'Create record', text: 'running', tone: 'info' }]);
+        else if (state === 'done') h += '<div class="answer serif"><p>vendor-onboarding v4 finished: checks passed, DPA signed off, record V-2291 created.</p></div>';
+        else if (state === 'cancelled') h += '<div class="fg2" style="font-size:12px">Cancelled from the chat.</div>';
+        return h + '</div>';
+      };
       const renderMsg = (m, i) => {
+        if (m.role === 'tool' || m.role === 'agent' || m.role === 'workflow') {
+          const c = cardsOf.find((x) => x.id === m.card); if (!c) return '';
+          return '<div class="msg ai turn-' + m.role + '">' + (m.role === 'tool' ? toolCard(c) : m.role === 'agent' ? agentCard(c) : wfCard(c)) + '</div>';
+        }
         if (m.role === 'user') return '<div class="msg user"><div class="bubble">' + esc(m.text) + '</div><div class="uactions">' + UI.iconbtn('edit', 'Edit and branch', { cls: 'sm ghost', attrs: 'data-edit="' + i + '"' }) + '</div></div>';
         if (m.streaming) return '<div class="msg ai"><div class="thinkbar"><span>' + (m.phase === 'thinking' ? 'Thinking at level ' + esc(st.level) + '…' : 'Answering…') + '</span><span class="muted">' + UI.btn('Stop', { kind: 'ghost', size: 'xs', attrs: 'data-stop' }) + '</span></div><div class="answer serif">' + m.partial + '<span class="blink">▍</span></div></div>';
         const open = st.thinking[i];
@@ -869,6 +957,7 @@ table.dt .actions{white-space:nowrap}
         h += '<div class="mactions">' + UI.iconbtn('copy', 'Copy', { cls: 'sm', attrs: 'data-copy="answer"' }) + UI.iconbtn('refresh', 'Regenerate', { cls: 'sm', attrs: 'data-regen="' + i + '"' }) + UI.iconbtn('branch', 'Branch from here', { cls: 'sm', attrs: 'data-branchmsg="' + i + '"' }) + UI.iconbtn('flag', 'Report this answer', { cls: 'sm', attrs: 'data-report="' + i + '"' }) + (m.branch ? '<span class="hstack gap4">' + UI.iconbtn('chev', 'Previous branch', { cls: 'sm ghost', attrs: 'data-branch="prev" style="transform:rotate(180deg)"' }) + '<span>Branch ' + m.branch[0] + ' of ' + m.branch[1] + '</span>' + UI.iconbtn('chev', 'Next branch', { cls: 'sm ghost', attrs: 'data-branch="next"' }) + '</span>' : '') + '<span class="right muted">' + esc(m.meta || '') + '</span></div>';
         if (m.confirm && !st.decided[convo.id + i]) h += '<div class="confirmcard"><div class="hstack"><b>' + esc(m.confirm.title) + '</b>' + UI.pill('write', 'warn') + '</div><div class="mono fg2">' + esc(m.confirm.tool) + '  ' + esc(m.confirm.args) + '</div><div class="hstack wrap"><span class="fg2 grow" style="font-size:12px">' + esc(m.confirm.note) + '</span><span class="hstack gap6">' + UI.btn('Deny', { size: 'sm', attrs: 'data-deny="' + i + '"' }) + UI.btn('Allow once', { kind: 'primary', size: 'sm', attrs: 'data-allow="' + i + '"' }) + '</span></div></div>';
         if (m.confirm && st.decided[convo.id + i]) h += '<div class="decided ' + (st.decided[convo.id + i] === 'allow' ? 'ok' : '') + '">' + UI.icon(st.decided[convo.id + i] === 'allow' ? 'check' : 'x', 13) + (st.decided[convo.id + i] === 'allow' ? ' Created <a href="#" data-jira>FIN-1187</a> in jira-internal as Mara Okafor. Logged to audit.' : ' Denied. The agent was told the action was refused and continued without it.') + '</div>';
+        if (m.proposed) { const c = cardsOf.find((x) => x.id === m.proposed); if (c) h += toolCard(c); }
         if (m.memory && !st.memories[convo.id + i]) h += '<div class="memprop"><span class="grow">Remember: "' + esc(m.memory) + '"</span>' + UI.btn('Save', { size: 'sm', attrs: 'data-memsave="' + i + '"' }) + UI.btn('Dismiss', { kind: 'ghost', size: 'sm', attrs: 'data-memdismiss="' + i + '"' }) + '</div>';
         return h + '</div>';
       };
@@ -887,6 +976,9 @@ table.dt .actions{white-space:nowrap}
         + '.confirmcard{display:flex;flex-direction:column;gap:8px;padding:12px;background:var(--accent-tint);border:1px solid var(--accent);border-radius:6px}'
         + '.decided{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--fg2)}.decided.ok{color:var(--ok-fg)}'
         + '.memprop{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px dashed var(--line);border-radius:6px;font-size:13px}'
+        + '.card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.card.awaiting{border-color:var(--warn-fg);background:var(--warn-bg)}.card.held{border-color:var(--info-fg)}.card.denied,.card.failed{border-color:var(--danger-fg)}.card .approval{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-tint)}'
+        + '.skillchips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.skillchips .chip .x{margin-left:4px;opacity:.7}'
+        + '.picker{position:absolute;left:0;bottom:calc(100% + 4px);min-width:360px;max-width:520px;z-index:30}.picker .dh{display:flex;justify-content:space-between}.picker button .desc{display:block;font-size:11px;color:var(--muted)}.picker button .side{float:right}'
         + '.composer{border-top:1px solid var(--line);background:var(--bg);padding:12px 24px 16px}.composer .inner{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:8px}'
         + '.composer textarea{width:100%;min-height:64px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:14px;resize:vertical;line-height:1.4}'
         + '.src{display:flex;gap:8px;align-items:flex-start;padding:8px;border-radius:5px;cursor:pointer}.src:hover,.src.hi{background:var(--accent-tint)}.src .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}'
@@ -904,7 +996,10 @@ table.dt .actions{white-space:nowrap}
         + (st.runWorkflow ? '<div class="panel" style="gap:8px"><div class="phead"><div class="eyebrow">Run workflow: video-to-notes v3</div>' + UI.pill('running', 'info') + '</div>' + UI.timeline([{ title: 'Extract frames', text: 'media worker, 48 frames', tone: 'ok' }, { title: 'Transcribe audio', text: 'whisper, 12 min of audio', tone: 'ok' }, { title: 'Summarise', text: 'analyst, thinking medium', tone: 'accent' }, { title: 'Guardrail check', text: 'waiting', tone: '' }]) + '<div>' + UI.btn('Open in Runs', { size: 'sm', attrs: 'data-goruns' }) + '</div></div>' : '')
         + '</div></div>'
         + '<div class="composer"><div class="inner"><div class="hstack wrap gap6"><span class="relative">' + UI.chip(UI.icon('profiles', 12) + ' ' + esc(prof.id) + (prof.agent ? '' : ' · ' + esc(prof.model.split(':')[0])), true, 'data-pick="profile"') + '</span><span class="relative">' + UI.chip(UI.icon('knowledge', 12) + ' Finance KB', true, 'data-pick="kb"') + '</span>' + UI.chip('Travel policy', true, 'data-toggle') + UI.chip(UI.icon('attach', 12) + ' q3-ledger.csv, scanned ' + UI.label('confidential', { sm: true }), true, 'data-attach') + '<span class="relative">' + UI.chip(UI.icon('brain', 12) + ' Thinking: ' + esc(st.level), false, 'data-pick="level"') + '</span></div>'
-        + '<label class="sr" for="composer">Message</label><textarea id="composer" placeholder="Ask about the Finance KB, attach a file, or type / for a workflow"></textarea>'
+        + '<div class="skillchips" data-region="skills">' + skillChips(st, convo) + '</div>'
+        + '<div class="relative" data-region="picker">' + (st.picker ? pickerHtml(st, convo) : '') + '</div>'
+        + '<label class="sr" for="composer">Message</label><textarea id="composer" placeholder="Ask something. Type / for a tool or workflow, @ for an agent, + for a skill." aria-describedby="composer-hint"></textarea>'
+        + '<span id="composer-hint" class="sr">Slash opens the tool and workflow picker, at opens the agent picker, plus opens the skill picker; arrow keys move, Enter picks, Escape closes.</span>'
         + '<div class="hstack"><div class="hstack gap6">' + UI.iconbtn('attach', 'Attach a file', { attrs: 'data-attachbtn' }) + UI.iconbtn('workflows', 'Run a workflow', { attrs: 'data-wf' }) + UI.iconbtn('images', 'Generate an image', { attrs: 'data-img' }) + '</div><div class="hstack right gap12"><span class="muted num" style="font-size:12px">18,400 of 32,768 context tokens</span>' + UI.btn('Send', { kind: 'primary', icon: 'send', attrs: 'data-send' }) + '</div></div></div></div></div>'
         + '<aside class="inspector w300">' + artifactsHtml(st, convo) + '<div class="eyebrow">Sources</div><div class="vstack gap4" id="sources">' + (sources.length ? sources.map((s) => '<div class="src" data-src="' + s.n + '"><span class="n">' + s.n + '</span><span><span style="font-weight:600;display:block">' + esc(s.title) + '</span><span class="muted" style="font-size:12px">' + esc(s.sub) + '</span></span></div>').join('') : '<div class="muted" style="font-size:12px">No sources cited in this conversation.</div>') + '</div>'
         + '<div class="eyebrow">This turn</div>' + UI.kv([['Profile', '<a href="#" data-goprofile>' + esc(prof.id) + '</a>'], ['Model', '<span class="mono">' + esc(prof.model) + '</span>'], ['Guardrails', 'Finance baseline v12, ' + (st.guardStop ? '<span style="color:var(--danger-fg)">1 stop</span>' : '0 triggers')], ['Calculations', st.ungrounded ? '2 exact, <span style="color:var(--warn-fg)">1 ungrounded figure</span>' : '2 exact, 0 ungrounded figures'], ['Trace', '<span class="mono">4bf92f3577b34da6</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-copy="4bf92f3577b34da6"' })]], 1)
@@ -932,7 +1027,32 @@ table.dt .actions{white-space:nowrap}
       ctx.on('click', '[data-edit]', (e, t) => { const m = thread[+t.dataset.edit]; ctx.$('#composer').value = m.text; ctx.$('#composer').focus(); ctx.toast('Editing creates a new branch from this turn when you send.'); });
       ctx.on('click', '[data-suggest]', () => { ctx.$('#composer').value = 'How far over budget was travel in Q3, and what explains it?'; ctx.$('#composer').focus(); });
       ctx.on('click', '[data-send]', () => send(ctx, st, convo, thread));
-      ctx.on('keydown', '#composer', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(ctx, st, convo, thread); } });
+      // 1.7.0 (B-4007): keyboard-first pickers: "/" tools and workflows, "@" agents, "+" skills, from an empty composer.
+      ctx.on('input', '#composer', (e, t) => {
+        const v = t.value;
+        const open = /^[/@+]$/.test(v) ? v : (st.picker && v.startsWith(st.picker.key) ? st.picker.key : null);
+        if (open && (!st.picker || st.picker.key !== open)) st.picker = { key: open, q: v.slice(1), i: 0 };
+        else if (st.picker && open) st.picker.q = v.slice(1);
+        else if (st.picker && !open) st.picker = null;
+        const host = ctx.$('[data-region="picker"]'); if (host) host.innerHTML = st.picker ? pickerHtml(st, convo) : '';
+      });
+      ctx.on('keydown', '#composer', (e) => {
+        if (!st.picker) return;
+        const items = pickerItems(st, convo);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); st.picker.i = (st.picker.i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % Math.max(1, items.length); ctx.$('[data-region="picker"]').innerHTML = pickerHtml(st, convo); }
+        else if (e.key === 'Escape') { st.picker = null; ctx.$('[data-region="picker"]').innerHTML = ''; }
+        else if (e.key === 'Enter' && items.length) { e.preventDefault(); e.stopImmediatePropagation(); pick(ctx, st, convo, items[st.picker.i]); }
+      });
+      ctx.on('click', '[data-pickitem]', (e, t) => { const items = pickerItems(st, convo); pick(ctx, st, convo, items[+t.dataset.pickitem]); });
+      ctx.on('click', '[data-rmskill]', (e, t) => { st.skills = st.skills || {}; st.skills[convo.id] = (st.skills[convo.id] || SKILLS_ON[convo.id] || []).filter((x) => x.name !== t.dataset.rmskill); ctx.rerender(); ctx.toast('Skill removed. The very next turn goes without its instructions.'); });
+      ctx.on('click', '[data-approve]', (e, t) => { st.cards = st.cards || {}; const c = (CARDS[convo.id] || []).find((x) => x.id === t.dataset.approve); st.cards[c.id] = c.approval === 'owner+reviewer' ? 'held' : 'done'; c.result = c.result || '{"key":"FIN-1203","created":true}'; ctx.rerender(); ctx.toast(c.approval === 'owner+reviewer' ? 'Your approval is recorded; the guardrail\'s approver decides next in the Flags queue.' : esc(c.name) + ' ran as you. Audit entry chat.tool.approved written.', 'ok'); });
+      ctx.on('click', '[data-deny]', (e, t) => { st.cards = st.cards || {}; st.cards[t.dataset.deny] = 'denied'; ctx.rerender(); ctx.toast('Denied. Nothing ran; the model is told on the next turn.'); });
+      ctx.on('click', '[data-cancelrun]', (e, t) => { st.cards = st.cards || {}; st.cards[t.dataset.cancelrun] = 'cancelled'; ctx.rerender(); ctx.toast('Run cancelled from the chat; the Runs screen shows what it reached.'); });
+      ctx.on('click', '[data-wfapprove]', (e, t) => { st.wfDecided = st.wfDecided || {}; st.wfDecided[t.dataset.wfapprove] = true; ctx.rerender(); ctx.toast('Sign-off approved from this conversation; the chain resumes.', 'ok'); });
+      ctx.on('click', '[data-wfreject]', (e, t) => { st.cards = st.cards || {}; st.cards[t.dataset.wfreject] = 'cancelled'; ctx.rerender(); ctx.toast('Sign-off rejected; the run ends and the turn says so.'); });
+      ctx.on('click', '[data-gochain]', (e) => { e.preventDefault(); ctx.navigate('runs', { chain: 'ch-2a19' }); });
+      ctx.on('click', '[data-toolgo]', () => { const m = ctx.$('#overlay .modal'); const name = m.dataset.tool; const vals = Array.prototype.map.call(m.querySelectorAll('[data-arg]'), (x) => x.dataset.arg + '=' + JSON.stringify(x.value)).join('  '); ctx.closeOverlay(); ctx.$('#composer').value = ''; st.picker = null; ctx.toast('/tool ' + esc(name) + ' ' + esc(vals) + ' sent through the dispatcher and the tool-call guardrail.', 'ok'); });
+      ctx.on('keydown', '#composer', (e) => { if (st.picker) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(ctx, st, convo, thread); } });
       ctx.on('click', '[data-stop]', () => { const m = thread[thread.length - 1]; if (m && m.streaming) { clearTimeout(st.timer); thread.pop(); st.sent[convo.id].pop(); ctx.rerender(); ctx.toast('Cancelled. The GPU slot is released through the gateway.'); } });
       ctx.on('click', '[data-pick]', (e, t) => {
         const host = t.closest('.relative'); const ex = host.querySelector('.dropdown'); ctx.$$('.dropdown').forEach((d) => d.remove()); if (ex) return;
@@ -958,6 +1078,37 @@ table.dt .actions{white-space:nowrap}
       if (ctx.params.convo) { delete ctx.params.convo; }
     }
   });
+
+  /** B-4005: the skills on the conversation, as chips with their mode; a sticky one stays, a once one lasts one turn. */
+  function skillChips(st, convo) {
+    const on = (st.skills && st.skills[convo.id]) || SKILLS_ON[convo.id] || [];
+    if (!on.length) return '';
+    return '<span class="muted" style="font-size:12px">Skills:</span>' + on.map((s) => UI.chip(UI.icon('skills', 11) + ' ' + esc(s.name) + ' <span class="muted">' + (s.mode === 'once' ? 'this turn' : 'sticky') + '</span><span class="x" aria-hidden="true">×</span>', true, 'data-rmskill="' + esc(s.name) + '" aria-label="Remove skill ' + esc(s.name) + '"')).join('');
+  }
+  /** B-4007: the items a picker lists, filtered by what follows the key. */
+  function pickerItems(st, convo) {
+    const q = (st.picker.q || '').toLowerCase();
+    const hit = (x) => !q || x.name.toLowerCase().includes(q);
+    if (st.picker.key === '/') return CAPS.tools.filter(hit).map((t) => ({ kind: 'tool', name: t.name, desc: t.desc, side: t.side, schema: t.schema })).concat(CAPS.workflows.filter(hit).map((w) => ({ kind: 'workflow', name: w.name, desc: w.desc, schema: w.schema })));
+    if (st.picker.key === '@') return CAPS.agents.filter(hit).map((a) => ({ kind: 'agent', name: a.name, desc: a.desc + (a.offered ? ' Also offered to the model.' : '') }));
+    return CAPS.skills.filter(hit).map((s) => ({ kind: 'skill', name: s.name, desc: s.desc }));
+  }
+  function pickerHtml(st, convo) {
+    const items = pickerItems(st, convo);
+    const title = st.picker.key === '/' ? 'Tools and workflows this conversation may call' : st.picker.key === '@' ? 'Agents you may start here' : 'Skills to add';
+    const hidden = CAPS.hidden.filter((h) => (st.picker.key === '@' ? h.name.startsWith('agent:') : st.picker.key === '+' ? h.name.startsWith('skill:') : false));
+    return '<div class="dropdown picker" role="listbox" aria-label="' + esc(title) + '"><div class="dh"><span>' + esc(title) + '</span><span class="muted">↑↓ Enter Esc</span></div>'
+      + (items.length ? items.map((it, i) => '<button type="button" role="option" aria-selected="' + (i === st.picker.i ? 'true' : 'false') + '" class="' + (i === st.picker.i ? 'on' : '') + '" data-pickitem="' + i + '">' + (it.side ? '<span class="side">' + UI.pill(it.side, it.side === 'read' ? 'outline' : it.side === 'write' ? 'warn' : 'danger') + '</span>' : it.kind === 'workflow' ? '<span class="side">' + UI.pill('workflow', 'outline') + '</span>' : '') + esc(it.name) + '<span class="desc">' + esc(it.desc) + '</span></button>').join('') : '<div class="muted" style="padding:8px 12px;font-size:12px">Nothing matches.</div>')
+      + (hidden.length ? '<div class="muted" style="padding:6px 12px;font-size:11px;border-top:1px solid var(--line)">Not listed: ' + hidden.map((h) => esc(h.name.split(':')[1]) + ' (' + esc(h.reason) + ')').join('; ') + '</div>' : '') + '</div>';
+  }
+  function pick(ctx, st, convo, it) {
+    st.picker = null; const ta = ctx.$('#composer'); ctx.$('[data-region="picker"]').innerHTML = '';
+    if (it.kind === 'skill') { st.skills = st.skills || {}; const on = (st.skills[convo.id] || SKILLS_ON[convo.id] || []).filter((x) => x.name !== it.name); on.push({ name: it.name, mode: 'sticky' }); st.skills[convo.id] = on; ta.value = ''; ctx.rerender(); ctx.toast('Skill ' + esc(it.name) + ' added, sticky. Its instructions join the system prompt from the next turn.', 'ok'); return; }
+    if (it.kind === 'agent') { ta.value = '@' + it.name + ': '; ta.focus(); ctx.toast('Say what the agent should do. Enter starts a run bound to this conversation.'); return; }
+    // A tool or workflow: a form from its input schema, or text the profile turns into arguments.
+    ctx.modal({ title: (it.kind === 'tool' ? 'Call ' : 'Start ') + esc(it.name), body: '<div class="vstack gap8"><div class="fg2" style="font-size:13px">' + esc(it.desc) + (it.side && it.side !== 'read' ? ' A ' + it.side + ' tool waits for your approval on a card before it runs.' : '') + '</div>' + (it.schema || []).map((f) => UI.field(f, UI.input('', { attrs: 'data-arg="' + esc(f) + '"' }))).join('') + UI.field('Or describe it', UI.textarea('', { rows: 2, placeholder: 'Free text the profile\'s model turns into arguments' })) + '</div>', actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(it.kind === 'tool' ? 'Call' : 'Start', { kind: 'primary', attrs: 'data-toolgo' }) });
+    const m = ctx.$('#overlay .modal'); if (m) m.dataset.tool = it.name;
+  }
 
   /** B-8001: the artifacts of the conversation, and the one open with its version switcher and sandboxed render. */
   function artifactsHtml(st, convo) {

@@ -13,7 +13,7 @@ import { detectPii, detectSecrets, PII_KINDS, SECRET_KINDS, type Detection } fro
 import { scoreLinear, trainLinear, type LinearHead } from './linear.js';
 import { complete, GUARD_CATEGORIES, guardMessages, parseGuardVerdict } from './model.js';
 
-export const ENGINES = ['deterministic', 'linear', 'guard', 'llm', 'vision'] as const;
+export const ENGINES = ['deterministic', 'linear', 'guard', 'llm', 'vision', 'imported'] as const;
 export type Engine = (typeof ENGINES)[number];
 
 /** Below this many labelled cases per label, precision and recall are not reliable and a classifier cannot publish. */
@@ -29,6 +29,15 @@ export interface ClassifierConfig {
   instructions?: string;
   /** linear: the trained head. */
   head?: LinearHead | null;
+  /** 1.7.0 (B-3806): imported: the text-classification model the classifier worker serves (its staged files). */
+  model?: { importId: string; ref: string; name: string; revision: string | null; files: { name: string; key: string; sha256: string | null; bytes: number }[] };
+}
+
+/** B-3806: the classifier worker, which scores imported engines: `POST <url>/classify`. */
+export interface ClassifierWorker {
+  url: string | null;
+  timeoutMs: number;
+  fetch?: typeof fetch;
 }
 
 export interface LabelMetrics {
@@ -187,7 +196,8 @@ export class ClassifierService {
     private readonly db: Db,
     private readonly keys: DataKeys,
     private readonly gateway: Gateway,
-    jobs: JobQueue
+    jobs: JobQueue,
+    private readonly worker: ClassifierWorker = { url: null, timeoutMs: 30_000 }
   ) {
     jobs.register('classifier.evaluate', (p, ctx) => this.evaluateJob(String(p.tenantId ?? ctx.job.tenant_id), String(p.classifierId), ctx), { timeoutMs: 60 * 60_000 });
     jobs.register('classifier.train', (p, ctx) => this.trainJob(String(p.tenantId ?? ctx.job.tenant_id), String(p.classifierId), ctx), { timeoutMs: 60 * 60_000 });
@@ -327,6 +337,8 @@ export class ClassifierService {
       for (const l of labels) scores[l] = v.categories.includes(l) ? 1 : 0;
     } else if (c.engine === 'vision') {
       throw new Error(`${c.name} classifies images; give it an image, not text`);
+    } else if (c.engine === 'imported') {
+      scores = await this.scoreImported(c, text, labels);
     } else {
       const prompt = `Classify the text into exactly one of these labels: ${labels.join(', ')}.${c.config.instructions ? ` ${c.config.instructions}` : ''} Answer with JSON only, in the form {"label": "<one of the labels>", "confidence": <a number from 0 to 1>}.`;
       const out = await complete(this.gateway, tenantId, c.config.profile ?? '', label, [{ role: 'system', content: prompt }, { role: 'user', content: text }]);
@@ -345,6 +357,39 @@ export class ClassifierService {
     const hits = labels.filter((l) => (scores[l] ?? 0) >= (thr.get(l) ?? 0.5) && (scores[l] ?? 0) > 0);
     const top = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
     return { scores, spans, top: top ? { label: top[0], score: top[1] } : null, hits, engine: c.engine, ms: Math.round((performance.now() - t0) * 10) / 10 };
+  }
+
+  /**
+   * B-3806: an imported engine is scored by the classifier worker, which loads the model's staged files (named by
+   * their blob keys, which it reads from the same store) and answers a score per label.
+   */
+  private async scoreImported(c: ClassifierRow, text: string, labels: string[]): Promise<Record<string, number>> {
+    if (!this.worker.url) throw new Error(`${c.name} is an imported engine and no classifier worker is configured (CLASSIFIER_WORKER_URL)`);
+    if (!c.config.model) throw new Error(`${c.name} names no model files`);
+    const f = this.worker.fetch ?? fetch;
+    const res = await f(`${this.worker.url.replace(/\/+$/, '')}/classify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: { ref: c.config.model.ref, name: c.config.model.name, revision: c.config.model.revision, files: c.config.model.files.map((x) => ({ name: x.name, key: x.key, sha256: x.sha256 })) }, labels, text: text.slice(0, 20_000) }),
+      signal: AbortSignal.timeout(this.worker.timeoutMs)
+    });
+    if (!res.ok) throw new Error(`The classifier worker answered ${res.status}`);
+    const body = (await res.json()) as { scores?: Record<string, number> };
+    if (!body.scores || typeof body.scores !== 'object') throw new Error('The classifier worker answered without scores');
+    const out: Record<string, number> = {};
+    for (const l of labels) out[l] = Math.max(0, Math.min(1, Number(body.scores[l] ?? 0) || 0));
+    return out;
+  }
+
+  /** B-3806: a classifier whose engine is a text-classification model a model import staged. */
+  async createImported(tenantId: string, input: { name: string; slug: string; labels: string[]; model: NonNullable<ClassifierConfig['model']>; description?: string }, by: { userId: string; name: string }): Promise<ClassifierRow> {
+    let slug = input.slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '').slice(0, 63) || 'imported';
+    for (let i = 2; await this.get(tenantId, slug); i++) slug = `${slug.slice(0, 60)}-${i}`;
+    const t = Date.now();
+    const id = ulid();
+    const labels = [...new Set(input.labels.map((l) => l.trim()).filter(Boolean))].slice(0, 20).map((label) => ({ label, threshold: 0.5 }));
+    await this.db('classifiers').insert({ id, tenant_id: tenantId, slug, name: input.name.slice(0, 100), engine: 'imported', description: (input.description ?? '').slice(0, 1000) || null, status: 'draft', version: 1, owner: by.name || null, dataset: `${slug}-eval`, config: JSON.stringify({ labels, model: input.model }), created_by: by.userId, created_at: t, updated_at: t });
+    return (await this.get(tenantId, id))!;
   }
 
   /**

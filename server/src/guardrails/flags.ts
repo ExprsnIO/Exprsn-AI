@@ -275,7 +275,7 @@ export class FlagService {
     const excerpt = !v.restricted && f.excerpt ? json<{ before: string; span: string; after: string } | null>(await this.keys.open(f.tenant_id, f.excerpt, `flag:${f.id}`), null) : null;
     const prior = f.rule_id ? await this.prior(f.tenant_id, f.rule_id, f.id) : { confirmed: 0, dismissed: 0 };
     const own = !v.restricted && f.conversation_id ? !!(await this.db('conversations').where({ id: f.conversation_id, user_id: p.userId }).first('id')) : false;
-    const held = f.kind === 'hold' && !v.restricted && (f.source_kind === 'message' || f.source_kind === 'api-request' || f.source_kind === 'channel-message' || f.source_kind === 'app-form-submission') && f.source_id && this.heldAnswer ? await this.heldAnswer(f.tenant_id, f.source_id, f.source_kind) : null;
+    const held = f.kind === 'hold' && !v.restricted && (f.source_kind === 'message' || f.source_kind === 'api-request' || f.source_kind === 'channel-message' || f.source_kind === 'app-form-submission' || f.source_kind === 'chat-invocation') && f.source_id && this.heldAnswer ? await this.heldAnswer(f.tenant_id, f.source_id, f.source_kind) : null;
     const history = ((await this.db('guard_flag_events').where({ flag_id: f.id }).orderBy('created_at')) as { action: string; actor: string | null; note: string | null; created_at: number }[]).map((e) => ({ action: e.action, actor: e.actor, note: v.restricted ? null : e.note, at: Number(e.created_at) }));
     return { ...v, excerpt, prior: v.restricted ? null : prior, ownConversation: own, history, ...(f.kind === 'hold' ? { held: held ? { messageId: f.source_id, state: held.state, content: held.content } : null } : {}) };
   }

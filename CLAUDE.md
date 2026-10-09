@@ -239,6 +239,19 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   clearance; `presence.ts` `s.presence`: chosen or derived status, connection rows per instance with a heartbeat, one
   publish per change on `TOPICS.presence`), with `routes/people.ts` (`/api/people`, `/api/presence`) and
   `realtime/presence.ts` (`presence.watch`, `presence.idle`, `presence.changed` on the console's socket).
+- 1.6.0 Sprint 35a: `gateway/server.ts` (the `ModelServer` interface, B-4301: `version`, `models`, `loaded`, `show`,
+  `load`, `unload`, `pull`, `delete`, `chat`, `embed`; `Unsupported` for what a server cannot do, which the gateway,
+  placements and the catalogue skip), `gateway/openai-server.ts` (B-4302, B-4303: `kind: openai` instances on a URL or a
+  Unix socket with a vault-held bearer token, Chat Completions mapped onto the gateway's chat, the `instance.probe`
+  job), `gateway/repo.ts` (instance kind, socket and token columns of `037_model_servers`), server-held catalogue
+  entries (`format: server`, B-4304) in `routes/admin/gateway.ts`. `server/test/fake-openai-server.ts` stands in for
+  `fm serve`, `mlx_lm.server` and `llama-server`.
+- 1.6.0 Sprint 35c: `ops/storage.ts` (`s.storage`, B-4204: stores, usage by workspace, user and kind, quotas, the
+  quarantine) and `ops/blob-integrity.ts` (the `ops.blobs.verify` job: missing, orphan and mismatched objects, the dry
+  run and deletion, the copy-then-switch migration `ops.blobs.migrate` over `platform/blob-switch.ts`, the switchable
+  store every process follows); `config/settings.ts` and `settings.generated.ts` (B-4205: the settings descriptor
+  `npm run gen:settings -w server` writes, what each instance reports, database overrides under dual control applied
+  before the services are built) behind `routes/admin/storage.ts` and `routes/admin/platform-settings.ts`.
 - 1.6.0 Sprint 35d: `social/admin.ts` (`s.socialAdmin`, B-4206: workspace policies the feed, groups and social
   relations read, the tenant's digest and summary settings, trending exclusions, legal-hold conversation exports under
   dual control as the job `messaging.conversation.export`, realtime counts from `RoomStats` in `realtime/rooms.ts`)
@@ -349,6 +362,23 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `resolveSession` for `exe_` bearers) behind `routes/apps-embed-public.ts` (`/embed/...` pages with their own CSP
   and `/api/public/embeds/*`, outside `/api`); `web/js/embed.js` is the pages' script. `server/test/sprint39d-helpers.ts`
   mints host tokens and builds a tenant CA without the signer.
+- 1.7.0 Sprint 40a: `chat/invocations.ts` (`s.chatInvocations`, B-4001 to B-4009: `capabilities`, tool calls from the
+  composer and the cards write tools wait on (`callTool`, `proposeFromModel`, `decide`, `resolveHold` for a flag's
+  decision, `expireCards` in the chat sweep), `@agent` runs and workflow runs bound to a conversation (`startAgent`,
+  `startWorkflow`, `runDone` from `onCallerDone` with caller kind `chat-turn`), skills on a conversation (`addSkill`,
+  `skillPrompt`, `dropOnceSkills`)); in `chat/service.ts` the turns these make (`appendTurn`, `completeTurn`, tool
+  turns in `historyRows`, `toolArgumentsFromText`, write tools and `agent:<name>` callees offered in `generate`,
+  `awaitHandedRun`); `AgentService.runFromChat` (a run the model started from a chat turn).
+
+- 1.7.0 Sprint 40b: `imports/rows.ts` (B-3804: the streaming CSV, JSON and JSON Lines parsers and the paged readers for
+  the CKAN datastore, Socrata, e-Stat, OGD and SDMX-CSV, capped at the sample or `IMPORT_DATASET_MAX_ROWS`),
+  `imports/datasets.ts` (`s.imports.datasets`: `inspect`, `plan` with the schema preview and PII flags, `request`, the
+  job `imports.dataset`, the destinations into `training.registerImported`, `guard.classifiers.addCases` and
+  `knowledge.create` + `addSource(kind: dataset)`, and `knowledgeItems`, the rows of a dataset source as documents on
+  every refresh, set on `knowledge.datasetItems`); `datasetDetail` on every dataset adapter; the `imported` classifier
+  engine (B-3806: `config.model` names the staged files, `scoreImported` calls the worker at `CLASSIFIER_WORKER_URL`,
+  `createImported`), and `registerClassifier` in `imports/service.ts` for a model import with `target: classifiers`.
+  Fakes in `server/test/sprint40b-fakes.ts` (an open-data portal, a dataset hub, a classifier worker).
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
@@ -363,7 +393,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   upstream identity provider; `fake-account.ts` (mail, HIBP range API), `sprint13-fakes.ts` (webhook receiver,
   Stripe) and `fake-openbao.ts` (transit) serve the 1.1.0 suites, and `sprint18-fakes.ts` (Harbor, Verdaccio, devpi)
   the 1.2.0 ones, and `sprint22-fakes.ts` (OTLP collector, Kubernetes API, SNTP, Redis) and `sprint23-fakes.ts` (S3
-  bucket, web site) the 1.3.0 ones; `seed-gateway.ts` and `retrieval-seed.ts` seed pools, models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
+  bucket, web site) the 1.3.0 ones; `sprint37b-fakes.ts` (an OAuth authorization server for the MCP client) and
+  `fake-openai-server.ts` (a Chat Completions server) the 1.6.0 ones, with `sprint38c-policies-helpers.ts`,
+  `sprint39b-helpers.ts` (the CRM app and its approval workflow), `sprint39c-helpers.ts` (`SqliteTableDriver` for
+  outside tables) and `sprint39d-helpers.ts` (embed keys and a tenant CA) building the apps their suites share, and
+  `sprint38a-siem.test.ts` starting real HTTPS and syslog-over-TLS receivers; `seed-gateway.ts` and
+  `retrieval-seed.ts` seed pools, models and documents). `loopback.ts` and `setup-loopback.ts` (a Vitest setup file) serve each test app on 127.0.0.1
   before SuperTest sees it, so another process cannot shadow the port on macOS. `server/test/integration/` runs the
   stores and platform paths against real servers.
 
@@ -398,6 +433,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   finding of its WCAG A/AA checker (`e2e/tests/support/a11y.ts`) or of axe-core (`e2e/tests/support/axe.ts`, Standard
   and Enhanced, light and dark), and on sideways scrolling at 320 and 640 px, for screens and, through
   `e2e/tests/y-reflow-overlays.spec.ts`, their dialogs and drawers.
+- 1.6.0 console additions: `analytics.js` (the Analytics screen, B-7401), `embed.js` (the script of the public and
+  signed embed pages served outside the console, B-8701), the Models screen's Inventory tab and Model servers
+  drawer, the Usage and audit screen's Exports (JSONL exports, SIEM destinations) and Compliance (DLP, legal holds,
+  compliance exports) tabs, the Apps screen's Policies, Deployments, API and Embed tabs beside Entities, Records,
+  Forms and Triggers, the Chat inspector's Artifacts panel (also on `shared.js`), the Profiles and Registry red-team
+  and identity dialogs, and `App.put` (the client had no PUT helper before Sprint 38b).
 - `web/js/screens/shared.js` is the signed-out page for anonymous share links (`#/shared`); `person.js` (1.5.0) is the
   Profile page (`#/person?user=<id>`), not in the sidebar, opened from people's names and swept like Settings.
 - Live screens that receive socket events register their listeners on `App.socket` and remove them when the route

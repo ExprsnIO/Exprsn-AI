@@ -773,6 +773,25 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   /** Approvals waiting on the caller (by role, or their own dry runs). */
+  /**
+   * 1.7.0 (B-4009): a run's end for the conversation that started it: its state, the outputs of its passed steps as
+   * JSON (opened with the tenant key), its error and label.
+   */
+  async stateOfRun(tenantId: string, runId: string): Promise<{ state: RunState; output: string | null; error: string | null; label: Label } | null> {
+    const run = await this.runRow(runId);
+    if (!run || run.tenant_id !== tenantId) return null;
+    if (!TERMINAL.includes(run.state)) return { state: run.state, output: null, error: run.error, label: run.label };
+    const steps = (await this.d.db('workflow_steps').where({ run_id: run.id }).orderBy('started_at')) as { id: string; node_id: string; state: StepState; output: string | null; tenant_id: string }[];
+    const graph = JSON.parse(run.graph) as WfGraph;
+    const outputs: Record<string, unknown> = {};
+    for (const st of steps) {
+      if (st.state !== 'passed' || !st.output) continue;
+      const node = graph.nodes.find((n) => n.id === st.node_id);
+      outputs[node?.title ?? st.node_id] = await this.open(run.tenant_id, `wfstep:${st.id}`, st.output, null);
+    }
+    return { state: run.state, output: run.state === 'succeeded' ? JSON.stringify(outputs).slice(0, 64 * 1024) : null, error: run.error, label: run.label };
+  }
+
   async pendingApprovals(p: Principal) {
     const rows = ((await this.d.db('workflow_approvals').where({ tenant_id: p.tenantId, state: 'pending' }).orderBy('created_at')) as ApprovalRow[]).map((a) => ({ ...a, due_at: Number(a.due_at), created_at: Number(a.created_at), decided_at: null }));
     const out = [];

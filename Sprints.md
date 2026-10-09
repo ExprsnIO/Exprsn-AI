@@ -37,7 +37,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
-| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
+| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** (B-2105 partial) |
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **Done** (screens in Sprint 30) |
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Connections | **Done** |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | **Done** |
@@ -47,11 +47,11 @@ from prototype data to live only when every control on it is backed by the serve
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge (1.6.0) | Groups and events, Storage, Apps, Vault, Knowledge, Classifiers | **Done** |
 | 36b | Model thinking templates; the tool-calling evaluation sends a system prompt (1.6.0; B-11707, pulled forward from 1.7.0 on 2026-10-08) | Models, Profiles | Next |
-| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, User stores, Settings, MCP servers | **Done** (B-7202 partial) |
-| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Training, Usage and audit, Settings, Registry, Apps, Chat | **Done** |
-| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Apps, Settings | **Done** |
-| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | Next |
-| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Planned |
+| 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, Profiles, Identity, User stores, Settings, MCP servers | **Done** (B-7202 partial) |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Usage and audit, Profiles, Registry, Runs, Flags, Apps | **Done** |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Shared, Apps, Settings | **Done** |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | **Done** |
+| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Next |
 | 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, custom roles, group moderation, event extras, linked conversations (1.7.0) | Vault, Settings, Groups and events | Planned |
 | 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Jobs and queues, Plugins and events, AT-Protocol, Messages and feed | Planned |
 | 44–50 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.7.0, which ends at Sprint 43; Sprints 40 to 46 until 2026-10-07) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
@@ -64,19 +64,20 @@ B-5101, 1.7.0's B-5901, and the same for 1.8.0 and later).
 Current codebase: every sidebar screen is live (Chat, Compare, Runs, Knowledge, Memory, Workflows, Scripts, Media,
 Images, Files, Apps, Groups and events, Messages and feed, Models, Profiles, Pools, Registry, MCP servers, Guardrails,
 Flags, Classifiers, Moderation, Channels, Connections, Training, Tenants, Roles and access, User stores, Identity,
-Certificates, Vault, Plugins and events, AT-Protocol, Zones, Usage and audit and Platform), plus Sign in, Settings
-(with app passwords for DAV clients and the public profile and status), the Person page (a profile, opened from
+Certificates, Vault, Plugins and events, AT-Protocol, Zones, Usage and audit, Analytics, Overview, Jobs and queues,
+Storage, Configuration, Social and messaging and Platform), plus Sign in, Settings (with app passwords for DAV
+clients, the public profile and status, MCP access and API keys limited to an app), the Person page (a profile, opened from
 people's names) and the signed-out Shared page for anonymous links; seventy-two database migrations (`001_core` to
 `041d_entity_api_embeds`); 1170 unit and API tests across 126 files, 1 skipped (against a fake Ollama, a fake MCP server, fake
 script, media, image and training workers, a fake ACME directory, a fake upstream identity provider, a fake OpenBao, a
 fake OTLP collector, Kubernetes API, SNTP server and Redis, a fake S3 bucket and web site, fake mail, HIBP range,
 webhook, Stripe, DNS, Harbor, Verdaccio and devpi endpoints, recorded DAV client exchanges and the AT-Protocol interop
 vectors) plus the integration suite against PostgreSQL, MySQL, OpenLDAP, Redis, MongoDB and GreenMail (IMAP),
-`litmus` for WebDAV and the PDS against the reference AppView in CI; over 100 Playwright tests across the console,
+`litmus` for WebDAV and the PDS against the reference AppView in CI; 168 Playwright tests across the console,
 including axe-core, the in-page accessibility checker and the reflow checks for screens, dialogs and drawers; a Helm
 chart with an optional signer sidecar, supply-chain CI, Prometheus rules and Grafana dashboards, a streaming load test
-and a platform load test. The version is `1.5.0`: Sprints 29 to 34 delivered the [1.5.0 backlog](Backlog-1.5.0.md)
-(Sprint 33 moved to 1.7.0), after Sprints 24 to 28 delivered the server-only [1.4.0 backlog](Backlog-1.4.0.md),
+and a platform load test. The version is `1.6.0`: Sprints 35 to 39 delivered the [1.6.0 backlog](Backlog-1.6.0.md),
+after Sprints 29 to 34 delivered the [1.5.0 backlog](Backlog-1.5.0.md) (Sprint 33 moved to 1.7.0), Sprints 24 to 28 delivered the server-only [1.4.0 backlog](Backlog-1.4.0.md),
 Sprints 20 to 23 the [1.3.0 backlog](Backlog-1.3.0.md), Sprints 16 to 19 the [1.2.0 backlog](Backlog-1.2.0.md) and
 Sprints 11 to 15 the [1.1.0 backlog](Backlog-1.1.0.md). Sprints 35 to 39 are done and released as 1.6.0 from the
 [1.6.0 backlog](Backlog-1.6.0.md): the platform administration screens, model servers beyond Ollama, groups depth,
@@ -1169,6 +1170,211 @@ B-3301 to B-3305 (`031_access`) and B-3601 were done on `sprint-29a` and `sprint
 B-3404, B-3407, B-3408 and B-3413 were built in Sprint 30. Sprints 30 to 34 are summarised in
 [Backlog-1.5.0.md](Backlog-1.5.0.md) (Progress) and below.
 
+## Sprint 30: Domain screens, CalDAV and CardDAV, memory management, MongoDB (done)
+
+Delivered on `sprint-30` (PR #46), migrations `032_dav` and `032c_memory`:
+
+- **B-3101 to B-3104**: CalDAV and CardDAV on the file store at `/dav`, with DAV-only app passwords; the conformance
+  fixtures were written from the clients' documented requests (B-3104 stays partial; the capture of real client
+  traffic, B-3606, was later dropped by the owner).
+- **B-3701 to B-3703**: model-based memory management (the tenant's memory settings, consolidation and forgetting by
+  a profile).
+- **B-3602**: MongoDB as a read-only data connection.
+- **B-3405, B-3409 to B-3412, B-3414** and Sprint 29's six screens live: Moderation, Groups and events, Channels,
+  Messages and feed, Roles and access (new), Memory and Connections changed, each with its accessibility and reflow
+  checks. WebDAV for the file store was built ahead and parked for Sprint 34.
+- Unit suite 851 passed; Playwright 96 passed.
+
+## Sprint 31: AT-Protocol PDS and feed generators, import repositories, model import (done)
+
+Delivered on `sprint-31` (PR #47), migrations `033_pds`, `033b_feeds` and `033c_imports`:
+
+- **B-2901 to B-2906**: the AT-Protocol personal data server, with a post written to it appearing in the reference
+  AppView in CI; **B-3001 to B-3004**: feed generators and their published records; **B-3604**: relay commit
+  signatures verified; **B-3603**: the RSVP race closed on all three databases.
+- **B-3801 to B-3803**: import repositories (Hugging Face compatible hubs, the Ollama library and others under dual
+  control), browsing and model import. The dataset half (B-3804 to B-3807) moved to 1.7.0's Sprint 40.
+- **B-3406**: the AT-Protocol screen live; Models gained the import entry point.
+- Unit suite 935 passed; PostgreSQL and MySQL integration passed; Playwright 99 passed.
+
+## Sprint 32: Workflows 2 and the chain context (done)
+
+Delivered on `sprint-32` (PR #48, on `main` by #49), migrations `034_workflows2`, `034b_workflow_triggers` and
+`034c_workflow_steps`:
+
+- **B-4101**: one chain context with `CHAIN_MAX_DEPTH` and root budgets across chat turns, agent runs, workflow runs,
+  tool calls, skill loads, plugin actions and app triggers.
+- **B-3901 to B-3910**: sub-workflow, agent, `map` and `loop` steps and skills on model steps; event and schedule
+  triggers on the workflow, per-step retry, the on-failure edge and dead letters with redrive, signed
+  `exprsn-workflow/1` bundles; five domain built-in tools and the plugin broker's domain calls, approval forms, the
+  `notify` and `webhook` steps; the live Workflows screen.
+- **B-3415**: app passwords and the DAV discovery URLs in Settings.
+- Known gaps in `docs/security.md`: cost is metered as GPU time, not priced; a chat turn's own tokens are not charged
+  to its chain; only feed posts record the run as their source; a redrive runs as the admin who redrives it.
+
+## Sprint 33: moved
+
+Agents, tools and skills in chat and the dataset import were moved to 1.7.0 on 2026-10-05 (Sprint 38 there, renumbered
+Sprint 40 on 2026-10-07).
+
+## Sprint 34: Chaining, WebDAV, profiles and presence, IMAP in CI, release 1.5.0 (done)
+
+Delivered on `sprint-34` and its parts (PR #50), migrations `036_chains`, `036b_profiles` and `036c_dav_files`:
+
+- **B-4102 to B-4109**: chaining across kinds (agents delegating to agents, skills composing, workflows an agent
+  lists), chain checks at publish with "used by", held calls decided from the root with typed errors, the chain view
+  with replay from a node, and the chain tree boards and live screens.
+- **B-3201 to B-3203**: WebDAV for the file store with COPY, MOVE, locks, quotas and `litmus` in CI.
+- **B-5801, B-5802**: profiles and presence, with the Person page and the Settings panels live.
+- **B-3605**: the IMAP channel adapter against GreenMail in CI. **B-3501**: the release. B-3606 (capturing real DAV
+  client traffic) was dropped by the owner on 2026-10-06.
+- Unit suite 985 passed and 1 skipped across 86 files. Known gaps in `docs/security.md`: cycles through a model's
+  choice are bounded at run time rather than refused at publish; a delegate's steps and wall time count only at the
+  root; WebDAV locks are advisory to the console; presence follows shared workspaces only.
+
+## Sprint 35: Model servers beyond Ollama, platform administration screens, tenant templates (done)
+
+Delivered on `sprint-35` and its parts 35a to 35d (PR #54), migrations `037_model_servers`, `037b_platform_ops`,
+`037c_platform_storage` and `037d_platform_social`:
+
+- **B-4301 to B-4307**: the gateway client behind a `ModelServer` interface; `kind: openai` instances on a URL or a
+  Unix socket with an optional bearer token in the vault (Apple's `fm serve`, `mlx_lm.server`, `llama-server`); Chat
+  Completions mapped onto the gateway; server-held models in the catalogue without a pull; the `instance.probe` job;
+  Model servers on the Models screen. A smoke against the real `fm serve` on macOS 27 approved `system`, which then
+  answered a tool-calling chat turn.
+- **B-4202 to B-4207**: the five platform administration screens live with their accessibility and reflow checks:
+  Overview (instance heartbeats, computed alerts, drain), Jobs and queues (pause by type, schedules, dead letters,
+  cache), Storage (integrity job, orphan deletion after a dry run, copy-then-switch blob migration), Configuration (a
+  generated settings descriptor, overrides under dual control) and Social and messaging (feed, groups, messaging,
+  realtime and relations policies; legal-hold export under dual control).
+- **B-4501**: tenants created from the enterprise, team and personal templates.
+- Unit suite 1036 passed; PostgreSQL and MySQL integration passed; each part ran its own Playwright specs. Known gaps
+  in `docs/security.md`: realtime counts and schedule counters are per instance, a drain does not end open streams,
+  provisioning is not one transaction, exports hold at most 50 000 messages, the Pools screen's instance form edits
+  Ollama settings only, and no server exposes a model file hash.
+
+## Sprint 36: Groups depth, blob deduplication, held form values, reveal anomalies, image classification (done)
+
+Delivered on `sprint-36` and its parts 36a to 36c (PR #64), migrations `038_groups2`, `038b_dedup_held_vault` and
+`038c_knowledge_images`:
+
+- **B-4401 to B-4405**: channels inside a group, a discovery page ranked by shared members and activity, places on
+  groups and points on events with distance filters (PostGIS when installed), trending groups, tenant group categories
+  managed from Social and messaging.
+- **B-4601, B-4701, B-4803**: blob deduplication within a tenant with the savings on Storage; public form values the
+  guardrail would hold queued for review in Moderation; vault reveal anomaly flags for a secret's owner.
+- **B-8801 to B-8805**: image classification in Knowledge: image documents and the images inside PDF and Word
+  through quarantine and the image safety check, a vision profile's caption and OCR as their text, the `vision`
+  classifier engine, label filters in search and `knowledge_search`, the Knowledge and Classifiers screens.
+- Unit suite 1062 passed; PostgreSQL and MySQL integration passed; prototype smoke 50 of 50. Known gaps in
+  `docs/security.md`: a group's place is shown to readers of the group, coordinates are not sealed, duplicates stored
+  before 1.6.0 stay separate, no server-side thumbnails, vision calls metered as embedding usage.
+
+Sprint 36b in the table above (B-11707, model thinking templates, 2 points) was pulled forward from 1.7.0 on 2026-10-08
+and is built after the release.
+
+## Sprint 37: HTTP tool kind, prompt-injection defence, MCP server, SCIM, vault sharing, quotes (done)
+
+Delivered on `sprint-37` and its parts 37a to 37c (PR #65), migrations `039_tools_injection`, `039b_mcp_server` and
+`039c_scim_vault_posts`:
+
+- **B-8901 to B-8904**: registry tools that call web APIs from a URL template, headers, a body and a response
+  mapping, only to the tenant's allowed hosts, credentials only as vault references, every call metered and audited.
+- **B-6901 to B-6903**: knowledge chunks, crawled pages and tool, MCP and HTTP results reach the model marked as
+  untrusted content; an `untrusted-content` checkpoint with an injection rule; a 57-attack, 30-benign corpus in CI
+  with a 0.9 detection and 0.1 false-positive bar.
+- **B-7101 to B-7103**: a per-workspace MCP endpoint that publishes workflows, agents, knowledge bases, registry
+  tools and app records as the signed-in user; an OAuth 2.1 resource server of the tenant's issuer (RFC 9728, RFC
+  8707); per-user OAuth with PKCE in the MCP client.
+- **B-7201, B-7202**: SCIM 2.0 Users and Groups with deprovisioning that ends sessions, tokens, keys and app
+  passwords in one request, and group mappings to roles. B-7202 is partial: the Entra ID and Okta validators could
+  not reach this server; a local conformance suite covers what they check (`docs/identity.md`).
+- **B-4801, B-4802, B-4901**: vault secrets shared with one principal, MongoDB dynamic credentials, quote posts and
+  per-post visibility.
+- Unit suite 1098 passed; PostgreSQL and MySQL integration passed; each part ran its own Playwright specs. Known gaps
+  in `docs/security.md`: the injection heuristic is tuned on its own corpus, the MCP server has no sessions, resources
+  or prompts, write calls over MCP need a browser approval each time, an unlisted post stays in the bookmarks of
+  whoever saved it.
+
+## Sprint 38: AI inventory, analytics, audit export, red-team suites, agent identities, policies, DLP (done)
+
+Delivered on `sprint-38` and its parts 38a to 38c (PR #69), migrations `040_inventory_analytics`,
+`040b_redteam_agents` and `040c_policies_dlp`:
+
+- **B-7301, B-7302**: one register of models, profiles, agents, workflows, tools, MCP servers and datasets with an
+  owner, an oversight role, provenance, lineage, an impact assessment and known issues, on the Models screen's
+  Inventory tab, exported as CSV or JSON; an owner gate for agents as a tenant setting, off by default.
+- **B-7401 to B-7403**: the Analytics screen (new) over `usage_records` by workspace, group, model, profile, user and
+  day; prices per model or pool with a chargeback export; `gen_ai.*` usage attributes on the chat stream span.
+- **B-7501**: time-windowed JSONL audit exports ending in a KMS-signed checkpoint, verified offline with
+  `audit:verify-export`; per-tenant SIEM destinations (HTTPS, syslog over TLS) under dual control.
+- **B-7001, B-7002**: red-team suites run against profiles, agents and workflows by the job `redteam.run` with a
+  deterministic judge; a publish gate beside the evaluation gate; every successful attack a flag a reviewer turns
+  into an eval case.
+- **B-7701, B-7801**: an agent as a principal with roles, a label ceiling and scoped keys, its runs narrowed to both
+  grants; handoffs to a specialist agent through the chain, named on the Runs screen.
+- **B-8101 to B-8103**: reusable policies per app entity with row conditions and field permissions with masks,
+  enforced in records queries, tools, forms, exports and workflows, with an editor and an explain view on Apps.
+- **B-7601 to B-7603**: PII, secret and tenant-pattern detectors that raise the label and hold or redact by rule;
+  legal holds on users and workspaces under dual control; a compliance export API with the `compliance:export` scope,
+  on the Usage and audit screen's Compliance tab.
+- Unit suite 1130 passed; PostgreSQL integration passed on the merged migrations; prototype smoke 51 of 51; the
+  touched screens' Playwright specs passed. Known gaps in `docs/security.md`: a fixed English attack catalogue and a
+  deterministic judge; identities narrow by permission, not by object; a handoff hands the task, not the messages;
+  costs are computed on read; no offline HMAC check; a record created outside one's own rows is accepted then
+  unreachable; DLP inspects finished answers; exports are unsigned.
+
+## Sprint 39: Content credentials, chat artifacts, app packages, data model drafts, entity APIs, embedding, release 1.6.0 (done)
+
+Delivered on `sprint-39` and its parts 39a to 39d (PR #70, then #71 onto `main`), migrations
+`041_provenance_artifacts`, `041b_app_packages`, `041c_model_gen_sync` and `041d_entity_api_embeds`:
+
+- **B-7901**: a generated PNG carries a C2PA manifest store signed by a content-credentials certificate the tenant's
+  issuing CA makes with its key in custody, verified by the API and offline by `exprsn-ai c2pa:verify`.
+- **B-8001**: fenced blocks of an answer become versioned artifacts of the conversation, in the Chat inspector and
+  for share readers, rendered in a sandboxed frame from a short-lived capability URL.
+- **B-8201 to B-8204**: signed, sealed `exprsn-app/2` packages; pipelines of three stages with promotion that cannot
+  skip a stage and needs an approval workflow before production; a backup before every deployment, a 365-day history
+  and rollback on Apps; git export and import as one file per object.
+- **B-8301, B-8401, B-8402, B-8501**: a description becomes a diff of entities, fields, relations, formulas, state
+  machines and triggers to accept in one step; AI fields regenerate once when a reference changes and fill every row
+  as a cancellable job with an estimate first; PostgreSQL and MySQL tables attach as app entities with writes through
+  and scheduled pulls.
+- **B-8601 to B-8603, B-8701, B-8702**: a REST API per app entity under the policies, masks and labels with
+  app-limited API keys; a schema API that versions every change; an OpenAPI document and TypeScript client per app;
+  public embed pages under a `frame-ancestors` allowlist and signed embeds from a host-signed JWT or tenant CA
+  certificate with their own bearer sessions.
+- **B-5101**: the release. Unit suite 1170 passed; PostgreSQL integration 52 files; prototype smoke 51 of 51; the
+  full Playwright suite 168 passed after fixes to the sweep list, the harness driver, an Analytics reload race and
+  the draft dialog's accessibility pass. Known gaps in `docs/security.md`: no RFC 3161 time stamp or ingredient chain
+  in the manifest; artifacts come only from fenced blocks; a field type change on an entity with records fails a
+  deployment; rollback restores design, not records; pulls are full reads; a public embed page is reachable by anyone
+  who learns its id; the host site is trusted for who is behind the browser.
+
+## Sprint 40: Agents, tools, skills and workflows in chat; dataset import and the Import screen (1.7.0, done)
+
+Built in two parts off the 1.6.0 release. **40a** (B-4001 to B-4009, migration `042_chat_invocation`): what a
+conversation may call (`GET /api/conversations/:id/capabilities`), `/tool` calls from the composer through the
+dispatcher and the tool-call guardrail with held calls decided in the Flags queue, write and destructive tools behind
+in-chat approval cards (owner, then the guardrail's approver where a rule says so; denied and expired cards recorded),
+`@agent` runs bound to the conversation with a run card and the answer attributed to the agent, `+skill` chips sticky
+or for one turn within the profile's list, agents offered to the model as `agent:<name>` tools within the chain's
+depth and budgets, and `/workflow` with its approvals as cards; the Chat board and the live Chat screen with
+keyboard-first pickers and cards. **40b** (B-3804 to B-3807, migration `042b_dataset_import`): dataset import from
+CKAN datastores, Socrata, SDMX, e-Stat, OGD, OpenML, InvenioRDM and Hugging Face dataset repositories with streaming
+parsers, a schema preview with PII flags, sampling above the quota, scrub and versioning into `training_datasets`;
+knowledge sets (`knowledge_sources.kind = dataset`) with column mapping, grouping, publisher-following schedules,
+citations back to the row and a row-by-row refresh that keeps serving; classifier eval sets with minimum-sample
+warnings and the `imported` engine scored by a classifier worker; the Import screen live with its wizard, Imports
+queue and Repositories tab, and entry points on Models, Training, Classifiers and Knowledge. Screens: Chat, Runs,
+Import (new), Models, Training, Classifiers, Knowledge. Settings `CHAT_CARD_TTL_SECONDS`, `CHAT_AGENT_WAIT_SECONDS`,
+`CHAT_AGENT_CONTEXT_TURNS`, `IMPORT_DATASET_MAX_ROWS`, `CLASSIFIER_WORKER_URL`, `CLASSIFIER_WORKER_TIMEOUT_MS`. Unit
+suite 1191 passed and 1 skipped across 130 files; PostgreSQL integration passed; prototype smoke 51 of 51; the Chat,
+Runs, Import, Models, Training, Classifiers and Knowledge specs and the first-look sweep passed (21). Known gaps in
+[docs/security.md](docs/security.md): free text becomes arguments through one model turn; a model-proposed card is
+decided after its answer; handed-off runs are awaited by polling; Parquet, Excel and archives are not read; sources
+have no pinned revision; refresh reads the whole source; the classifier worker protocol is this server's own.
+
 ## Release 1.6.0
 
 The workspace, the server and the chart are versioned `1.6.0`, with the changes in [CHANGELOG.md](CHANGELOG.md) and
@@ -1211,6 +1417,109 @@ interop job in CI. B-3104 (the DAV conformance run) stays partial and B-3606 (ca
 dropped by the owner (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host
 certificate trust on the owner's Mac that was not approved. The known gaps of each sprint are in
 [docs/security.md](docs/security.md). Tagging `v1.5.0` and publishing the image and chart remain with the maintainers.
+
+## Sprint 24: Trust foundations: CA issuance and OCSP, secrets, the event catalogue, core (done)
+
+Delivered on `sprint-24` and its three parts (78 points), migrations `026_pki_secrets`, `026b_secrets` and `026c_core`,
+the first of the 1.4.0 sprints that re-implement exprsn-platform's server features in Exprsn-AI (server-only, no
+console screen changed):
+
+- **B-1601 to B-1604**: a platform root and per-tenant intermediate CAs (P-256, RSA 3072) with keys only in the
+  signer or OpenBao, profiles and CSR issuance, numbered CRLs and OCSP, interoperable with `openssl x509`, `crl`,
+  `verify` and `ocsp`.
+- **B-1701 to B-1703**: versioned KV secrets, tenant transit keys with rewrap and trim, path policies with `explain`
+  (transit key material sealed with the tenant key rather than held in OpenBao, a known gap).
+- **B-2001, B-2002**: the event catalogue at `GET /api/events/catalogue`, every emitted event checked against its
+  schema; plugin manifests, grants and lifecycle as data (nothing runs a plugin until Sprint 25).
+- **B-2101 to B-2104**: generic realtime rooms, the tenant read-through cache (Redis or memory, invalidated over the
+  bus), the `plugins` and `events replay` CLI commands (B-2103 partial here; `pki`, `secrets` and `users import`
+  followed in Sprints 25 and 26), and `docs/openapi.json` covering every registered route, checked by a test.
+- Before the sprint: the gateway slot deadlock fixed (#23). Unit suite 599 passed, console suite 57 passed; the
+  PostgreSQL integration tests against throwaway servers, MySQL and Redis in CI.
+
+## Sprint 25: ACME server, AT-Protocol trust, leases, plugins (done)
+
+Delivered on `sprint-25` and its four parts (77 points), migrations `027_acme`, `027b_atproto`, `027c_leases` and
+`027d_plugins`:
+
+- **B-1605 to B-1607**: a per-tenant RFC 8555 ACME directory (http-01 through the service address checks, dns-01,
+  EAB, key change, revoke, tenant and account isolation), from which Exprsn-AI's own client obtains certificates;
+  PEM, DER, chain and PKCS#12 export, renewal and expiry notices; `exprsn-ai pki` and `docs/pki.md`.
+- **B-1608 to B-1611**: secp256k1 and P-256 AT-Protocol keys with rotation updating the DID document, per-tenant
+  `did:web` or `did:plc` with a platform fallback, a signed labeler with `queryLabels` and `subscribeLabels`, and
+  trusted labelers whose labels become flags.
+- **B-1704 to B-1706**: built-in PostgreSQL and MySQL lease engines, `vault:path#key` references in user stores,
+  data connections, MCP tokens and workflow HTTP headers, rotation notices.
+- **B-2003 to B-2005**: declarative plugin actions gated by grants, script handlers in the container sandbox with a
+  per-run scoped token, plugins installed from signed import bundles.
+- Decisions: a service DID and labeler per tenant with a platform fallback; built-in database leases registered only
+  by `connections:manage` holders in a zone whose ceiling covers the target. Unit suite 663 passed; the PostgreSQL
+  integration tests against throwaway servers, MySQL in CI. Gaps: dns identifiers only and no ARI for ACME, PLC not
+  run against the live directory, no CLI plugin import.
+
+## Sprint 26: Identity gaps and AT-Protocol sign-in, moderation, the file store (done)
+
+Delivered on `sprint-26` and its four parts (81 points), migrations `028_identity`, `028b_atproto_accounts`,
+`028c_moderation` and `028d_files`:
+
+- **B-1801 to B-1805, B-1807, B-1808**: self-registration under a per-tenant policy and invitations, verification
+  links, an MFA policy with a grace period and trusted devices (never for admins), GitHub and GitHub Enterprise Server
+  as a user store, CSV import of users as a job with a dry run, DIDs bound by a profile challenge or a sign-in, and
+  AT-Protocol OAuth as a client (PAR, PKCE, DPoP; tested against a local PDS double only).
+- **B-1901 to B-1907**: moderation checks with one flag per object, a registry of moderated object types, reports,
+  appeals that restore objects and negate labels, sanctions enforced on the next request, routed queues with SLA
+  escalation and a dead-letter queue, shadow and enforce external providers, notices.
+- **B-2401 to B-2405**: streamed, sealed, scanned files with versions and trash, shares and use-limited links,
+  quotas, sandboxed previews, search and folder knowledge sources; files are moderation objects.
+- The Sprint 24 leftovers closed: the `secrets` and `users import` CLI commands, and a chat turn reusing its own
+  slot for guard-model verdicts, tool-result screens and embeddings. Unit suite 710 passed, console suite 57 passed;
+  the PostgreSQL integration tests against throwaway servers, MySQL in CI.
+
+## Sprint 27: AT-Protocol firehose, low-code data apps, groups and events (done)
+
+Delivered on `sprint-27` and its three parts (71 points, PR #36), migrations `029_apps`, `029b_firehose` and
+`029c_groups`:
+
+- **B-1908**: per-tenant Jetstream or relay `subscribeRepos` subscriptions, one consumer per subscription through a
+  lease, a bounded queue with backpressure, cursor checkpoints and backoff; posts go through the moderation check
+  and become labels (relay commits not signature-verified until Sprint 31, B-3604).
+- **B-2201 to B-2208**: low-code apps: typed fields and validation, sealed records with indexed values in clear for
+  filter, sort, search and aggregation (the same 19 queries on SQLite, PostgreSQL and MySQL), CSV import and export as
+  jobs, lookups and a formula parser without eval, per-entity state machines, forms with public links under
+  `user-input`, record and schedule triggers with a `record` workflow step, AI fields that fail soft, signed design
+  bundles.
+- **B-2501 to B-2505**: groups with visibility and join modes, roles and a realtime room; events with time zones,
+  RSVPs, capacity and check-in; reminder jobs; RFC 5545 feeds with revocable signatures; sealed group posts.
+- Event catalogue version 3; new permissions `firehose:manage`, `apps:design`, `records:read`, `records:write`,
+  `groups:read`, `groups:write`, `groups:manage`. Unit suite 750 passed and 1 skipped across 61 files; the
+  PostgreSQL integration tests against throwaway servers, MySQL in CI. Known gaps: a held public form value was refused
+  rather than queued (closed in 1.6.0 by B-4701); two simultaneous RSVPs could both take the last place (closed in
+  1.5.0 by B-3603).
+
+## Sprint 28: Customer-service channels, messaging, the workspace feed, load test, release 1.4.0 (done)
+
+Delivered on `sprint-28` and its four parts (84 points, PR #37), migrations `030_channels`, `030b_social` and
+`030c_feed`; the feed part started from the messaging part's social-relations commit, so messaging and the feed
+share one module of blocks, mutes, follows, lists and contact rules:
+
+- **B-2301 to B-2304, B-1806**: chat channels bound to a published profile or agent with anonymous or identified
+  customers on `/api/public/channels`, held replies approved, edited or rejected, IMAP polling and signed provider
+  webhooks with an SMTP outbox, retention purges and CSV transcripts; email one-time codes as a second factor.
+- **B-2601 to B-2606**: direct and group conversations with roles, edits, threads, reactions, pins and forwards,
+  delivery and read receipts, typing and presence over sockets, attachments from the file store, keyword and semantic
+  search with summaries and catch-up digests, blocks and contact rules.
+- **B-2701 to B-2705**: posts with media, threaded comments, reactions, reposts and bookmarks; follows, blocks, mutes
+  and lists; home, workspace, group, user, list, hashtag and bookmark feeds with live delivery; posts through the
+  `user-input` guardrail with holds; hashtags, trending and a weekly digest.
+- **B-2105**, partial: the platform load test (`npm run loadtest:platform`, `docs/loadtest.md`) met every `ci`
+  target on SQLite and on PostgreSQL every target but the records query p95 (732 ms against 250 ms), fixed in 1.5.0
+  by B-3601; it found and fixed two bugs in the database job queue and the webhook fan-out.
+- **B-2801**: the release. Decisions at the merge: customer-service email through both IMAP polling and provider
+  webhooks; email one-time codes count as the second factor for admin roles that require one (a known gap in
+  `docs/security.md`); messaging and the feed stay in Exprsn-AI. Event catalogue version 5; new permissions
+  `channels:manage`, `channels:review`, `social:*`, `messages:*`, `feed:*`; new dependencies `imapflow` and
+  `mailparser`. Unit suite 794 passed and 1 skipped across 66 files; the PostgreSQL integration tests against
+  throwaway servers, MySQL and Redis in CI.
 
 ## Release 1.4.0
 

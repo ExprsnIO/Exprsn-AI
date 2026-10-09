@@ -29,14 +29,14 @@ An admin permission is any permission outside the member baseline: a custom role
 
 | Permission | Admin | Routes | `system-admin` | `tenant-admin` | `identity-admin` | `model-admin` | `guardrail-admin` | `tool-admin` | `knowledge-curator` | `ml-admin` | `workflow-admin` | `connection-admin` | `flag-reviewer` | `member` | `legal-review` | `auditor` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `chat:read` | no | 28 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `chat:write` | no | 19 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `inference:invoke` | no | 17 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:read` | no | 30 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:write` | no | 26 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `inference:invoke` | no | 18 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `images:generate` | no | 13 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `agents:run` | no | 31 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `memory:write` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `knowledge:read` | no | 27 | x |  |  |  |  |  | x |  |  |  |  | x |  |  |
@@ -107,7 +107,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `contacts:read` | no | 28 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `contacts:write` | no | 0 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
 | `pds:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
-| `imports:run` | yes | 15 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
+| `imports:run` | yes | 18 | x | x |  | x |  |  | x | x |  |  |  |  |  |  |
 | `imports:repositories` | yes | 9 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `imports:review` | yes | 4 | x |  |  |  |  |  |  |  |  |  |  |  | x |  |
 
@@ -117,6 +117,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `chat:read`
 
+- `GET /api/conversations/{id}/capabilities`
+- `GET /api/conversations/{id}/invocations`
 - `GET /api/attachments/{id}`
 - `GET /api/chat/profiles`
 - `GET /api/conversation-exports`
@@ -150,6 +152,13 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 - `DELETE /api/conversations/{id}`
 - `DELETE /api/conversations/{id}/shares/{shareId}`
+- `DELETE /api/conversations/{id}/skills/{name}`
+- `POST /api/conversations/{id}/agent-runs`
+- `POST /api/conversations/{id}/invocations/{iid}/cancel`
+- `POST /api/conversations/{id}/invocations/{iid}/decide`
+- `POST /api/conversations/{id}/tool-calls`
+- `POST /api/conversations/{id}/workflow-runs`
+- `PUT /api/conversations/{id}/skills`
 - `PATCH /api/conversations/{id}`
 - `POST /api/chat`
 - `POST /api/compare`
@@ -170,6 +179,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `inference:invoke`
 
+- `POST /api/conversations/{id}/tool-calls`
 - `GET /v1/held/{id}`
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -221,6 +231,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `agents:run`
 
+- `POST /api/conversations/{id}/agent-runs`
+- `POST /api/conversations/{id}/workflow-runs`
 - `GET /api/agents`
 - `GET /api/workflow-tools`
 - `GET /api/workflow-callees`
@@ -1693,6 +1705,9 @@ No route requires it directly; handlers and services check it.
 - `POST /api/imports/{id}/cancel`
 - `POST /api/imports/{id}/retry`
 - `POST /api/imports/plan`
+- `GET /api/imports/repositories/{id}/dataset`
+- `POST /api/imports/dataset-plan`
+- `POST /api/imports/datasets`
 - `POST /api/imports/repositories/{id}/gate`
 - `GET /api/imports/exceptions` (or another permission)
 - `GET /api/imports/quota` (or another permission)

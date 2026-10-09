@@ -114,6 +114,42 @@ export function chatRoutes(s: Services): Router {
   // ---------- 1.6.0, Sprint 39a (B-8001): versioned artifacts ----------
 
   /** The artifacts of a conversation (owner or share reader): one entry per name, with every version's render link. */
+  // ---------- 1.7.0 (B-4001 to B-4009): agents, tools, skills and workflows from a conversation ----------
+  const inv = () => s.chatInvocations;
+  const agentsRun = requirePermission(s, 'agents:run');
+  r.get('/conversations/:id/capabilities', read, async (req, res) => {
+    res.json(await wrap(() => inv().capabilities(principalOf(req), String(req.params.id)))(req));
+  });
+  r.get('/conversations/:id/invocations', read, async (req, res) => {
+    res.json(await wrap(() => inv().list(principalOf(req), String(req.params.id)))(req));
+  });
+  r.post('/conversations/:id/tool-calls', write, invoke, async (req, res) => {
+    const body = parseBody(z.object({ name: z.string().trim().min(1).max(120), arguments: z.record(z.string(), z.unknown()).optional(), text: z.string().trim().min(1).max(4000).optional() }), req.body);
+    res.status(202).json(await wrap(() => inv().callTool(principalOf(req), String(req.params.id), body))(req));
+  });
+  r.post('/conversations/:id/invocations/:iid/decide', write, async (req, res) => {
+    const body = parseBody(z.object({ decision: z.enum(['approve', 'deny']) }), req.body);
+    res.json(await wrap(() => inv().decide(principalOf(req), String(req.params.id), String(req.params.iid), body.decision))(req));
+  });
+  r.post('/conversations/:id/invocations/:iid/cancel', write, async (req, res) => {
+    res.json(await wrap(() => inv().cancel(principalOf(req), String(req.params.id), String(req.params.iid)))(req));
+  });
+  r.post('/conversations/:id/agent-runs', write, agentsRun, async (req, res) => {
+    const body = parseBody(z.object({ agent: z.string().trim().min(1).max(120), input: z.string().trim().min(1).max(20_000), includeTurns: z.boolean().optional() }), req.body);
+    res.status(202).json(await wrap(() => inv().startAgent(principalOf(req), String(req.params.id), body))(req));
+  });
+  r.post('/conversations/:id/workflow-runs', write, agentsRun, async (req, res) => {
+    const body = parseBody(z.object({ workflow: z.string().trim().min(1).max(200), input: z.record(z.string(), z.unknown()).default({}) }), req.body);
+    res.status(202).json(await wrap(() => inv().startWorkflow(principalOf(req), String(req.params.id), body))(req));
+  });
+  r.put('/conversations/:id/skills', write, async (req, res) => {
+    const body = parseBody(z.object({ name: z.string().trim().min(1).max(120), mode: z.enum(['sticky', 'once']).default('sticky') }), req.body);
+    res.json(await wrap(() => inv().addSkill(principalOf(req), String(req.params.id), body))(req));
+  });
+  r.delete('/conversations/:id/skills/:name', write, async (req, res) => {
+    res.json(await wrap(() => inv().removeSkill(principalOf(req), String(req.params.id), String(req.params.name)))(req));
+  });
+
   r.get('/conversations/:id/artifacts', read, async (req, res) => {
     res.json({ artifacts: await wrap(() => s.chatArtifacts.list(principalOf(req), String(req.params.id)))(req) });
   });
