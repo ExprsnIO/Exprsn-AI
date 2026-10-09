@@ -39,6 +39,8 @@ export interface AgentDefinition {
   agents?: string[];
   /** B-4104: workflows (by name, in the run's workspace) this agent may start and await, offered as `workflow:<name>`. */
   workflows?: string[];
+  /** 1.6.0 (B-7801): specialist agents this agent may hand the conversation to; the handed-to run's answer is the run's answer. */
+  handoffs?: string[];
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;

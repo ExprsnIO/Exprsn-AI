@@ -23,6 +23,8 @@ export interface Principal {
   profiles?: string[] | null;
   /** 1.5.0 (B-3101): the DAV app password the request was made with (DAV requests only). */
   appPasswordId?: string | null;
+  /** 1.6.0 (B-7701): the agent identity the principal acts as (a run of the agent, or a key minted for it). */
+  agent?: { id: string; name: string } | null;
 }
 
 export interface Resource {

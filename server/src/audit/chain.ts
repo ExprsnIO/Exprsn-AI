@@ -19,6 +19,8 @@ export interface AuditActor {
   roles?: string[];
   service?: string;
   ip?: string | null;
+  /** 1.6.0 (B-7701): the agent identity the actor acted as, beside the user. */
+  agent?: string;
 }
 
 export interface AuditInput {
@@ -67,6 +69,8 @@ export function actorFrom(p: Principal | null | undefined, ip?: string | null): 
     apiKey: p.apiKeyId,
     // 1.5.0 (B-3101): a DAV request names the app password it came with.
     ...(p.appPasswordId ? { via: `app-password:${p.appPasswordId}` } : {}),
+    // 1.6.0 (B-7701): a run of an agent identity, or a request with its key, names the agent beside the user.
+    ...(p.agent ? { agent: p.agent.name } : {}),
     roles: p.roles,
     ip: ip ?? null
   };

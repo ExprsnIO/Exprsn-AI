@@ -390,6 +390,13 @@ export class EvalService {
     return content;
   }
 
+  /** 1.6.0 (B-7001): one answer of a profile to a prompt, as a case is answered (metered, through `model-output`), for the red-team suites. */
+  async answerFor(who: Principal, profile: ProfileRow, label: Label, prompt: string, signal: AbortSignal): Promise<string> {
+    const model = profile.model_id ? await this.s().gateway.repo.model(profile.model_id) : undefined;
+    if (!model) throw conflict('The profile has no model.');
+    return this.answer(who, profile, model, label, prompt, signal);
+  }
+
   private async answer(who: Principal, profile: ProfileRow, model: ModelRow, label: Label, prompt: string, signal: AbortSignal): Promise<string> {
     const messages: ChatMessage[] = [...(profile.system_prompt ? [{ role: 'system' as const, content: profile.system_prompt }] : []), { role: 'user', content: prompt }];
     const content = await this.generate(who, profile, model, label, messages, signal);

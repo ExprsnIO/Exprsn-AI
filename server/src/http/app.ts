@@ -22,6 +22,8 @@ import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
 import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
+import { redTeamRoutes } from '../routes/admin/redteam.js';
+import { agentIdentityRoutes } from '../routes/admin/agent-identities.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
 import { chainRoutes } from '../routes/chains.js';
@@ -238,6 +240,9 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(chatRoutes(s));
   api.use(guardrailRoutes(s));
   api.use('/admin', registryAdminRoutes(s));
+  // 1.6.0 Sprint 38b: red-team suites (B-7001) and agent identities (B-7701).
+  api.use('/admin', redTeamRoutes(s));
+  api.use('/admin', agentIdentityRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
   api.use(mcpAccessRoutes(s)); // 1.6.0, Sprint 37b (B-7101 to B-7103): MCP server admin, held calls, client OAuth
   api.use(agentRoutes(s));

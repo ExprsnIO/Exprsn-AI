@@ -43,11 +43,11 @@ An admin permission is any permission outside the member baseline: a custom role
 | `models:read` | no | 1 | x | x |  | x |  |  |  | x |  |  |  | x | x |  |
 | `models:manage` | yes | 6 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `pools:manage` | yes | 18 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
-| `profiles:manage` | yes | 20 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
+| `profiles:manage` | yes | 27 | x |  |  | x |  |  |  |  |  |  |  |  |  |  |
 | `tools:manage` | yes | 18 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `agents:manage` | yes | 23 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
+| `agents:manage` | yes | 35 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
 | `mcp:manage` | yes | 14 | x |  |  |  |  | x |  |  |  |  |  |  |  |  |
-| `workflows:manage` | yes | 15 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
+| `workflows:manage` | yes | 22 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
 | `guardrails:manage` | yes | 19 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
 | `flags:review` | yes | 13 | x |  |  |  | x |  |  |  |  |  | x |  |  |  |
 | `classifiers:manage` | yes | 13 | x |  |  |  | x |  |  |  |  |  |  |  |  |  |
@@ -363,6 +363,13 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/admin/profiles/{id}/publish`
 - `POST /api/admin/profiles/{id}/rollback`
 - `PUT /api/admin/profiles/{id}/canary`
+- `DELETE /api/admin/red-team/suites/{id}` (or another permission)
+- `GET /api/admin/red-team` (or another permission)
+- `GET /api/admin/red-team/attacks` (or another permission)
+- `GET /api/admin/red-team/runs/{id}` (or another permission)
+- `PATCH /api/admin/red-team/suites/{id}` (or another permission)
+- `POST /api/admin/red-team/suites` (or another permission)
+- `POST /api/admin/red-team/run` (or another permission)
 
 ### `tools:manage`
 
@@ -387,14 +394,26 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 
 ### `agents:manage`
 
+- `DELETE /api/admin/agent-identities/{name}/keys/{kid}`
+- `GET /api/admin/agent-identities`
+- `GET /api/admin/agent-identities/{name}`
+- `POST /api/admin/agent-identities/{name}/keys`
+- `PUT /api/admin/agent-identities/{name}`
+- `DELETE /api/admin/red-team/suites/{id}` (or another permission)
 - `DELETE /api/agent-schedules/{id}` (or another permission)
+- `GET /api/admin/red-team` (or another permission)
+- `GET /api/admin/red-team/attacks` (or another permission)
+- `GET /api/admin/red-team/runs/{id}` (or another permission)
 - `GET /api/agent-schedules` (or another permission)
 - `GET /api/agent-schedules/{id}` (or another permission)
 - `GET /api/agent-schedules/{id}/history` (or another permission)
 - `GET /api/runs` (or another permission)
 - `GET /api/runs/{id}` (or another permission)
+- `PATCH /api/admin/red-team/suites/{id}` (or another permission)
 - `PATCH /api/admin/registry/{id}` (or another permission)
 - `PATCH /api/agent-schedules/{id}` (or another permission)
+- `POST /api/admin/red-team/suites` (or another permission)
+- `POST /api/admin/red-team/run` (or another permission)
 - `POST /api/admin/registry` (or another permission)
 - `POST /api/admin/registry/{id}/checks` (or another permission)
 - `POST /api/admin/registry/{id}/lifecycle` (or another permission)
@@ -441,7 +460,14 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/workflows/{id}/publish`
 - `POST /api/workflows/{id}/tool`
 - `PUT /api/workflows/{id}/draft`
+- `DELETE /api/admin/red-team/suites/{id}` (or another permission)
+- `GET /api/admin/red-team` (or another permission)
+- `GET /api/admin/red-team/attacks` (or another permission)
+- `GET /api/admin/red-team/runs/{id}` (or another permission)
 - `GET /api/events/catalogue` (or another permission)
+- `PATCH /api/admin/red-team/suites/{id}` (or another permission)
+- `POST /api/admin/red-team/suites` (or another permission)
+- `POST /api/admin/red-team/run` (or another permission)
 - `POST /api/scripts/{id}/promote` (or another permission)
 - `GET /api/chains/{id}` (or another permission)
 - `POST /api/chains/{id}/held/{node}/decision` (or another permission)

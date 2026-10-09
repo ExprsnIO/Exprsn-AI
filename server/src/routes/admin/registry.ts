@@ -27,7 +27,7 @@ const agentRef = z.string().trim().min(1).max(120);
  * B-4102, B-4104: `agents` the agent may delegate to (offered as `agent:<name>` tools) and `workflows` (by name, in the
  * run's workspace) it may start and await (offered as `workflow:<name>`), without publishing them as tools.
  */
-const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), agents: z.array(agentRef).max(16).default([]), workflows: z.array(z.string().trim().min(1).max(120)).max(16).default([]), budgets, memory: memoryPolicy.optional() });
+const agentDef = z.object({ profile: z.string().trim().min(1).max(63), systemPrompt: z.string().max(20_000).nullable().default(null), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]), agents: z.array(agentRef).max(16).default([]), workflows: z.array(z.string().trim().min(1).max(120)).max(16).default([]), handoffs: z.array(agentRef).max(8).default([]), budgets, memory: memoryPolicy.optional() });
 /** B-4103: a skill lists the `skills` it builds on as well as the `tools` it needs. */
 const skillDef = z.object({ instructions: z.string().max(100_000), tools: z.array(entryName).max(32).default([]), skills: z.array(entryName).max(16).default([]) });
 const scriptDef = z.object({ scriptId: z.string().length(26) });
@@ -163,6 +163,8 @@ export function registryAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const e = await load(req);
     const b = parseBody(z.object({ decision: z.enum(['approve', 'reject']), note: z.string().trim().max(1000).nullable().default(null), scope: z.enum(['tenant', 'workspace']).default('tenant'), workspaces: z.array(z.string().length(26)).max(200).default([]) }), req.body);
+    // 1.6.0 (B-7001): an agent version with gated red-team suites is published only once its hash has a passing run.
+    if (b.decision === 'approve') await s.redteam.gateAgent(p.tenantId, e);
     const next = await reg.review(p, e, b);
     await audit(req, b.decision === 'approve' ? 'registry.published' : 'registry.rejected', e, { note: b.note, scope: next.publish_scope, workspaces: next.publish_workspaces, hash: next.approved_hash });
     if (e.owner_id) {
@@ -183,6 +185,7 @@ export function registryAdminRoutes(s: Services): Router {
     const p = principalOf(req);
     const e = await load(req);
     const b = parseBody(z.object({ to: z.enum(['deprecated', 'retired', 'published']), replacement: z.string().trim().max(200).nullable().default(null) }), req.body);
+    if (b.to === 'published') await s.redteam.gateAgent(p.tenantId, e);
     const next = await reg.lifecycle(e, b.to, { replacement: b.replacement });
     // What still references it (a deprecation warns; retiring what something published uses was refused above).
     const referencedBy = b.to !== 'published' && e.tenant_id ? await reg.referencedBy(p.tenantId, e.name, e.kind) : [];

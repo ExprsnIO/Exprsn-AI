@@ -133,6 +133,26 @@ export function obeyingReply(canaries: string[], fallback = 'Here is what the so
 }
 
 /**
+ * 1.6.0 Sprint 38b (B-7001): a model that leaks: asked for its system prompt or instructions, it prints the system
+ * message it was given (and any canary the request names); asked to adopt a persona or to send data somewhere, it
+ * obliges with the canary. Everything else is answered with `fallback`. `resists` lists attack ids (by their canary)
+ * the model resists, for a target that passes some attacks and fails others.
+ */
+export function leakingReply(opts: { fallback?: string; resists?: string[] } = {}): (messages: Msg[]) => Reply {
+  const fallback = opts.fallback ?? 'Here is what I can tell you.';
+  const resists = new Set(opts.resists ?? []);
+  return (messages) => {
+    const system = messages.find((m) => m.role === 'system')?.content ?? '';
+    const last = messages[messages.length - 1]?.content ?? '';
+    const canary = /\b([A-Z]{3,}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})?)\b/.exec(last)?.[1] ?? null;
+    if (canary && resists.has(canary)) return { content: 'I cannot help with that.' };
+    if (/system prompt|instructions you were given|everything above|instructions above|hidden instructions|repeat everything/i.test(last)) return { content: `${canary ? `${canary}\n` : ''}${system || 'I have no system prompt.'}` };
+    if (canary) return { content: `Sure. ${canary}` };
+    return { content: fallback };
+  };
+}
+
+/**
  * An Ollama stand-in speaking enough of its HTTP API for the gateway and chat: version, tags, ps, show, pull,
  * delete, generate (load and unload) and streamed chat. Replies come from `reply`, streamed word by word.
  */

@@ -23,9 +23,9 @@ import { refsOf } from '../workflows/steps/env.js';
  */
 
 export type RefKind = 'agent' | 'skill' | 'tool' | 'workflow';
-export type RefVia = 'delegate' | 'workflow' | 'tool' | 'skill' | 'sub-skill' | 'skill-tool' | 'sub-workflow' | 'agent-step' | 'model-skill' | 'tool-step' | 'workflow-tool';
+export type RefVia = 'delegate' | 'handoff' | 'workflow' | 'tool' | 'skill' | 'sub-skill' | 'skill-tool' | 'sub-workflow' | 'agent-step' | 'model-skill' | 'tool-step' | 'workflow-tool';
 
-const OPTIONAL: ReadonlySet<RefVia> = new Set(['delegate', 'workflow', 'tool', 'skill-tool']);
+const OPTIONAL: ReadonlySet<RefVia> = new Set(['delegate', 'handoff', 'workflow', 'tool', 'skill-tool']);
 const CLOSURE: ReadonlySet<RefVia> = new Set(['sub-skill']);
 
 export interface RefEdge {
@@ -82,6 +82,8 @@ export function entryEdges(e: Pick<EntryRow, 'kind' | 'impl' | 'definition'>): R
     for (const n of skillNames(e, 'tools')) out.push({ kind: 'tool', name: n, via: 'tool' });
     for (const n of skillNames(e, 'skills')) out.push({ kind: 'skill', name: n, via: 'skill' });
     for (const n of listOf(e.definition.agents)) out.push({ kind: 'agent', name: n, via: 'delegate' });
+    // 1.6.0 (B-7801): a specialist the agent may hand the conversation to is referenced like a delegate.
+    for (const n of listOf(e.definition.handoffs)) if (!listOf(e.definition.agents).includes(n)) out.push({ kind: 'agent', name: n, via: 'handoff' });
     for (const n of listOf(e.definition.workflows)) out.push({ kind: 'workflow', name: n, via: 'workflow' });
   } else if (e.kind === 'skill') {
     for (const n of skillNames(e, 'skills')) out.push({ kind: 'skill', name: n, via: 'sub-skill' });
@@ -113,7 +115,7 @@ const dedupe = (edges: RefEdge[]) => {
   });
 };
 const KIND_WORD: Record<RefKind, string> = { agent: 'agent', skill: 'skill', tool: 'tool', workflow: 'workflow' };
-const VIA_WORD: Record<RefVia, string> = { delegate: 'delegates to', workflow: 'starts', tool: 'calls', skill: 'loads', 'sub-skill': 'needs', 'skill-tool': 'needs', 'sub-workflow': 'runs', 'agent-step': 'runs', 'model-skill': 'loads', 'tool-step': 'calls', 'workflow-tool': 'runs' };
+const VIA_WORD: Record<RefVia, string> = { delegate: 'delegates to', handoff: 'hands the conversation to', workflow: 'starts', tool: 'calls', skill: 'loads', 'sub-skill': 'needs', 'skill-tool': 'needs', 'sub-workflow': 'runs', 'agent-step': 'runs', 'model-skill': 'loads', 'tool-step': 'calls', 'workflow-tool': 'runs' };
 
 /** At most this many references are followed per check (a large registry is checked in bounded time). */
 const MAX_VISITS = 400;
@@ -180,7 +182,7 @@ export class ChainRefs {
       for (const { edge, to } of first) {
         if (edge.kind === 'tool') continue; // tools have their own check ("Referenced tools published")
         if (!to) out.problems.push({ code: 'unpublished', message: `${KIND_WORD[edge.kind]} ${edge.name} is not published${edge.kind === 'workflow' ? ' in this workspace' : ''}` });
-        else if ((edge.via === 'delegate' || edge.via === 'workflow') && labelRank(to.label) > labelRank(start.label)) out.problems.push({ code: 'ceiling', message: `${KIND_WORD[edge.kind]} ${to.name} handles ${to.label} data, above this agent's ceiling (${start.label}); what it returns would reach the agent` });
+        else if ((edge.via === 'delegate' || edge.via === 'handoff' || edge.via === 'workflow') && labelRank(to.label) > labelRank(start.label)) out.problems.push({ code: 'ceiling', message: `${KIND_WORD[edge.kind]} ${to.name} handles ${to.label} data, above this agent's ceiling (${start.label}); what it returns would reach the agent` });
       }
     }
 

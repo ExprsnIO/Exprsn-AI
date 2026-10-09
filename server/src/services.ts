@@ -48,6 +48,8 @@ import { createScriptRunner } from './scripts/runner.js';
 import { AgentService } from './agents/service.js';
 import { AgentSchedules } from './agents/schedules.js';
 import { EvalService } from './evals/service.js';
+import { RedTeamService } from './redteam/service.js';
+import { AgentIdentityService } from './agents/identity.js';
 import { loadPrincipal } from './http/middleware.js';
 import { WorkflowService } from './workflows/service.js';
 import { ChainRefs } from './chain/refs.js';
@@ -233,6 +235,10 @@ export interface Services {
   agentSchedules: AgentSchedules;
   /** Sprint 21: eval sets, runs and the publish gate for profiles (B-1303). */
   evals: EvalService;
+  /** 1.6.0 Sprint 38b: red-team suites (B-7001, B-7002). */
+  redteam: RedTeamService;
+  /** 1.6.0 Sprint 38b: agent identities (B-7701). */
+  agentIdentities: AgentIdentityService;
   /** Sprint 15: rate-limit, failed-credential and denial-cap counters (Redis when REDIS_URL is set, else memory). */
   counters: CounterStore;
   /** Sprint 22 (B-1401): spans exported over OTLP/HTTP; a no-op without OTEL_EXPORTER_OTLP_ENDPOINT. */
@@ -459,7 +465,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   tools.useAgents(agents);
   // Sprint 32: agent runs join chains, and an agent run a workflow step awaits resumes that workflow run when it ends.
   agents.chains = chains;
-  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : undefined);
+  agents.onCallerDone = async (t, kind, id) => void (kind === 'workflow-run' ? await workflows.resumeFromCaller(t, id) : kind === 'redteam-run' ? await s.redteam.childDone(t, id) : undefined);
+  // 1.6.0 Sprint 38b (B-7701): a run of an agent with an identity acts within the identity's roles and ceiling.
+  agents.identity = (p, agentName) => s.agentIdentities.narrow(p, agentName);
   tools.useBuiltins(new BuiltinTools(() => s)); // B-3904: the domain built-ins act through the services as the caller
   const media = new MediaService({
     db, keys, blobs, jobs, bus, audit, quotas, notifications, log,
@@ -574,6 +582,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     openai: new OpenAiService(() => s, { streamMode: cfg.OPENAI_STREAM_MODE }),
     agentSchedules: new AgentSchedules(() => s),
     evals: new EvalService(() => s),
+    redteam: new RedTeamService(() => s),
+    agentIdentities: new AgentIdentityService(() => s),
     counters,
     tracer,
     schema: new SchemaGuard(db, log, cfg.SCHEMA_CHECK_SECONDS * 1000),
@@ -713,6 +723,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.openai.holds.registerJobs(); // Sprint 21 (B-1301)
   s.agentSchedules.registerJobs(); // Sprint 21 (B-1306)
   s.evals.registerJobs(); // Sprint 21 (B-1303)
+  s.redteam.registerJobs(); // 1.6.0 Sprint 38b (B-7001)
   s.pki.registerJobs(); // Sprint 24 (B-1603, B-1604): CRLs and OCSP responders
   s.pluginRuntime.registerJobs(); // Sprint 25 (B-2003, B-2004): plugin invocations
   s.pluginRuntime.listen();
