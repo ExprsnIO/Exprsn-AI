@@ -110,5 +110,11 @@ test.describe('Apps: model drafts, AI fills, outside tables', () => {
     await page.locator('#main [data-src-pull]').click();
     await toast(page, /Pull queued/);
     await expect(page.locator('#main')).toContainText(/3 rows, 0 created, 0 updated, 0 deleted, 3 unchanged/, { timeout: 15_000 });
+
+    // Leave nothing behind: the Connections spec starts from its empty state (the app goes first, it holds the source).
+    const cleanup = await apiAs('root');
+    await cleanup.del(`/api/apps/${appName}`);
+    await cleanup.del(`/api/admin/connections/${conn.id}`);
+    await cleanup.close();
   });
 });

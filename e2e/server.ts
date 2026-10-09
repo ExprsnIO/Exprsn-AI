@@ -36,6 +36,8 @@ import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
 import { SqliteTableDriver } from '../server/test/sprint39c-helpers.js';
+import { createDrivers } from '../server/src/connections/drivers.js';
+import { parseAllowList } from '../server/src/mcp/hosts.js';
 import Database from 'better-sqlite3';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
@@ -158,7 +160,10 @@ async function main() {
     imageBackends: [new FakeImageBackend()],
     imageSafety: new FakeSafety(),
     trainer,
-    drivers: { postgres: (spec) => new SqliteTableDriver(outside, spec) }
+    // 1.6.0 (B-8501): the outside table the Apps spec attaches lives at crm.internal; every other PostgreSQL connection
+    // keeps the real driver, so the Connections and Refusals specs still see the outbound address guard.
+    drivers: { postgres: (spec) => (/^crm\.internal(:\d+)?$/.test(spec.endpoint) ? new SqliteTableDriver(outside, spec) : createDrivers(parseAllowList(''))
+      .postgres(spec)) }
   });
   s.scripts.runner = runner;
   // The deployment stays air-gapped for the other screens; only the PDS may treat its zone as having egress, so the
