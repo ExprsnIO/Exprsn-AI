@@ -318,6 +318,40 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   who may see the artifact lists it; the route reads no session, so a stolen link shows that one version for a few
   minutes and nothing else.
 
+## App packages, environments and promotion (1.6.0, Sprint 39b)
+
+- **A package is verified before it is read (B-8201).** As with bundles, the signature (the KMS HMAC key the server
+  holds) is checked over the canonical JSON of exactly what arrived, before the shape or any object in it is looked
+  at; a package changed in any byte, signed elsewhere, naming another key or unsigned is refused with `422` and the
+  refusal audited, and nothing is created. A package pasted in, read from a repository or deployed from the store is
+  verified the same way, and a stored package is checked against its hash when opened. Records in a package are the
+  values the packager was cleared for, without computed fields (recomputed on import); a package is sealed with the
+  tenant key at rest and capped at `APPS_PACKAGE_MAX_BYTES`.
+- **Applying a package reconciles, it does not replace (B-8201, B-8203).** Entities, forms, triggers and policies are
+  matched by name, so a deployment keeps record ids and the entity revisions move forward; the same type and unique
+  checks apply as to a designer's edit (a type change on an entity that holds records fails the deployment, and the
+  target keeps what it had, with the backup beside it). An entity the package no longer has is dropped only when it
+  holds no record; otherwise it stays and the report says so. Triggers are recreated against the workflows of the
+  target's workspace by name, so a trigger whose workflow is missing or unpublished there is skipped and reported,
+  never pointed at another workspace's workflow.
+- **Production waits on the Workflows approval step (B-8202).** A promotion to production lands only the package the
+  last successful promotion to test landed (its id and hash are on both deployments), never a fresh package of the
+  test or development app, and only after a run of the pipeline's approval workflow succeeds. That run starts as the
+  requester, with the deployment as its input and caller, so the approver sees who asked, what package and which
+  hash; a rejection, a failure, a cancellation or an expiry rejects the deployment. Nothing else moves on a pipeline
+  while a deployment is going. Deployments run as the requester (their roles and clearance at run time, in the
+  target's workspace), so an app the requester may no longer design is not deployed.
+- **Backups and rollback (B-8203).** Every deployment first packages the target as it is; a rollback is a deployment
+  of that backup, with its own backup, so it is audited and reversible like any other. The history (who, what,
+  which package, the report) is kept `APPS_DEPLOYMENT_HISTORY_DAYS`.
+- **Git stays behind the same guards (B-8204).** Repositories are `https://` only (`file://` for same-host mirrors
+  when `APPS_GIT_ALLOW_FILE` is on), never with credentials in the URL, never at a link-local, multicast or
+  unspecified address (checked after DNS); git runs with no system or global configuration, no hooks, no prompts and
+  only the https (and allowed file) protocol. A token is given as a vault reference, resolved as the caller at use
+  and answered to git through a credential helper from the environment, so it is not on a command line or in a
+  remote URL. The push writes the package's files, nothing else, under the path given, and a path that leaves the
+  tree is refused.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1439,3 +1473,13 @@ filter, private `/tmp`, only the state directory writable.
   only (a model that writes code without a fence makes none), names come from the fence's info string (two blocks the
   model names the same in one answer keep the first), and a conversation holds at most 200 artifacts. A render link
   is a bearer capability for its lifetime; anyone holding it can show that version until it expires.
+
+- App packages, environments and promotion (1.6.0, Sprint 39b). A package carries the workflows its triggers name
+  as drafts; the importer publishes them, and until then the triggers are skipped. A deployment applies entity changes
+  through the designer's rules, so a field type change on an entity holding records fails the deployment (the backup
+  stays beside it) rather than migrating values. A rollback restores the design, not the records written since; an
+  entity that still holds records survives a rollback that would drop it. The approval workflow's trigger must accept
+  the deployment input (or declare no schema). A pipeline's stages must be apps of one tenant; promotion across
+  instances goes through git export and import, which is not two-way (a change in the repository is imported as a new
+  app, not merged). Git pushes dial out through the address checks but not through the tenant's allowed-host list.
+  Deployment history is pruned on read, not by a job.

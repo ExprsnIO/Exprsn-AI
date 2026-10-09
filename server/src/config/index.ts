@@ -683,6 +683,16 @@ const base = z.object({
      * APPS_TRIGGER_MAX_DEPTH; schedule triggers are checked every APPS_SCHEDULE_TICK_SECONDS (0 turns them off).
      */
     APPS_PUBLIC_FORM_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(10),
+    /**
+     * App packages and promotion (1.6.0, B-82). A package (the app's design, its records when asked for) is at most
+     * APPS_PACKAGE_MAX_BYTES; the deployment history is kept APPS_DEPLOYMENT_HISTORY_DAYS; a git export or import
+     * waits APPS_GIT_TIMEOUT_MS for the repository, and APPS_GIT_ALLOW_FILE lets file:// repositories on this host
+     * stand in for a remote (tests and air-gapped mirrors).
+     */
+    APPS_PACKAGE_MAX_BYTES: z.coerce.number().int().min(10_000).max(50_000_000).default(8_000_000),
+    APPS_DEPLOYMENT_HISTORY_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
+    APPS_GIT_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(3_600_000).default(300_000),
+    APPS_GIT_ALLOW_FILE: bool.default(false),
     APPS_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(250_000).default(200_000),
     APPS_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(100_000).default(10_000),
     APPS_EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000),

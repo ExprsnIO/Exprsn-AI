@@ -161,6 +161,19 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   request in a toast that names the valid placeholders. Explain is a labelled form (reader, entity, record, field) whose
   answer is a key-value list and a table: reachable or not, and each grant, is a pill with its word, with the policy
   named in text. `e2e/tests/apps-policies.spec.ts` runs axe-core on the tab with an explain answer.
+- **Apps: Deployments tab** (B-8201 to B-8204, Sprint 39b): a tab for designers with three panels. Environments shows
+  the pipeline's three stages as cards (stage name as an eyebrow, the app, its workspace, the deployed version as a
+  pill with its number) joined by decorative arrows (`aria-hidden`), the approval workflow in a key-value list, a
+  notice while a deployment is going, and text buttons to promote (disabled while one is going), edit or delete the
+  pipeline; without a pipeline, an empty state and a Create button. Packages is a table (version, source as a pill with
+  its word, hash with the full value as a title, contents, size, note, made) with text buttons to download or push each
+  one, and buttons to make, import or import from git. The history table shows each deployment's stages as text, its
+  state as a pill with its word (and the error as text), who, when, the report as a sentence and a Roll back button.
+  Every dialog is a labelled form (package contents and note; repository, branch, path, credential and message; the
+  pipeline's name, approval workflow and three app selects; the pasted package) with the server's problem shown inside
+  it; promotion and rollback go through a confirm dialog that says what will happen. A refused package is a problem
+  panel on the page. `e2e/tests/apps-deployments.spec.ts` runs axe-core on the tab with a pipeline and with a refused
+  package.
 - **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
   exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
   label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,

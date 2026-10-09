@@ -309,6 +309,14 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   (`s.chatArtifacts`, B-8001: `extractArtifacts` from fenced blocks on `chat.answerListeners`, `chat_artifacts` and sealed
   `chat_artifact_versions`, the share reader's view through `sharing.readable`, `forTranscript` for shares and links,
   `rawToken` and the public render route in `routes/sharing-public.ts`).
+
+- 1.6.0 Sprint 39b: `apps/packages.ts` (`s.apps.packages`, B-8201, B-8204: `exprsn-app/2` packages built, signed,
+  stored sealed in `app_packages`, verified before they are read, imported as a new app or applied to one in place by
+  name, laid out as files for git and read back; git through `withRepo` with the knowledge source's URL checks) and
+  `apps/pipelines.ts` (`s.apps.pipelines`, B-8202, B-8203: pipelines of three app slots, promotion with the production
+  approval as a workflow run with `caller_kind: app-deployment` routed back through `onCallerDone`, the job
+  `apps.deploy` with the backup first, history and rollback). `server/test/sprint39b-helpers.ts` builds the CRM app and
+  the approval workflow the three suites share.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

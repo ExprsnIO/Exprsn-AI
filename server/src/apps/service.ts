@@ -15,6 +15,8 @@ import type { Services } from '../services.js';
 import { generate } from './ai.js';
 import { AppBundles } from './bundles.js';
 import { AppForms } from './forms.js';
+import { AppPackages, type GitOptions } from './packages.js';
+import { AppPipelines } from './pipelines.js';
 import { AppPolicies, type Grant, type Mask } from './policies.js';
 import { aggregate, applyFilter, applySearch, applySort, checkFilterSize, countRecords, pageRecords, type AggregateInput, type Filter, type QueryContext, type Sort } from './query.js';
 import {
@@ -123,6 +125,8 @@ export interface AppsOptions {
   maxExportRows: number;
   maxBulk: number;
   triggerMaxDepth: number;
+  /** 1.6.0 (B-8204): git export and import of app packages. */
+  git: GitOptions;
 }
 
 export type RecordEvent = 'created' | 'updated' | 'deleted' | 'transitioned';
@@ -178,6 +182,10 @@ export class AppService {
   readonly bundles: AppBundles;
   /** 1.6.0 (B-8101 to B-8103): row and field policies, and the reader's grant on an entity. */
   readonly policies: AppPolicies;
+  /** 1.6.0 (B-8201, B-8204): versioned, signed packages of the whole design, and their git export and import. */
+  readonly packages: AppPackages;
+  /** 1.6.0 (B-8202, B-8203): environments, promotion with approval, deployment history and rollback. */
+  readonly pipelines: AppPipelines;
 
   constructor(
     private readonly s: () => Services,
@@ -187,6 +195,8 @@ export class AppService {
     this.triggers = new AppTriggers(s, this);
     this.bundles = new AppBundles(s, this);
     this.policies = new AppPolicies(s, this);
+    this.packages = new AppPackages(s, this, o.git);
+    this.pipelines = new AppPipelines(s, this, this.packages);
   }
 
   private get db() {
@@ -200,6 +210,7 @@ export class AppService {
     jobs.register('apps.import', (p, ctx) => this.runImport(String(p.transferId), ctx), { timeoutMs: 60 * 60_000 });
     jobs.register('apps.export', (p, ctx) => this.runExport(String(p.transferId), ctx), { timeoutMs: 60 * 60_000 });
     this.triggers.registerJobs();
+    this.pipelines.registerJobs();
   }
 
   // ---------- access ----------
