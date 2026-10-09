@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { splitThink, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
@@ -877,8 +878,8 @@ export class AgentService {
           const options: Record<string, unknown> = {};
           if (resolved.profile.num_ctx) options.num_ctx = resolved.profile.num_ctx;
           if (resolved.profile.temperature != null) options.temperature = resolved.profile.temperature;
-          const think = resolved.profile.think_default === 'off' ? false : resolved.model.name.startsWith('gpt-oss') ? resolved.profile.think_default : true;
-          for await (const chunk of lease.client.chat({ model: resolved.model.name, messages, ...(resolved.model.capabilities.includes('thinking') ? { think } : {}), ...(toolsOn ? { tools: [...tools.map((t) => t.def), ...(policy ? [REMEMBER_TOOL] : [])] } : {}), options }, stepSignal)) {
+          const thinkReq = thinkingRequest(resolved.model, resolved.profile.think_default, messages); // B-11707: by the model's thinking mode
+          for await (const chunk of lease.client.chat({ model: resolved.model.name, messages, ...thinkReq, ...(toolsOn ? { tools: [...tools.map((t) => t.def), ...(policy ? [REMEMBER_TOOL] : [])] } : {}), options }, stepSignal)) {
             if (chunk.message?.content) content += chunk.message.content;
             if (chunk.message?.thinking) thinking += chunk.message.thinking;
             if (chunk.message?.tool_calls?.length) calls.push(...chunk.message.tool_calls);
@@ -886,6 +887,11 @@ export class AgentService {
               tokens = (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0);
               gpuNs = (chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0);
             }
+          }
+          if (thinkingMode(resolved.model) === 'template' && resolved.profile.think_default !== 'off') {
+            const sp = splitThink(content); // B-11707: a template model's <think> block is its thinking
+            if (sp.thinking) thinking += sp.thinking;
+            content = sp.content;
           }
         } catch (err) {
           if (wall.aborted && !signal.aborted) await budgetStop(`Stopped at the ${budgets.wallSeconds} s wall-time limit during a thinking step.`);

@@ -8,6 +8,7 @@ import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../http/
 import { loadPrincipal } from '../http/middleware.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import type { ModelRow, ProfileRow } from '../gateway/repo.js';
+import { splitThink, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import { compilePattern } from '../guardrails/regex.js';
 import { schemaProblems, validateAgainst, type JsonSchema } from '../registry/schema.js';
 import type { Services } from '../services.js';
@@ -371,8 +372,8 @@ export class EvalService {
       if (profile.num_ctx) options.num_ctx = profile.num_ctx;
       if (profile.temperature != null) options.temperature = profile.temperature;
       const level = profile.think_default;
-      const think: boolean | 'low' | 'medium' | 'high' = level === 'off' ? false : model.name.startsWith('gpt-oss') ? level : true;
-      for await (const chunk of lease.client.chat({ model: model.name, messages, ...(model.capabilities.includes('thinking') ? { think } : {}), options }, signal)) {
+      const thinkReq = thinkingRequest(model, level, messages); // B-11707: by the model's thinking mode
+      for await (const chunk of lease.client.chat({ model: model.name, messages, ...thinkReq, options }, signal)) {
         if (chunk.message?.content) {
           if (first == null) first = Date.now() - t0;
           content += chunk.message.content;
@@ -383,6 +384,7 @@ export class EvalService {
           gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
         }
       }
+      if (thinkingMode(model) === 'template' && level !== 'off') content = splitThink(content).content;
     } finally {
       lease.release(first);
     }

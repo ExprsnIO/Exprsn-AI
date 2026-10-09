@@ -12,6 +12,7 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { QuotaService } from '../tenancy/quotas.js';
 import { QueueTimeout, type Gateway, type Lease, type ResolvedProfile } from '../gateway/gateway.js';
 import { THINK_LEVELS, type ProfileRow, type ThinkLevel } from '../gateway/repo.js';
+import { ThinkSplitter, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import type { ChatMessage } from '../gateway/ollama.js';
 import { CALCULATE_TOOL, type CalcWorker } from './calc.js';
 import type { AttachmentRow, AttachmentService } from './attachments.js';
@@ -1344,7 +1345,10 @@ export class ChatService {
       const extra: ResolvedTool[] = modelTools && this.toolDispatch ? (await this.toolDispatch.resolve(p, r.profile.tools.filter((t) => t !== 'calculate'), c.label)).tools.filter((t) => t.sideEffect === 'read' && t.confirm === 'never') : [];
       const toolsOn = (r.profile.tools.includes('calculate') || extra.length > 0) && modelTools;
       const toolDefs = [...(r.profile.tools.includes('calculate') ? [CALCULATE_TOOL] : []), ...extra.map((t) => t.def)];
-      const thinkParam = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
+      // B-11707: the model's thinking mode decides the request: the think parameter for a native model, the convention
+      // appended to the system prompt for a template model (and its <think> blocks split out of the content below).
+      const thinkReq = thinkingRequest(r.model, think, messages);
+      const splitter = thinkingMode(r.model) === 'template' ? new ThinkSplitter() : null;
       const options: Record<string, unknown> = {};
       if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
       if (r.profile.temperature != null) options.temperature = r.profile.temperature;
@@ -1352,8 +1356,13 @@ export class ChatService {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const calls: NonNullable<ChatMessage['tool_calls']> = [];
         let roundContent = '';
-        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(r.model.capabilities.includes('thinking') ? { think: thinkParam } : {}), ...(toolsOn ? { tools: toolDefs } : {}), options }, st.ac.signal)) {
+        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...thinkReq, ...(toolsOn ? { tools: toolDefs } : {}), options }, st.ac.signal)) {
           const msg = chunk.message;
+          if (msg?.content && splitter) {
+            const part = chunk.done ? ((x) => { const rest = splitter.flush(); return { thinking: x.thinking + rest.thinking, content: x.content + rest.content }; })(splitter.feed(msg.content)) : splitter.feed(msg.content);
+            msg.content = part.content;
+            if (part.thinking) msg.thinking = (msg.thinking ?? '') + part.thinking;
+          }
           if (msg && (msg.content || msg.thinking) && usage.firstTokenMs == null) {
             usage.firstTokenMs = Date.now() - started;
             if (lease.cold) this.gateway.noteResident(lease.instance.id, r.model.name);
@@ -1380,6 +1389,11 @@ export class ChatService {
             lastWrite = Date.now();
             void this.io(st, () => this.writePending(st)).catch(() => undefined);
           }
+        }
+        if (splitter) {
+          const rest = splitter.flush();
+          if (rest.thinking) { st.thinking += rest.thinking; await this.release(st, 'thinking', rest.thinking); }
+          if (rest.content) { st.content += rest.content; roundContent += rest.content; await this.release(st, 'delta', rest.content); }
         }
         if (!calls.length || !toolsOn) break;
         messages.push({ role: 'assistant', content: roundContent, tool_calls: calls });

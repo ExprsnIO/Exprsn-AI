@@ -4,6 +4,8 @@ import type { Label } from '../authz/labels.js';
 import type { InstanceTls } from './ollama.js';
 import type { ServerKind, ServerReport } from './server.js';
 
+import type { ThinkingMode } from './thinking.js';
+
 export type ThinkLevel = 'off' | 'low' | 'medium' | 'high';
 export const THINK_LEVELS: readonly ThinkLevel[] = ['off', 'low', 'medium', 'high'];
 export const MODEL_STATES = ['draft', 'evaluated', 'approved', 'deprecated', 'retired'] as const;
@@ -96,6 +98,9 @@ export interface ModelRow {
   /** B-4304: a model held by a Chat Completions server (`format` `server`): where it was registered from. */
   server_instance_id: string | null;
   server_model: string | null;
+  /** B-11707: how the model is made to think (null: derived from its capabilities) and the convention of a template model. */
+  thinking: ThinkingMode | null;
+  thinking_template: string | null;
   created_at: number;
   updated_at: number;
 }

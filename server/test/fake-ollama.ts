@@ -11,7 +11,16 @@ export interface FakeModel {
   family?: string;
   capabilities?: string[];
   digest?: string;
+  /** B-11707: what `show` reports as the chat template and the default system prompt (a Magistral-like model). */
+  template?: string;
+  system?: string;
 }
+
+/** B-11707: the default system prompt of a Magistral-like model, which Ollama substitutes when a request carries none. */
+export const TEMPLATE_SYSTEM = 'A user will ask you to solve a task. You should first draft your thinking process (inner monologue) until you have derived the final answer. Your thinking process must follow the template below:\n<think>\nYour thoughts or/and draft, like working through an exercise on scratch paper.\n</think>\nHere, provide a self-contained answer.';
+
+/** A Magistral-like model for the fake registry: thinks through <think> blocks, tools listed in the template. */
+export const templateModel = (name = 'magistral:24b', size = 14 * 1_000_000_000): FakeModel => ({ name, size, family: 'llama', capabilities: ['completion', 'tools', 'thinking'], template: '{{ if .System }}[SYSTEM_PROMPT]{{ .System }}[/SYSTEM_PROMPT]{{ end }}[INST]{{ .Prompt }}[/INST]<think>{{ .Thinking }}</think>', system: TEMPLATE_SYSTEM });
 
 interface Msg {
   role: string;
@@ -166,6 +175,19 @@ export class FakeOllama {
   chatDelayMs = 5;
   reply: (messages: Msg[], opts: { think: unknown; tools: unknown[]; model: string }) => Reply = (messages) => ({ content: `You said: ${messages[messages.length - 1]?.content ?? ''}` });
   /**
+   * B-11707: a Magistral-like model (one whose `show` has a <think> system prompt). Without a system message the
+   * server substitutes the model's own, and the model answers in prose with a thinking draft, tools or not. With one,
+   * it calls a tool when the turn asks for one, and thinks inside <think> tags only when the prompt asks for them.
+   */
+  templated: (messages: Msg[], opts: { think: unknown; tools: unknown[]; model: string }) => Reply = (messages, opts) => {
+    const system = messages.find((x) => x.role === 'system')?.content;
+    const last = messages[messages.length - 1]?.content ?? '';
+    if (!system) return { content: `<think>\nThe user wants 17 times 23, which is 391.\n</think>\n17 × 23 = 391.` };
+    if (opts.tools.length && /calculate/i.test(last)) return { content: '', toolCall: { name: 'calculate', arguments: { expression: '17*23' } } };
+    if (opts.think && system.includes('<think>')) return { content: `<think>\nWorking it out on scratch paper.\n</think>\nThe answer to "${last}".` };
+    return { content: `Plainly: ${last}` };
+  };
+  /**
    * Guard models (any model whose name contains "guard") answer like Llama Guard: "safe", or "unsafe" and a line of
    * hazard categories. By default the last turn is unsafe (S1) when it contains "UNSAFE-TEST".
    */
@@ -233,7 +255,7 @@ export class FakeOllama {
       case 'POST /api/show': {
         const m = this.available.get(name);
         if (!m) return json(404, { error: `model '${name}' not found` });
-        return json(200, { details: this.tag(m).details, capabilities: m.capabilities ?? ['completion'], model_info: { 'llama.context_length': 8192 } });
+        return json(200, { details: this.tag(m).details, capabilities: m.capabilities ?? ['completion'], model_info: { 'llama.context_length': 8192 }, ...(m.template ? { template: m.template } : {}), ...(m.system ? { system: m.system } : {}) });
       }
       case 'DELETE /api/delete':
         this.available.delete(name);
@@ -295,7 +317,7 @@ export class FakeOllama {
     res.writeHead(200, { 'content-type': 'application/x-ndjson' });
     const messages = body.messages as Msg[];
     const images = messages.flatMap((x) => x.images ?? []).map((b) => Buffer.from(b, 'base64'));
-    const r = name.includes('guard') ? { content: this.guard(messages) } : images.length ? { content: this.vision(messages, images, name) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
+    const r = name.includes('guard') ? { content: this.guard(messages) } : m.system?.includes('<think>') ? this.templated(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name }) : images.length ? { content: this.vision(messages, images, name) } : this.reply(messages, { think: body.think, tools: (body.tools as unknown[]) ?? [], model: name });
     const send = (o: unknown) => res.write(JSON.stringify(o) + '\n');
     const sleep = () => new Promise((x) => setTimeout(x, this.chatDelayMs));
     let evalCount = 0;

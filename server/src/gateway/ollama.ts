@@ -34,6 +34,9 @@ export interface ShowResult {
   model_info?: Record<string, unknown>;
   capabilities?: string[];
   license?: string;
+  /** B-11707: the chat template and the default system prompt, read for the thinking mode. */
+  template?: string;
+  system?: string;
 }
 
 export interface ChatMessage {

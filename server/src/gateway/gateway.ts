@@ -7,6 +7,7 @@ import { HttpProblem, tooManyRequests } from '../http/problem.js';
 import { TOPICS, type Bus } from '../platform/bus.js';
 import type { JobContext, JobQueue } from '../platform/jobs.js';
 import { OllamaClient, OllamaError, type ChatMessage, type PsModel, type TagModel } from './ollama.js';
+import { detectThinking, EVALUATION_SYSTEM_PROMPT } from './thinking.js';
 import { OpenAIServer } from './openai-server.js';
 import { isUnsupported, orSkip, type ModelServer, type ServerReport } from './server.js';
 import type { Evaluation, GatewayRepo, InstanceRow, ModelRow, PoolRow, ProfileRow } from './repo.js';
@@ -790,7 +791,9 @@ export class Gateway {
           quantization: show.details?.quantization_level ?? tag.details?.quantization_level ?? null,
           format,
           capabilities: show.capabilities ?? ['completion'],
-          context_length: ctxKey ? Number((show.model_info ?? {})[ctxKey]) : null
+          context_length: ctxKey ? Number((show.model_info ?? {})[ctxKey]) : null,
+          // B-11707: how the model thinks, from its template and default system prompt.
+          ...detectThinking(show)
         });
         await this.repo.event(row.id, model.name, 'pull', `Pulled ${norm(tag.digest).slice(0, 12)}`, ctx.job.created_by);
         results[row.name] = norm(tag.digest);
@@ -838,7 +841,7 @@ export class Gateway {
     let toolsOk = false;
     const notes: string[] = [];
     try {
-      for await (const c of r.client.chat({ model, messages: [{ role: 'user', content: 'Use the calculate tool to compute 17 * 23.' }], tools, options: { temperature: 0 } }, ctx.signal)) if (c.message?.tool_calls?.some((t) => t.function.name === 'calculate')) toolsOk = true;
+      for await (const c of r.client.chat({ model, messages: [{ role: 'system', content: EVALUATION_SYSTEM_PROMPT }, { role: 'user', content: 'Use the calculate tool to compute 17 * 23.' }], tools, options: { temperature: 0 } }, ctx.signal)) if (c.message?.tool_calls?.some((t) => t.function.name === 'calculate')) toolsOk = true;
       if (!toolsOk) notes.push('no tool call came back');
     } catch (err) {
       notes.push(`tool call failed: ${(err as Error).message.slice(0, 120)}`);
@@ -892,7 +895,7 @@ export class Gateway {
     } else {
       await run('Chat smoke test', async () => {
         let text = '';
-        for await (const c of r.client.chat({ model: model.name, messages: [{ role: 'user', content: 'Reply with the single word: ready' }], options: { temperature: 0, num_predict: 16 }, think: false }, ctx.signal)) text += c.message?.content ?? '';
+        for await (const c of r.client.chat({ model: model.name, messages: [{ role: 'system', content: EVALUATION_SYSTEM_PROMPT }, { role: 'user', content: 'Reply with the single word: ready' }], options: { temperature: 0, num_predict: 16 }, think: false }, ctx.signal)) text += c.message?.content ?? '';
         if (!text.trim()) throw new Error('Empty answer');
         return `Answered "${text.trim().slice(0, 40)}"`;
       });
@@ -900,7 +903,9 @@ export class Gateway {
     if (caps.includes('tools')) {
       await run('Tool calling', async () => {
         const tools = [{ type: 'function', function: { name: 'calculate', description: 'Evaluates an arithmetic expression exactly', parameters: { type: 'object', properties: { expression: { type: 'string' } }, required: ['expression'] } } }];
-        for await (const c of r.client.chat({ model: model.name, messages: [{ role: 'user', content: 'Use the calculate tool to compute 17 * 23.' }], tools, options: { temperature: 0 }, think: false }, ctx.signal)) {
+        // B-11707: a system prompt, as chat sends one; without it Ollama substitutes the model's own (Magistral's asks
+        // for prose with a thinking draft, and the tool call never came).
+        for await (const c of r.client.chat({ model: model.name, messages: [{ role: 'system', content: EVALUATION_SYSTEM_PROMPT }, { role: 'user', content: 'Use the calculate tool to compute 17 * 23.' }], tools, options: { temperature: 0 }, think: false }, ctx.signal)) {
           const call = c.message?.tool_calls?.[0];
           if (call) {
             if (call.function.name !== 'calculate') throw new Error(`Called ${call.function.name}, not calculate`);
