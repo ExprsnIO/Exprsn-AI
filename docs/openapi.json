@@ -25744,6 +25744,180 @@
         }
       }
     },
+    "/api/apps/{app}/entities/{entity}/ai/estimate": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: {field, scope: empty | all} -> {records, capped, promptTokens, outputTokens, model, currency, cost}: what a fill of the AI field over the entity's records would take (tokens from a sample of rendered prompts; cost when the tenant prices the profile's model). 400 when the field is not an AI field",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: the entity's last 20 fills, newest first: {fills: [Fill]}. A Fill is {id, field, scope, state: queued | running | succeeded | failed | cancelled, total, done, failed, skipped, promptTokens, outputTokens, estimate, jobId, startedBy, error, createdAt, startedAt, finishedAt}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: {field, scope: empty | all} starts a fill of the AI field over every record (or the empty ones) as the job apps.ai-fill-all; 202 with the Fill and its estimate. Each record goes through the profile's guardrails, the quota and metering; progress on the job and the fill. 409 while a fill of the field runs. Audited app.ai.fill.started",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills/{id}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: one fill with its counters",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills/{id}/cancel": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: stops a queued or running fill between records (the job's signal is aborted); records already filled keep their value. 409 when it has finished. Audited app.ai.fill.cancelled",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/entities/{entity}/fields/{field}/options": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -26453,6 +26627,130 @@
         }
       }
     },
+    "/api/apps/{app}/entities/{entity}/source": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design and connections:manage. B-8501: detaches the table; the records stay as ordinary records. Audited app.entity.source.removed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8501: the outside table backing the entity: {entity, connectionId, connection, engine, object, keyColumn, keyField, columns, stateColumn, writes, deleteMissing, pullMinutes, enabled, nextPullAt, lastPullAt, lastPull: {rows, created, updated, deleted, unchanged, failed, capped, ms, error?, problems?}, updatedAt}. 404 when the entity has none",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design and connections:manage. B-8501: attaches a table of a PostgreSQL or MySQL data connection to the entity: {connectionId, object (on the connection's allow-list), keyColumn, keyField? (a string or number field; empty: the record id is the key), columns? {field: column}, stateColumn?, writes (app writes reach the table at once), deleteMissing, pullMinutes? (a scheduled pull), enabled}. The entity's label must cover the connection's. 403 step permission without connections:manage; 409 for an engine, object or label that does not fit. Audited app.entity.source.set / updated",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/source/pull": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8501: queues a pull now (the job apps.source-pull): 202 {jobId}. The pull reads the table unmasked (at most APPS_SOURCE_PULL_MAX_ROWS rows), creates, updates and (with deleteMissing) deletes records by the key column, and records the result on the source. Audited app.entity.source.pulled / pull_failed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/export": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -26771,6 +27069,54 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/apps/{app}/model/apply": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8301: accepts a draft {entities, triggers?} (edited or as returned): new entities are created in dependency order, existing ones gain the drafted fields and state machine (nothing is removed), and triggers whose workflow exists are created. {created, updated, unchanged, triggers: [{entity, workflow, created, reason}]}. 422 with problems when the draft is not valid. Audited app.model.applied",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/model/draft": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8301: {prompt, profile, label?} describes the app; a local model through the profile drafts its data model: {draft: {entities: [{name, title?, definition}], triggers: [{entity, events, workflow}]}, diff: [{entity, change: new | changed | same, addedFields, changedFields, removedFields, states, problems}], triggers: [{..., ok, problem}], valid, problems}. Validated like a saved entity and compared with the app's entities; nothing is saved. 422 when the model's answer is unusable or the description is refused; 503 when the model is unavailable. Audited app.model.drafted",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/apps/{app}/policies": {
@@ -49095,9 +49441,6 @@
               }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Default"
-          },
           "202": {
             "description": "Accepted: held for review",
             "content": {
@@ -49127,6 +49470,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
           }
         }
       }

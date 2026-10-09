@@ -83,7 +83,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `firehose:manage` | yes | 15 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
-| `apps:design` | yes | 22 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
+| `apps:design` | yes | 33 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `compliance:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  | x |  |
@@ -1235,6 +1235,17 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/policies/explain`
 - `POST /api/apps/{app}/policies`
 - `PUT /api/apps/{app}/policies/{id}`
+- `DELETE /api/apps/{app}/entities/{entity}/source`
+- `GET /api/apps/{app}/entities/{entity}/ai/fills`
+- `GET /api/apps/{app}/entities/{entity}/ai/fills/{id}`
+- `GET /api/apps/{app}/entities/{entity}/source`
+- `POST /api/apps/{app}/entities/{entity}/ai/estimate`
+- `POST /api/apps/{app}/entities/{entity}/ai/fills`
+- `POST /api/apps/{app}/entities/{entity}/ai/fills/{id}/cancel`
+- `POST /api/apps/{app}/entities/{entity}/source/pull`
+- `POST /api/apps/{app}/model/apply`
+- `POST /api/apps/{app}/model/draft`
+- `PUT /api/apps/{app}/entities/{entity}/source`
 
 ### `records:read`
 

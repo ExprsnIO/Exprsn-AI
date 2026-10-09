@@ -66,6 +66,28 @@ export interface DataDriver {
   replicate?(opts: ReplicationOptions): Promise<ReplicationStream>;
   /** Drops a replication slot this platform created; false when there was none (or it is in use). */
   dropReplicationSlot?(slot: string, timeoutMs: number): Promise<boolean>;
+  /**
+   * One row written to an allow-listed table for an app entity backed by it (1.6.0, B-8501): an insert of `values`,
+   * an update of `values` where the key column equals `key`, or a delete by key. Parameterised, in its own
+   * transaction with the statement timeout; returns how many rows the statement touched.
+   */
+  mutate?(object: string, op: RowMutation, timeoutMs: number): Promise<{ affected: number }>;
+}
+
+export interface RowMutation {
+  kind: 'insert' | 'update' | 'delete';
+  keyColumn: string;
+  key: unknown;
+  values: Record<string, unknown>;
+}
+
+const COLUMN_NAME = /^[A-Za-z_][A-Za-z0-9_$]{0,62}$/;
+
+/** Column names a mutation may touch: plain identifiers only, so quoting is enough. */
+export function checkMutation(op: RowMutation): void {
+  if (!COLUMN_NAME.test(op.keyColumn)) throw new Error(`The key column ${op.keyColumn} is not a plain column name.`);
+  for (const k of Object.keys(op.values)) if (!COLUMN_NAME.test(k)) throw new Error(`The column ${k} is not a plain column name.`);
+  if (op.kind !== 'delete' && !Object.keys(op.values).length && op.kind === 'update') throw new Error('Nothing to update.');
 }
 
 export type DriverFactory = (spec: ConnectionSpec) => DataDriver;
@@ -189,6 +211,30 @@ export class PostgresDriver implements DataDriver {
 
   async roleCheck(object: string, roles: string[], timeoutMs: number): Promise<RoleCheck> {
     return this.client(timeoutMs, (c) => this.readOnly(c, timeoutMs, () => pgRoleCheck(c, object, roles)));
+  }
+
+  async mutate(object: string, op: RowMutation, timeoutMs: number): Promise<{ affected: number }> {
+    checkMutation(op);
+    return this.client(timeoutMs, async (c) => {
+      await c.query('BEGIN');
+      try {
+        await c.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
+        const cols = Object.keys(op.values);
+        let r: pg.QueryResult;
+        if (op.kind === 'insert') {
+          const all = cols.includes(op.keyColumn) ? cols : [op.keyColumn, ...cols];
+          const vals = all.map((k) => (k === op.keyColumn && !cols.includes(k) ? op.key : op.values[k]));
+          r = await c.query(`INSERT INTO ${quoteIdent(object)} (${all.map(quoteIdent).join(', ')}) VALUES (${all.map((_, i) => `$${i + 1}`).join(', ')})`, vals);
+        } else if (op.kind === 'update') {
+          r = await c.query(`UPDATE ${quoteIdent(object)} SET ${cols.map((k, i) => `${quoteIdent(k)} = $${i + 1}`).join(', ')} WHERE ${quoteIdent(op.keyColumn)} = $${cols.length + 1}`, [...cols.map((k) => op.values[k]), op.key]);
+        } else r = await c.query(`DELETE FROM ${quoteIdent(object)} WHERE ${quoteIdent(op.keyColumn)} = $1`, [op.key]);
+        await c.query('COMMIT');
+        return { affected: r.rowCount ?? 0 };
+      } catch (err) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      }
+    });
   }
 
   async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number; role?: string | null }): Promise<QueryResult> {
@@ -322,6 +368,30 @@ export class MysqlDriver implements DataDriver {
         return { columns: fields.map((f) => f.name), rows: rows.slice(0, opts.limit), capped: rows.length > opts.limit, estimate: null };
       })
     );
+  }
+
+  async mutate(object: string, op: RowMutation, timeoutMs: number): Promise<{ affected: number }> {
+    checkMutation(op);
+    return this.client(timeoutMs, async (c) => {
+      await c.query('START TRANSACTION');
+      try {
+        const cols = Object.keys(op.values);
+        const q = (sql: string, values: unknown[]) => c.query({ sql, values, timeout: timeoutMs + 2000 }) as unknown as Promise<[{ affectedRows?: number }]>;
+        let r: [{ affectedRows?: number }];
+        if (op.kind === 'insert') {
+          const all = cols.includes(op.keyColumn) ? cols : [op.keyColumn, ...cols];
+          const vals = all.map((k) => (k === op.keyColumn && !cols.includes(k) ? op.key : op.values[k]));
+          r = await q(`INSERT INTO ${quoteMysqlIdent(object)} (${all.map(quoteMysqlIdent).join(', ')}) VALUES (${all.map(() => '?').join(', ')})`, vals);
+        } else if (op.kind === 'update') {
+          r = await q(`UPDATE ${quoteMysqlIdent(object)} SET ${cols.map((k) => `${quoteMysqlIdent(k)} = ?`).join(', ')} WHERE ${quoteMysqlIdent(op.keyColumn)} = ?`, [...cols.map((k) => op.values[k]), op.key]);
+        } else r = await q(`DELETE FROM ${quoteMysqlIdent(object)} WHERE ${quoteMysqlIdent(op.keyColumn)} = ?`, [op.key]);
+        await c.query('COMMIT');
+        return { affected: r[0]?.affectedRows ?? 0 };
+      } catch (err) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      }
+    });
   }
 
   async rows(object: string, opts: { watermarkColumn: string | null; after: string | null; limit: number; timeoutMs: number }): Promise<QueryResult> {

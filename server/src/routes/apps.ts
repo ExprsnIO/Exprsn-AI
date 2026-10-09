@@ -3,8 +3,11 @@ import { z } from 'zod';
 import { clears, LABELS } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
-import { badRequest, notFound } from '../http/problem.js';
+import { badRequest, forbidden, notFound } from '../http/problem.js';
 import { draft, draftSchema } from '../apps/drafts.js';
+import { fillView } from '../apps/ai-fills.js';
+import { modelApplySchema, modelDraftSchema } from '../apps/model-drafts.js';
+import { sourceInputSchema } from '../apps/sources.js';
 import { formDefinitionSchema, formView } from '../apps/forms.js';
 import { aggregateSchema, filterSchema, sortSchema, type Filter, type Sort } from '../apps/query.js';
 import { entityDefinitionSchema, nameSchema } from '../apps/schema.js';
@@ -129,7 +132,9 @@ export function appRoutes(s: Services): Router {
     const app = await a.app(p, param(req, 'app'));
     const entities = await a.entities(app);
     const forms = await a.forms.list(app);
-    res.json({ ...appView(app), entities: entities.map(entityView), forms: forms.map((f) => formView(f.form, f.entity)), ...(effectivePermissions(p).has('apps:design') ? { triggers: await a.triggers.list(app) } : {}) });
+    const designer = effectivePermissions(p).has('apps:design');
+    const sources = designer ? await Promise.all((await a.sources.list(app)).map((x) => a.sources.view(x, entities.find((e) => e.id === x.entity_id)?.name ?? ''))) : [];
+    res.json({ ...appView(app), entities: entities.map(entityView), forms: forms.map((f) => formView(f.form, f.entity)), ...(designer ? { triggers: await a.triggers.list(app), sources } : {}) });
   });
 
   r.patch('/apps/:app', design, async (req, res) => {
@@ -146,6 +151,22 @@ export function appRoutes(s: Services): Router {
     const bundle = await a.bundles.export(actor(req), param(req, 'app'));
     res.setHeader('Content-Disposition', `attachment; filename="${bundle.app.name}.app.json"`);
     res.json(bundle);
+  });
+
+  // ---------- data model drafts (1.6.0, B-8301) ----------
+  // A description becomes a draft of the app's whole data model, shown as a diff; accepting it applies the diff.
+
+  r.post('/apps/:app/model/draft', design, async (req, res) => {
+    const body = parseBody(modelDraftSchema.extend({ label: label.default('internal') }), req.body);
+    const p = principalOf(req);
+    if (!clears(p.clearance, body.label)) throw badRequest(`Your clearance is ${p.clearance}; a ${body.label} draft is above it.`);
+    const app = await a.designable(p, param(req, 'app'));
+    res.json(await a.modelDrafts.draft(actor(req), app, { prompt: body.prompt, profile: body.profile }, body.label));
+  });
+
+  r.post('/apps/:app/model/apply', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    res.json(await a.modelDrafts.apply(actor(req), app, parseBody(modelApplySchema, req.body)));
   });
 
   // ---------- entities ----------
@@ -176,6 +197,70 @@ export function appRoutes(s: Services): Router {
   r.get('/apps/:app/entities/:entity/fields/:field/options', read, async (req, res) => {
     const q = parseBody(z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) }), req.query);
     res.json({ options: await a.options(principalOf(req), param(req, 'app'), param(req, 'entity'), param(req, 'field'), q.q ?? null, q.limit) });
+  });
+
+  // ---------- AI fills over every row (1.6.0, B-8402) ----------
+
+  const fillBody = z.object({ field: nameSchema, scope: z.enum(['empty', 'all']).default('empty') }).strict();
+
+  r.post('/apps/:app/entities/:entity/ai/estimate', design, async (req, res) => {
+    const body = parseBody(fillBody, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(await a.aiFills.estimate(principalOf(req), app, entity, body.field, body.scope));
+  });
+
+  r.get('/apps/:app/entities/:entity/ai/fills', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json({ fills: (await a.aiFills.list(entity)).map(fillView) });
+  });
+
+  r.post('/apps/:app/entities/:entity/ai/fills', design, async (req, res) => {
+    const body = parseBody(fillBody, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.status(202).json(fillView(await a.aiFills.start(actor(req), app, entity, body.field, body.scope)));
+  });
+
+  r.get('/apps/:app/entities/:entity/ai/fills/:id', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(fillView(await a.aiFills.get(entity, parseBody(id26, req.params.id))));
+  });
+
+  r.post('/apps/:app/entities/:entity/ai/fills/:id/cancel', design, async (req, res) => {
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(fillView(await a.aiFills.cancel(actor(req), app, entity, parseBody(id26, req.params.id))));
+  });
+
+  // ---------- outside tables (1.6.0, B-8501) ----------
+  // Attaching a table reads it unmasked through its connection, so the designer must also manage connections.
+
+  const attach = (req: Request) => {
+    if (!effectivePermissions(principalOf(req)).has('connections:manage')) throw forbidden('Attaching an outside table needs connections:manage as well as apps:design.', { step: 'permission' });
+  };
+
+  r.get('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    const src = await a.sources.of(entity);
+    if (!src) throw notFound('Source');
+    res.json(await a.sources.view(src, entity.name));
+  });
+
+  r.put('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    attach(req);
+    const body = parseBody(sourceInputSchema, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(await a.sources.view(await a.sources.set(actor(req), app, entity, body), entity.name));
+  });
+
+  r.delete('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    attach(req);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    await a.sources.remove(actor(req), app, entity);
+    res.status(204).end();
+  });
+
+  r.post('/apps/:app/entities/:entity/source/pull', design, async (req, res) => {
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.status(202).json(await a.sources.pullNow(actor(req), app, entity));
   });
 
   // ---------- records ----------
