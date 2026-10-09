@@ -104,6 +104,12 @@
     return out;
   }
   const siblingsOf = (conv, m) => conv.messages.filter((x) => x.parentId === m.parentId && x.role === m.role).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+  // 1.6.0 (B-8001): artifacts, from /api/conversations/:id/artifacts (owner, share reader) or the shared transcript.
+  const artifactsOf = (st) => (st.sharedView ? st.sharedView.artifacts || [] : st.conv && st.artifactsFor === st.conv.id ? st.artifacts || [] : []);
+  async function loadArtifacts(st) {
+    const id = st.conv && st.conv.id; if (!id) return;
+    try { const r = await App.get(cUrl(id) + '/artifacts'); if (S() === st && st.conv && st.conv.id === id) { st.artifacts = r.artifacts || []; st.artifactsFor = id; } } catch (err) { st.artifacts = []; st.artifactsFor = id; }
+  }
   const headAnswer = (st) => { const p = pathOf(st.conv); const last = p[p.length - 1]; return last && last.role === 'assistant' ? last : null; };
 
   // ---------- socket ----------
@@ -171,6 +177,7 @@
     const m = byId(st, d.messageId);
     if (!m) { st.doneBuf = st.doneBuf || {}; st.doneBuf[d.messageId] = d; return; }
     applyDone(st, m, d);
+    if (d.state === 'complete' || d.state === 'stopped') loadArtifacts(st).then(schedule);
     // Citations (and a label raised by retrieval) are stored with the answer: reload the conversation to show them.
     if (st.citeFor && st.citeFor[d.messageId]) { delete st.citeFor[d.messageId]; loadConv(false).then(schedule); }
     if (d.state === 'failed') App.toast('<b>The answer failed</b> ' + esc(d.error || ''), 'danger', 6000);
@@ -335,6 +342,7 @@
     if (held) h += '<div class="ch-held" role="status">' + UI.icon('clock', 13) + ' <b>Held for review.</b> <span class="muted">A guardrail asked a reviewer to check this answer. It appears here once approved' + (streaming ? '; the model is still finishing it.' : '.') + '</span></div>';
     if (!held && (m.content || streaming)) h += '<div class="ch-answer serif">' + richText(m.content, m) + (streaming ? '<span class="blink ch-caret">▍</span>' : '') + '</div>';
     if ((m.citations || []).length && !streaming) h += '<div class="ch-srcs"><div class="eyebrow">Sources</div>' + sourcesHtml(m, 'ch-src') + '</div>';
+    if (!streaming) h += artifactChips(st, m.id);
     const rs = (st.resumed || {})[m.id];
     if (rs) h += '<div class="ch-gap">' + UI.icon('refresh', 12) + ' Stream resumed after event ' + num(rs.at) + (rs.to > rs.at ? '; ' + num(rs.to - rs.at) + ' events caught up' : '') + ', no duplicate text.</div>';
     if (m.state === 'stopped') h += '<div class="ch-final">' + UI.pill('stopped', 'warn') + ' <span class="muted">Stopped. What was produced is kept and metered.</span></div>';
@@ -412,9 +420,44 @@
     if (!p || (p.residency !== 'cold' && !st.forceCold)) return '';
     return '<div class="ch-cold">' + UI.icon('clock', 14) + '<span class="grow"><b>' + esc(p.name) + '</b> uses <span class="mono">' + esc(p.model) + '</span>, which is not loaded on any instance' + (p.residency === 'cold' ? '' : ' in this example; right now it is loaded') + '. Model cold start: the first answer may take a moment while it loads. You can send now; the message queues.</span></div>';
   }
+  /** 1.6.0 (B-8001): the chips under an answer for the artifact versions it produced. */
+  function artifactChips(st, messageId) {
+    const chips = [];
+    artifactsOf(st).forEach((a) => a.versions.forEach((v) => { if (v.messageId === messageId) chips.push(UI.chip(UI.icon(a.kind === 'html' ? 'images' : a.kind === 'document' ? 'knowledge' : 'scripts', 12) + ' ' + esc(a.key) + ' <span class="muted">v' + v.version + '</span>', !!(st.artifact && st.artifact.id === a.id && st.artifact.version === v.version), 'data-art="' + esc(a.id) + '" data-ver="' + v.version + '" aria-label="Open ' + esc(a.key) + ' version ' + v.version + '"')); }));
+    return chips.length ? '<div class="ch-arts">' + chips.join('') + '</div>' : '';
+  }
+  /** The artifacts panel: the open artifact with its version switcher and sandboxed render, then the list. */
+  function artifactsHtml(st) {
+    const list = artifactsOf(st);
+    if (!list.length) return '';
+    let h = '<div class="ch-art"><div class="eyebrow">Artifacts</div>';
+    const open = st.artifact ? list.find((a) => a.id === st.artifact.id) : null;
+    if (open) {
+      const v = open.versions.find((x) => x.version === st.artifact.version) || open.versions[open.versions.length - 1];
+      const last = open.versions[open.versions.length - 1].version;
+      h += '<div class="ahead"><b class="mono">' + esc(open.key) + '</b>' + UI.pill(open.kind, 'outline') + UI.label(open.label, { sm: true }) + '<span class="right">' + UI.iconbtn('chevron-left', 'Earlier version', { cls: 'sm', attrs: 'data-artprev' + (v.version === open.versions[0].version ? ' disabled' : '') })
+        + UI.select(open.versions.map((x) => ({ value: String(x.version), label: 'v' + x.version })), String(v.version), 'data-artversion aria-label="Version of ' + esc(open.key) + '"') + UI.iconbtn('chevron-right', 'Later version', { cls: 'sm', attrs: 'data-artnext' + (v.version === last ? ' disabled' : '') }) + '</span></div>';
+      if (open.kind === 'html') h += '<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="' + esc(open.key) + ' version ' + v.version + '" src="' + esc(v.rawUrl) + '"></iframe>';
+      else h += '<pre data-artbody>' + (st.artifactText && st.artifactText.id === v.id ? esc(st.artifactText.content) : '<span class="muted">Loading…</span>') + '</pre>';
+      h += '<div class="hstack gap6"><span class="ch-artmeta">' + esc(String(v.bytes)) + ' bytes, version ' + v.version + ' of ' + last + (open.kind === 'html' ? ', rendered in a sandbox that cannot reach this page' : '') + '</span><span class="right hstack gap4">' + UI.btn('Copy', { size: 'sm', attrs: 'data-artcopy' }) + UI.btn('Open', { size: 'sm', kind: 'ghost', attrs: 'data-artopen' }) + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-artclose' }) + '</span></div>';
+    }
+    h += '<div class="alist">' + list.map((a) => UI.listItem(esc(a.key), a.versions.length + ' version' + (a.versions.length > 1 ? 's' : '') + ', ' + esc(a.kind), { active: !!(open && open.id === a.id), attrs: 'data-art="' + esc(a.id) + '" data-ver="' + a.versions[a.versions.length - 1].version + '"', right: '<span class="muted">v' + a.versions[a.versions.length - 1].version + '</span>' })).join('') + '</div></div>';
+    return h;
+  }
+  /** Code and document artifacts are fetched as text (HTML ones render in the frame). */
+  async function loadArtifactText(st) {
+    const list = artifactsOf(st); const open = st.artifact ? list.find((a) => a.id === st.artifact.id) : null; if (!open || open.kind === 'html') return;
+    const v = open.versions.find((x) => x.version === st.artifact.version) || open.versions[open.versions.length - 1];
+    if (st.artifactText && st.artifactText.id === v.id) return;
+    try {
+      const r = st.sharedView ? await fetch(v.rawUrl, { credentials: 'omit' }).then((x) => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.text(); }).then((content) => ({ content })) : await App.get(cUrl(st.conv.id) + '/artifacts/' + enc(open.id) + '/versions/' + v.version);
+      st.artifactText = { id: v.id, content: r.content };
+    } catch (err) { st.artifactText = { id: v.id, content: 'This version could not be loaded: ' + (err.message || 'error') }; }
+    schedule();
+  }
   function sideHtml(st) {
     const conv = st.conv; const p = selProfile(st);
-    let h = '';
+    let h = artifactsHtml(st);
     if (conv) {
       const clearance = App.me && App.me.user ? App.me.user.clearance : 'public';
       const up = LABELS.filter((l) => rank(l) > rank(conv.label) && rank(l) <= rank(clearance));
@@ -489,6 +532,7 @@
       const conv = await App.get(cUrl(id));
       if (S() !== st || st.convId !== id) return;
       setConv(st, conv); st.convError = null;
+      await loadArtifacts(st);
     } catch (err) {
       if (err.status === 404) { st.convId = null; setConv(st, null); App.toast('That conversation no longer exists.', 'warn'); } else st.convError = err;
     }
@@ -739,7 +783,7 @@
     const v = st.sharedView; if (!v) return '';
     const msgs = sharedMsgsHtml(st, v);
     return UI.notice('Shared by ' + esc(v.owner && v.owner.name ? v.owner.name : 'its owner') + '. You can read this conversation but not add to it' + (st.sharedLive ? '; new answers appear here as they are written' : '') + '. Access ends when the owner revokes it or its label rises above your clearance.', 'info')
-      + (msgs || UI.empty('No messages', 'The conversation has no messages yet.'));
+      + (msgs || UI.empty('No messages', 'The conversation has no messages yet.')) + artifactsHtml(st);
   }
 
   function shareModal(ctx) {
@@ -932,6 +976,9 @@
         + '.ch-atts{display:flex;flex-direction:column;gap:6px}.ch-att{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px}.ch-att.bad{border-color:var(--danger-fg)}.ch-attwhy{color:var(--danger-fg)}'
         + '.ch-actions{display:flex;align-items:center;gap:12px}.ch-hint{font-size:12px}'
         + '.ch-answer .ch-cite{display:inline-block;margin-left:2px;font-size:11px;font-weight:700;vertical-align:super;text-decoration:none;font-family:var(--sans)}'
+        + '.ch-arts{display:flex;flex-wrap:wrap;gap:4px}.ch-art{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}.ch-art .ahead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.ch-art .ahead .right{margin-left:auto;display:inline-flex;align-items:center;gap:4px}'
+        + '.ch-art iframe{width:100%;height:320px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}.ch-art pre{margin:0;max-height:360px;overflow:auto;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);font-family:var(--mono,monospace);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}'
+        + '.ch-art .alist{display:flex;flex-direction:column;gap:2px}.ch-artmeta{font-size:12px;color:var(--muted)}'
         + '.ch-held{padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);font-size:13px}.ch-pass{display:block;margin-top:2px;color:var(--fg2);font-style:italic}.ch-quote{margin:0;padding:8px 12px;border-left:3px solid var(--accent);background:var(--panel);font-size:14px}'
         + '.ch-srcs{display:flex;flex-direction:column;gap:4px}.ch-src,.ch-isrc{display:flex;gap:8px;align-items:flex-start;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit;font-size:12px;text-align:left;cursor:pointer}.ch-isrc{border-color:transparent;background:none}'
         + '.ch-src:hover,.ch-isrc:hover,.ch-src.hi,.ch-isrc.hi{background:var(--accent-tint)}.ch-src .n,.ch-isrc .n{width:18px;height:18px;border-radius:50%;background:var(--sel);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.ch-src .t,.ch-isrc .t{display:block;font-weight:600}.ch-src .s,.ch-isrc .s{display:block}'
@@ -989,6 +1036,15 @@
       ctx.on('input', '[data-search]', (e, t) => { st.query = t.value; const el = ctx.$('[data-region="list"]'); if (el) el.innerHTML = listHtml(st); });
       ctx.on('click', '[data-archived]', async () => { st.archived = !st.archived; await loadList(); rerender(); });
       ctx.on('click', '[data-dismiss]', () => { st.notice = null; rerender(); });
+      ctx.on('click', '[data-art]', (e, t) => { st.artifact = { id: t.dataset.art, version: Number(t.dataset.ver) }; loadArtifactText(st); rerender(); });
+      ctx.on('change', '[data-artversion]', (e, t) => { if (st.artifact) { st.artifact = { id: st.artifact.id, version: Number(t.value) }; loadArtifactText(st); rerender(); } });
+      ctx.on('click', '[data-artprev], [data-artnext]', (e, t) => { const a = artifactsOf(st).find((x) => x.id === (st.artifact || {}).id); if (!a) return; const i = a.versions.findIndex((x) => x.version === st.artifact.version); const n = a.versions[i + (t.hasAttribute('data-artnext') ? 1 : -1)]; if (n) { st.artifact = { id: a.id, version: n.version }; loadArtifactText(st); rerender(); } });
+      ctx.on('click', '[data-artclose]', () => { st.artifact = null; rerender(); });
+      ctx.on('click', '[data-artopen]', () => { const a = artifactsOf(st).find((x) => x.id === (st.artifact || {}).id); const v = a && (a.versions.find((x) => x.version === st.artifact.version) || a.versions[a.versions.length - 1]); if (v) window.open(v.rawUrl, '_blank', 'noopener'); });
+      ctx.on('click', '[data-artcopy]', async () => {
+        const a = artifactsOf(st).find((x) => x.id === (st.artifact || {}).id); const v = a && (a.versions.find((x) => x.version === st.artifact.version) || a.versions[a.versions.length - 1]); if (!v) return;
+        try { const text = st.artifactText && st.artifactText.id === v.id ? st.artifactText.content : await fetch(v.rawUrl, { credentials: 'omit' }).then((x) => x.text()); await navigator.clipboard.writeText(text); App.toast('Copied ' + esc(a.key) + ' v' + v.version + '.', 'ok'); } catch (err) { App.toast('Could not copy.', 'warn'); }
+      });
       ctx.on('click', '[data-think]', (e, t) => { const id = t.dataset.think; const m = byId(st, id); const cur = st.openThink && st.openThink[id] !== undefined ? st.openThink[id] : active(m) && !m.content; st.openThink = st.openThink || {}; st.openThink[id] = !cur; paint(); });
       ctx.on('click', '[data-cp]', (e, t) => {
         const m = byId(st, t.dataset.cp); if (!m) return;

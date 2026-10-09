@@ -76,6 +76,13 @@ async function main() {
     const last = messages[messages.length - 1];
     if (call && last?.role !== 'tool') return { content: '', toolCall: { name: call[1]!, arguments: call[2] ? (JSON.parse(call[2]) as Record<string, unknown>) : { task: 'Carry on with the September close.' } } };
     if (call && last?.role === 'tool') return { content: `Done: ${String(last.content).slice(0, 160)}` };
+    // 1.6.0 (B-8001): a question that asks for an "html page" answers with a fenced index.html (and a helper script), so
+    // the Chat spec can open the artifact; a later turn with a different greeting makes a second version.
+    const page = /html page/i.exec(String(last?.content ?? ''));
+    if (page) {
+      const greeting = /goodbye/i.test(String(last?.content ?? '')) ? 'Goodbye' : 'Hello';
+      return { content: `Here is the page.\n\n\`\`\`html index.html\n<!doctype html>\n<html><body><h1 data-greeting>${greeting} from the artifact</h1><script>document.body.dataset.ran = 'yes';</script></body></html>\n\`\`\`\n\nAnd the helper:\n\n\`\`\`js\nexport function greet(name) {\n  return 'Welcome, ' + name;\n}\nexport const helper = true;\n\`\`\`` };
+    }
     return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
   };
   const mcp = await new FakeMcp().start();

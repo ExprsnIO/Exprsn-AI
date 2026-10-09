@@ -65,6 +65,9 @@
     }, 4000);
   }
 
+  /** 1.6.0 (B-7901): one line on the C2PA manifest, from the summary the job stored. */
+  const ccText = (c) => (c.contentCredentials ? (c.contentCredentials.signed ? 'C2PA manifest signed by the tenant CA' : '<span style="color:var(--warn-fg)">not signed: ' + esc(c.contentCredentials.reason || 'no manifest') + '</span>') : 'none recorded');
+
   App.register({
     id: 'images', title: 'Images', live: true, summary: 'Prompt, provider, honest job progress, safety and provenance, quota',
     label: (st) => { const sel = (st.images || []).find((c) => c.id === st.sel) || (st.images || [])[0]; return sel ? sel.label : null; },
@@ -82,6 +85,10 @@
       { title: 'Honest waiting', tone: 'neutral', text: 'Queue position and the real stage are shown. No indeterminate spinner and no invented percentage.', apply(ctx) {
         const st = ctx.state; st.honest = true;
         const w = (st.images || []).find((x) => ACTIVE[x.state]); if (w) st.sel = w.id; ctx.rerender();
+      } },
+      { title: 'No issuing CA', tone: 'warn', text: 'Without a tenant issuing CA (or key custody) an image keeps the HMAC manifest only; the inspector says why and points at Certificates.', apply(ctx) {
+        const st = ctx.state; st.ccNote = true; const pick = (st.images || []).find((x) => x.state === 'succeeded' && x.contentCredentials && !x.contentCredentials.signed) || (st.images || []).find((x) => x.state === 'succeeded');
+        if (pick) st.sel = pick.id; ctx.rerender(); if (!pick || (pick.contentCredentials && pick.contentCredentials.signed)) ctx.toast('<span>Every finished image here carries signed content credentials. The note appears when a tenant has no issuing CA.</span>', '', 5000);
       } },
       { title: 'Download', tone: 'neutral', text: 'Downloads carry the provenance manifest and show the label warning for confidential and above.', apply(ctx) {
         const st = ctx.state; const done = (st.images || []).filter((x) => x.state === 'succeeded');
@@ -143,7 +150,8 @@
         const c = sel;
         if (!c) return UI.empty('No images yet', 'Write a prompt, pick a worker and generate.');
         const common = [['Label', UI.label(c.label, { sm: true })], ['Job', '<span class="mono">' + esc(c.id) + '</span>']];
-        if (c.state === 'succeeded') return UI.kv(common.concat([['GPU-seconds', esc(c.gpuSeconds)], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>'], ['Provenance', 'manifest signed by Exprsn-AI, in the file and beside it'], ['Safety', esc(safetyText(c))]]), 1)
+        if (c.state === 'succeeded') return UI.kv(common.concat([['GPU-seconds', esc(c.gpuSeconds)], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>'], ['Provenance', 'manifest signed by Exprsn-AI, in the file and beside it'], ['Content credentials', ccText(c) + ' <a href="#" data-cc="' + esc(c.id) + '">details</a>'], ['Safety', esc(safetyText(c))]]), 1)
+          + (c.contentCredentials && !c.contentCredentials.signed && ctx.state.ccNote ? UI.notice('<b>No C2PA manifest.</b> ' + esc(c.contentCredentials.reason || '') + (App.can('pki:manage') ? ' <a href="#" data-gocerts>Certificates</a>' : ''), 'warn') : '')
           + '<div class="hstack wrap gap6">' + UI.btn('Send to chat', { attrs: 'data-tochat' + (App.can('chat:write') ? '' : ' disabled title="Needs the chat:write permission"') }) + UI.btn('Vary', { attrs: 'data-vary' }) + UI.btn('Download', { icon: 'download', attrs: 'data-download' }) + '</div>';
         if (c.state === 'running') return UI.kv(common.concat([['Stage', esc(c.stage || 'Starting') + (c.step && c.steps ? ', step ' + c.step + ' of ' + c.steps : '')], ['GPU', esc(c.node || backendLabel(c.backend))], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>'], ['Estimate', 'none beyond the step count; steps are reported by the worker']]), 1) + '<div class="hstack gap6">' + UI.btn('Cancel job', { kind: 'danger', attrs: 'data-cancel' }) + '</div>';
         if (c.state === 'queued') return UI.kv(common.concat([['Queue', 'position ' + esc(c.position || 1) + ' on ' + esc(backendLabel(c.backend))], ['Wait', esc(waitText(c))], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>'], ['Provider', esc(backendLabel(c.backend))]]), 1) + '<div class="hstack gap6">' + UI.btn('Cancel job', { kind: 'danger', attrs: 'data-cancel' }) + '</div>';
@@ -251,9 +259,10 @@
         const high = c.label === 'confidential' || c.label === 'restricted';
         const file = 'image-' + c.id.toLowerCase() + '.png';
         ctx.modal({ title: 'Download ' + UI.label(c.label, { sm: true }), body: (high ? UI.notice('<b>This image is ' + esc(c.label) + '.</b> Downloading copies it outside the console. The download is written to the audit log with your name and the trace ID.', 'warn') : '')
-          + UI.kv([['File', '<span class="mono">' + esc(file) + '</span>'], ['Size', esc(c.width + ' x ' + c.height)], ['Provenance', '<span data-prov>checking the signature…</span>'], ['Label', UI.label(c.label, { sm: true }) + ' <span class="muted">in the manifest and the sidecar</span>'], ['Safety', esc(safetyText(c))], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>']], 2),
+          + UI.kv([['File', '<span class="mono">' + esc(file) + '</span>'], ['Size', esc(c.width + ' x ' + c.height)], ['Provenance', '<span data-prov>checking the signature…</span>'], ['Content credentials', '<span data-cc2>' + ccText(c) + '</span>'], ['Label', UI.label(c.label, { sm: true }) + ' <span class="muted">in the manifest and the sidecar</span>'], ['Safety', esc(safetyText(c))], ['Seed', '<span class="mono">' + esc(c.seed) + '</span>']], 2),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(high ? 'Download and log' : 'Download', { kind: 'primary', icon: 'download', attrs: 'data-go' }),
           onMount(m) {
+            if (c.contentCredentials && c.contentCredentials.signed) App.get('/api/images/' + enc(c.id) + '/content-credentials').then((v) => { const el = m.querySelector('[data-cc2]'); if (el) el.innerHTML = v.verified ? 'C2PA manifest, signed by the tenant CA, verified' : '<span style="color:var(--danger-fg)">C2PA manifest does not verify: ' + esc((v.problems || []).join(' ')) + '</span>'; }).catch(() => undefined);
             App.get('/api/images/' + enc(c.id) + '/provenance').then((v) => { const el = m.querySelector('[data-prov]'); if (el) el.innerHTML = v.verified ? 'manifest embedded, signature verified' : '<span style="color:var(--danger-fg)">manifest does not verify' + (v.signature ? '' : ': bad signature') + (v.bytesMatch ? '' : ': the pixels changed') + '</span>'; }).catch(() => { const el = m.querySelector('[data-prov]'); if (el) el.textContent = 'could not be checked'; });
             m.querySelector('[data-go]').addEventListener('click', () => {
               const a = document.createElement('a'); a.href = '/api/images/' + enc(c.id) + '/download'; a.download = file; document.body.appendChild(a); a.click(); a.remove();
@@ -262,6 +271,18 @@
           } });
       };
       ctx.on('click', '[data-download]', openDownload);
+      ctx.on('click', '[data-gocerts]', (e) => { e.preventDefault(); ctx.navigate('certificates'); });
+      ctx.on('click', '[data-cc]', async (e, t) => {
+        e.preventDefault();
+        try {
+          const v = await App.get('/api/images/' + enc(t.dataset.cc) + '/content-credentials');
+          const ok = (b) => (b === true ? UI.pill('ok', 'ok') : b === false ? UI.pill('failed', 'danger') : UI.pill('not checked', 'outline'));
+          const rows = v.present ? [['Verified', ok(v.verified)], ['Claim and assertions', ok(v.checks.claimHashes)], ['Bytes match the data hash', ok(v.checks.dataHash)], ['Claim signature', ok(v.checks.signature)], ['Certificate chain', ok(v.checks.chain)], ['Trusted by the tenant CA', ok(v.checks.anchor)], ['Certificate valid now', ok(v.checks.certificateValid)]]
+            .concat(v.manifest ? [['Manifest', '<span class="mono">' + esc(v.manifest.label || '') + '</span>'], ['Generator', esc(v.manifest.generator || '')], ['Created', esc(v.manifest.created || '')], ['Model', esc(v.manifest.model || '')]] : [])
+            .concat(v.signer ? [['Signed by', esc(v.signer.subject.replace(/\n/g, ', '))], ['Issuer', esc(v.signer.issuer.replace(/\n/g, ', '))], ['Certificate', '<span class="mono">' + esc(v.signer.fingerprint.slice(0, 16)) + '…</span>, valid until ' + esc(v.signer.notAfter.slice(0, 10))]] : []) : [['Manifest', 'none'], ['Why', esc((v.summary && v.summary.reason) || (v.problems || []).join(' '))]];
+          ctx.modal({ title: 'Content credentials', body: UI.kv(rows, 1) + ((v.problems || []).length ? UI.notice(esc(v.problems.join(' ')), v.verified ? 'info' : 'danger') : '') + '<div class="fg2" style="font-size:12px">A C2PA manifest in the PNG (its caBX chunk), signed by the tenant\'s content-credentials certificate. Verify a downloaded file offline with <span class="mono">exprsn-ai c2pa:verify</span>.</div>', actions: UI.btn('Close', { attrs: 'data-close' }) });
+        } catch (err) { App.fail(err, 'Could not read the content credentials'); }
+      });
       if (st.openDownload) { st.openDownload = false; setTimeout(openDownload, 50); }
     }
   });

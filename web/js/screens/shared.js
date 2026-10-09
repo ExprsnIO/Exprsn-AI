@@ -26,6 +26,26 @@
       .finally(() => { st.loading = false; rerender(); });
   }
 
+  /** 1.6.0 (B-8001): the artifacts of the shown answers, with a version switcher and the sandboxed render. */
+  function artifactsHtml(st, v) {
+    const list = v.artifacts || []; if (!list.length) return '';
+    const open = st.artifact ? list.find((a) => a.id === st.artifact.id) : null;
+    let h = '<div class="sh-a"><div class="eyebrow">Artifacts</div>';
+    if (open) {
+      const ver = open.versions.find((x) => x.version === st.artifact.version) || open.versions[open.versions.length - 1];
+      h += '<div class="hstack wrap gap6"><b class="mono">' + esc(open.key) + '</b>' + UI.pill(open.kind, 'outline') + UI.select(open.versions.map((x) => ({ value: String(x.version), label: 'v' + x.version })), String(ver.version), 'data-artversion aria-label="Version of ' + esc(open.key) + '"') + UI.btn('Close', { kind: 'ghost', size: 'sm', attrs: 'data-artclose' }) + '</div>';
+      h += open.kind === 'html' ? '<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="' + esc(open.key) + ' version ' + ver.version + '" src="' + esc(ver.rawUrl) + '" style="width:100%;height:320px;border:1px solid var(--line);border-radius:6px;background:var(--panel)"></iframe>'
+        : '<pre class="sh-pre" data-artbody>' + (st.artifactText && st.artifactText.id === ver.id ? esc(st.artifactText.content) : '<span class="muted">Loading…</span>') + '</pre>';
+    }
+    h += '<div class="vstack gap2">' + list.map((a) => UI.listItem(esc(a.key), a.versions.length + ' version' + (a.versions.length > 1 ? 's' : '') + ', ' + esc(a.kind), { active: !!(open && open.id === a.id), attrs: 'data-art="' + esc(a.id) + '" data-ver="' + a.versions[a.versions.length - 1].version + '"' })).join('') + '</div></div>';
+    return h;
+  }
+  function loadArtifactText(st, rerender) {
+    const v = st.view; const list = (v && v.artifacts) || []; const open = st.artifact ? list.find((a) => a.id === st.artifact.id) : null; if (!open || open.kind === 'html') return;
+    const ver = open.versions.find((x) => x.version === st.artifact.version) || open.versions[open.versions.length - 1];
+    if (st.artifactText && st.artifactText.id === ver.id) return;
+    fetch(ver.rawUrl, { credentials: 'omit' }).then((x) => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.text(); }).then((content) => { st.artifactText = { id: ver.id, content }; }).catch((err) => { st.artifactText = { id: ver.id, content: 'This version could not be loaded: ' + err.message }; }).then(rerender);
+  }
   function messagesHtml(v) {
     return v.messages.map((m) => {
       if (m.role === 'user') return '<div class="sh-q"><div class="eyebrow">Question</div><div class="sh-text">' + esc(m.content).replace(/\n/g, '<br>') + '</div></div>';
@@ -53,6 +73,7 @@
         + '.sh-q,.sh-a{padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);display:flex;flex-direction:column;gap:6px}'
         + '.sh-q{background:var(--panel2)}.sh-text{font-size:15px;line-height:1.55;color:var(--fg);overflow-wrap:anywhere}'
         + '.sh-src{font-size:12px;color:var(--fg2);display:flex;flex-direction:column;gap:2px;margin-top:6px}'
+        + '.sh-pre{margin:0;max-height:360px;overflow:auto;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);font-family:var(--mono,monospace);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}'
         + '</style>';
       let body;
       if (!st.token) body = UI.empty('No link', 'Open the full link you were given. It starts with #/shared?t=.');
@@ -64,11 +85,14 @@
         const v = st.view;
         body = UI.pagehead(esc(v.title || 'Shared conversation'), 'Last updated ' + esc(when(v.updatedAt)), UI.pill('read only', 'outline') + UI.label(v.label, { sm: true }))
           + UI.notice('Shared through a link that works without signing in. You can read this conversation but not add to it. Each opening is recorded.', 'info')
-          + (messagesHtml(v) || UI.empty('No messages', 'The conversation has no messages yet.'));
+          + (messagesHtml(v) || UI.empty('No messages', 'The conversation has no messages yet.')) + artifactsHtml(st, v);
       }
       root.innerHTML = style + '<div class="page"><div class="sh-wrap">' + body
         + (App.me ? '' : '<div class="muted" style="font-size:12px">Exprsn-AI. <a href="#/signin">Sign in</a> to use chat.</div>')
         + '</div></div>';
+      ctx.on('click', '[data-art]', (e, t) => { st.artifact = { id: t.dataset.art, version: Number(t.dataset.ver) }; loadArtifactText(st, ctx.rerender); ctx.rerender(); });
+      ctx.on('change', '[data-artversion]', (e, t) => { if (st.artifact) { st.artifact = { id: st.artifact.id, version: Number(t.value) }; loadArtifactText(st, ctx.rerender); ctx.rerender(); } });
+      ctx.on('click', '[data-artclose]', () => { st.artifact = null; ctx.rerender(); });
     }
   });
 })();
