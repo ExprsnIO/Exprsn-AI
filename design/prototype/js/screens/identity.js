@@ -67,6 +67,12 @@
     { ws: 'People Ops', id: '01J8PEOPLE0000000000000BBB', ceiling: 'confidential', enabled: true, groups: ['agents', 'knowledge'], label: 'confidential', dpop: true, updated: '4 Oct 2026, Mara Okafor' },
     { ws: 'Field Sales', id: '01J8FIELDS0000000000000CCC', ceiling: 'internal', enabled: false, groups: ['workflows', 'agents', 'knowledge', 'tools', 'records'], label: 'internal', dpop: false, updated: null }
   ];
+  // 1.7.0 (B-12201): the tenant's standing approvals for MCP write calls, as an identity admin sees them.
+  const MCPSTANDING0 = [
+    { id: 'a1', user: 'mia', ws: 'Finance Ops', tool: 'records_create', client: 'Claude', side: 'write', label: 'internal', until: 'Oct 16, 10:30', uses: 14, state: 'active' },
+    { id: 'a2', user: 'noah', ws: 'Finance Ops', tool: null, client: null, side: 'destructive', label: 'internal', until: 'Oct 12, 18:00', uses: 2, state: 'active' },
+    { id: 'a3', user: 'mia', ws: 'People Ops', tool: 'records_update', client: 'Claude', side: 'write', label: 'confidential', until: 'Oct 8, 09:00', uses: 31, state: 'expired' }
+  ];
   const MCPCLIENTS0 = [
     { name: 'Claude', clientId: 'c_5a64c298', type: 'public', redirect: 'https://claude.ai/api/mcp/auth_callback', scopes: 'tools:invoke agents:run inference:invoke knowledge:read records:read records:write', used: 'today 10:12', created: '2 Oct 2026' },
     { name: 'MCP Inspector', clientId: 'c_0be41c77', type: 'public', redirect: 'http://localhost:6274/oauth/callback', scopes: 'records:read', used: 'never', created: '6 Oct 2026' }
@@ -131,6 +137,7 @@
       { title: 'SAML metadata import', tone: 'neutral', text: 'Parsed entity ID, ACS URLs and certificate are shown for review before saving.', apply(ctx) { ctx.state.tab = 'saml'; ctx.state.openSaml = true; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7102): the MCP server.
       { title: 'MCP server published', tone: 'ok', text: 'A workspace publishes its MCP server: clients connect to its URL, sign in through this issuer and see the groups it publishes, filtered by each person\'s roles and the label.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpJust = 'Finance Ops'; ctx.rerender(); } },
+      { title: 'Standing approval revoked by an admin', tone: 'warn', text: 'An identity admin sees every standing approval of the tenant (who granted it, for which client, tool, class and period, and how many calls it covered) and can revoke any; the person\'s next covered call waits for a per-call approval again. Audited mcp.server.standing.revoked with by: admin.', apply(ctx) { const st = ctx.state; st.tab = 'mcp'; st.mcpStanding = MCPSTANDING0.map((x) => Object.assign({}, x)); st.mcpStanding[1].state = 'revoked'; st.mcpStandingNote = true; ctx.rerender(); } },
       { title: 'Token for another resource', tone: 'danger', text: 'A token issued for the API or another workspace is refused with 401, and WWW-Authenticate names the protected resource metadata so the client can get the right one (RFC 8707, RFC 9728).', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpRefusal = true; ctx.rerender(); } },
       { title: 'Self-registration on', tone: 'warn', text: 'With dynamic client registration on, any MCP client that reaches the issuer can register itself; each one still asks every person for consent, and only for the MCP scopes.', apply(ctx) { ctx.state.tab = 'mcp'; ctx.state.mcpDcr = true; ctx.rerender(); } }
     ],
@@ -140,7 +147,7 @@
       if (ctx.params.client) { const c = st.clients.find((x) => x.name === ctx.params.client || x.id === ctx.params.client); if (c) { st.client = c.id; st.tab = 'clients'; } }
       if (ctx.params.tab) st.tab = ctx.params.tab;
       st.policy = st.policy || JSON.parse(JSON.stringify(POLICY0)); st.policyView = st.policyView || 'policy'; st.signups = st.signups || SIGNUPS0.map((x) => Object.assign({}, x)); st.invites = st.invites || INVITES0.map((x) => Object.assign({}, x)); st.imports = st.imports || IMPORTS0.map((x) => Object.assign({}, x)); st.dids = st.dids || DIDS0.map((x) => Object.assign({}, x)); st.signupFilter = st.signupFilter || 'pending';
-      st.mcpPubs = st.mcpPubs || MCPPUBS0.map((x) => Object.assign({}, x, { groups: x.groups.slice() })); st.mcpClients = st.mcpClients || MCPCLIENTS0.slice(); if (st.mcpDcr == null) st.mcpDcr = false;
+      st.mcpPubs = st.mcpPubs || MCPPUBS0.map((x) => Object.assign({}, x, { groups: x.groups.slice() })); st.mcpStanding = st.mcpStanding || MCPSTANDING0.map((x) => Object.assign({}, x)); st.mcpClients = st.mcpClients || MCPCLIENTS0.slice(); if (st.mcpDcr == null) st.mcpDcr = false;
       const client = st.clients.find((c) => c.id === st.client) || st.clients[2];
       const signing = st.keys.find((k) => k.state === 'signing');
 
@@ -336,7 +343,11 @@
           + UI.table(['Workspace', 'MCP server', 'Tool groups', 'Label', 'DPoP', 'Connection URL', { label: '', right: true }], st.mcpPubs.map((x) => ({ cells: ['<b>' + esc(x.ws) + '</b><div class="muted" style="font-size:11px">ceiling ' + esc(x.ceiling) + '</div>', x.enabled ? UI.pill('published', 'ok') : UI.pill('off', 'outline'), esc(x.groups.map((g) => (MCP_GROUPS.find((y) => y[0] === g) || [g, g])[1]).join(', ')), UI.label(x.label, { sm: true }), x.dpop ? UI.pill('required', 'info') : '<span class="muted">optional</span>', x.enabled ? '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(MCP_BASE + x.id) + '</span>' : '<span class="muted">not published</span>', '<span class="hstack gap6" style="justify-content:flex-end">' + (x.enabled ? UI.iconbtn('copy', 'Copy the URL of ' + x.ws, { attrs: 'data-mcpcopy="' + esc(x.id) + '"', cls: 'sm ghost' }) : '') + UI.btn('Edit', { size: 'sm', attrs: 'data-mcpedit="' + esc(x.id) + '" aria-label="Edit the MCP server of ' + esc(x.ws) + '"' }) + '</span>'], attrs: 'data-mcprow="' + esc(x.id) + '"' })), { minWidth: '760px', clickable: false })
           + '<div class="muted" style="font-size:12px">Clients find the issuer from the server\'s protected resource metadata (RFC 9728) and ask for a token for that server\'s URL (RFC 8707). Tokens for the API or another workspace are refused with 401.</div>'
           + UI.panel('Clients that registered themselves', UI.table(['Client', 'Client ID', 'Redirect URI', 'Scopes', 'Last used', { label: '', right: true }], st.mcpClients.map((c) => [esc(c.name) + ' ' + UI.pill(c.type, 'outline'), '<span class="mono">' + esc(c.clientId) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.redirect) + '</span>', '<span class="mono" style="font-size:12px;overflow-wrap:anywhere">' + esc(c.scopes) + '</span>', esc(c.used), '<span class="hstack" style="justify-content:flex-end">' + UI.btn('Open', { size: 'xs', kind: 'ghost', attrs: 'data-mcpclient="' + esc(c.clientId) + '" aria-label="Open ' + esc(c.name) + ' under OIDC clients"' }) + '</span>']), { minWidth: '640px', clickable: false, emptyTitle: 'No self-registered clients', emptyText: 'With self-registration on, MCP clients that register themselves are listed here.' })
-            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>');
+            + '<span class="muted" style="font-size:12px">Disable or remove them under OIDC clients; disabling ends their tokens at once.</span>')
+          // B-12201: standing approvals across the tenant.
+          + UI.panel('Standing approvals', '<div class="fg2" style="font-size:12px">People grant them under Settings, MCP access: a client may run write calls as them without a per-call approval, for one tool or every write tool of a server, for up to 30 days. Guardrail holds still wait. Revoke any of them here.</div>'
+            + (st.mcpStandingNote ? UI.notice('<b>Revoked.</b> noah\'s next write call from any client in Finance Ops waits for his approval again. Audited mcp.server.standing.revoked (by: admin).', 'warn') : '')
+            + UI.table(['Person', 'Covers', 'Client', 'Up to', 'Until', 'Covered calls', { label: '', right: true }], st.mcpStanding.map((a) => ({ cells: [esc(a.user), (a.tool ? '<span class="mono">' + esc(a.tool) + '</span>' : '<b>Every write tool</b>') + '<div class="muted" style="font-size:11px">' + esc(a.ws) + '</div>', a.client ? esc(a.client) : '<span class="muted">any client</span>', UI.pill(a.side, a.side === 'write' ? 'warn' : 'danger') + ' ' + UI.label(a.label, { sm: true }), esc(a.until), String(a.uses), '<span class="hstack" style="justify-content:flex-end">' + (a.state === 'active' ? UI.btn('Revoke', { size: 'sm', kind: 'ghost', attrs: 'data-standrevokeadmin="' + a.id + '" aria-label="Revoke the standing approval of ' + esc(a.user) + ' for ' + esc(a.tool || 'every write tool') + '"' }) : UI.pill(a.state, a.state === 'revoked' ? 'danger' : 'outline')) + '</span>'] })), { minWidth: '0', cls: 'bare', clickable: false, emptyTitle: 'No standing approvals', emptyText: 'Every write call from an MCP client waits for the person\'s approval.' }));
       }
       function mcpEdit(id) {
         const x = st.mcpPubs.find((p) => p.id === id);
@@ -373,6 +384,11 @@
       ctx.on('click', '[data-mcpedit]', (e, t) => mcpEdit(t.dataset.mcpedit));
       ctx.on('click', '[data-mcpcopy]', (e, t) => { const url = MCP_BASE + t.dataset.mcpcopy; if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => ctx.toast('Copied.', 'ok'), () => ctx.toast('Copy failed; select the URL instead.', 'warn')); else ctx.toast('Copy failed; select the URL instead.', 'warn'); });
       ctx.on('click', '[data-mcpdismiss]', () => { st.mcpRefusal = false; ctx.rerender(); });
+      ctx.on('click', '[data-standrevokeadmin]', async (e, t) => {
+        const a = st.mcpStanding.find((x) => x.id === t.dataset.standrevokeadmin);
+        const ok = await ctx.confirm({ title: 'Revoke ' + esc(a.user) + '\'s standing approval?', tone: 'danger', body: '<div class="fg2">' + esc(a.user) + '\'s next ' + esc(a.tool || 'write') + ' call from ' + esc(a.client || 'any client') + ' in ' + esc(a.ws) + ' waits for a per-call approval again. The approval stays listed for 30 days with the ' + a.uses + ' calls it covered.</div>', ok: 'Revoke' });
+        if (!ok) return; a.state = 'revoked'; st.mcpStandingNote = true; ctx.rerender(); ctx.toast('Standing approval revoked. Audited mcp.server.standing.revoked.', 'ok');
+      });
       ctx.on('click', '[data-mcpclient]', (e, t) => { st.tab = 'clients'; ctx.rerender(); ctx.toast('Self-registered clients are listed with the others; ' + esc(t.dataset.mcpclient) + ' is a public client with PKCE.'); });
       ctx.on('click', '[data-mcpdcr]', async () => {
         const on = !st.mcpDcr;
