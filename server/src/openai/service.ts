@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { ThinkSplitter, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import { z } from 'zod';
 import { clears, labelRank, type Label } from '../authz/labels.js';
 import { authorize, type Principal } from '../authz/policy.js';
@@ -296,12 +297,11 @@ export class OpenAiService {
     return out;
   }
 
-  private think(r: ResolvedProfile, effort: ChatBody['reasoning_effort']): boolean | 'low' | 'medium' | 'high' | undefined {
-    if (!r.model.capabilities.includes('thinking')) return undefined;
+  /** The thinking level a request asks for, within the profile's ceiling (B-11707: the model's mode shapes the request). */
+  private thinkLevel(r: ResolvedProfile, effort: ChatBody['reasoning_effort']): ThinkLevel {
     let want: ThinkLevel = effort ? (effort === 'minimal' ? 'off' : effort) : r.profile.think_default;
     if (thinkRank(want) > thinkRank(r.profile.think_ceiling)) want = r.profile.think_ceiling;
-    if (want === 'off') return false;
-    return r.model.name.startsWith('gpt-oss') ? want : true;
+    return want;
   }
 
   /**
@@ -409,7 +409,7 @@ export class OpenAiService {
       if (body.seed != null) options.seed = body.seed;
       if (body.presence_penalty != null) options.presence_penalty = body.presence_penalty;
       if (body.frequency_penalty != null) options.frequency_penalty = body.frequency_penalty;
-      const think = this.think(r, body.reasoning_effort);
+      const thinkLevel = this.thinkLevel(r, body.reasoning_effort);
       if (ext.knowledge?.length || ext.memory) ({ items, label: answerLabel } = await this.context(p, id, r, lease, messages, label, ext));
       const server = ext.serverTools ? await this.serverTools(p, r, answerLabel) : null;
       const serverDefs = server ? [...(server.calculate ? [CALCULATE_TOOL] : []), ...server.extra.map((t) => t.def)] : [];
@@ -417,8 +417,11 @@ export class OpenAiService {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const roundCalls: NonNullable<ChatMessage['tool_calls']> = [];
         let roundContent = '';
-        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...(think !== undefined ? { think } : {}), ...(tools ? { tools } : {}), options }, signal)) {
+        const thinkReq = thinkingRequest(r.model, thinkLevel, messages); // B-11707: by the model's thinking mode
+        const splitter = thinkingMode(r.model) === 'template' ? new ThinkSplitter() : null;
+        for await (const chunk of lease.client.chat({ model: r.model.name, messages, ...thinkReq, ...(tools ? { tools } : {}), options }, signal)) {
           const msg = chunk.message;
+          if (msg?.content && splitter) msg.content = splitter.feed(msg.content).content; // a template model's <think> draft is not part of the answer
           if (msg && (msg.content || msg.thinking) && firstTokenMs == null) {
             firstTokenMs = Date.now() - started;
             if (lease.cold) s.gateway.noteResident(lease.instance.id, r.model.name);
@@ -435,6 +438,14 @@ export class OpenAiService {
             promptTokens += chunk.prompt_eval_count ?? 0;
             outputTokens += chunk.eval_count ?? 0;
             gpuMs += ((chunk.prompt_eval_duration ?? 0) + (chunk.eval_duration ?? 0) + (chunk.load_duration ?? 0)) / 1e6;
+          }
+        }
+        if (splitter) {
+          const rest = splitter.flush().content;
+          if (rest) {
+            content += rest;
+            roundContent += rest;
+            if (onDelta && this.o.streamMode === 'live') onDelta(rest);
           }
         }
         // The caller's own tools: the calls go back to the caller. Server tools (B-702): run here, then ask again.

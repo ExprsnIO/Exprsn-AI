@@ -16711,7 +16711,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Records the licence and so on",
+        "summary": "models:manage. Records the licence, label and notes; B-11707: the thinking mode (native, template, none; null returns to the derived one) and a template model's convention",
         "parameters": [
           {
             "name": "id",
@@ -16725,6 +16725,60 @@
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "license": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "notes": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "internal",
+                      "confidential",
+                      "restricted"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "thinking": {
+                    "type": "string",
+                    "enum": [
+                      "native",
+                      "template",
+                      "none"
+                    ],
+                    "nullable": true,
+                    "description": "B-11707: how the model is made to think; profiles inherit it"
+                  },
+                  "thinkingTemplate": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 4000,
+                    "description": "B-11707: the convention appended to a template model's system prompt (empty: the built-in one)"
+                  }
+                }
+              }
+            }
           }
         }
       }

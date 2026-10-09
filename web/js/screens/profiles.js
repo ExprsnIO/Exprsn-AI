@@ -265,7 +265,8 @@
             checks.push({ ok: on.length > 0, text: on.length ? m.name + ' is placed on ' + on.map((x) => x.pool).join(', ') + '.' : m.name + ' is not placed on ' + (f.poolId ? 'the chosen pool' : 'any pool') + '.' });
             if (st.pools && on.length) { const ok = on.some((x) => { const pl = st.pools.find((y) => y.id === x.poolId); return pl && rank(pl.label_ceiling) >= rank(f.label); }); checks.push({ ok, text: ok ? 'A pool running ' + m.name + ' is cleared for ' + f.label + ' data.' : 'No pool running ' + m.name + ' is cleared for ' + f.label + ' data.' }); }
           }
-          checks.push({ ok: f.thinkCeiling === 'off' || m.capabilities.indexOf('thinking') >= 0, text: f.thinkCeiling === 'off' ? 'Thinking is off.' : m.capabilities.indexOf('thinking') >= 0 ? m.name + ' supports thinking.' : m.name + ' does not support thinking; set the ceiling to off.' });
+          const thinkMode = m.thinking || (m.capabilities.indexOf('thinking') >= 0 ? 'native' : 'none'); // B-11707: inherited from the model
+          checks.push({ ok: f.thinkCeiling === 'off' || thinkMode !== 'none', text: f.thinkCeiling === 'off' ? 'Thinking is off.' : thinkMode === 'template' ? m.name + ' thinks through its own convention (template); the profile inherits it, no hand-written <think> instructions needed.' : thinkMode === 'native' ? m.name + ' supports thinking (native).' : m.name + ' does not support thinking; set the ceiling to off.' });
           const withheld = m.evaluation && m.evaluation.toolsWithheld;
           checks.push({ ok: !f.calculate || (m.capabilities.indexOf('tools') >= 0 && !withheld), text: !f.calculate ? 'No tools offered.' : m.capabilities.indexOf('tools') < 0 ? m.name + ' has no tools capability.' : withheld ? m.name + ' has tools withheld until its tool-calling test passes.' : m.name + ' can call tools.' });
         }

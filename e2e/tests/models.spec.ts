@@ -32,7 +32,7 @@ test.describe('Models', () => {
   test('requests an import, pulls and evaluates it, and a second admin approves it', async ({ page, as }) => {
     await open(page, 'models');
     await expectLive(page);
-    await expect(page.locator('#main')).toContainText('5 of 5 models'); // 1.6.0: the e2e server also seeds llava:7b (knowledge images)
+    await expect(page.locator('#main')).toContainText('6 of 6 models'); // 1.6.0: the e2e server also seeds llava:7b (knowledge images) and magistral:24b (B-11707)
 
     await page.getByRole('button', { name: 'Request import' }).click();
     const modal = page.locator('#overlay .modal');
@@ -63,6 +63,30 @@ test.describe('Models', () => {
     await second.locator('[data-approve]').click();
     await confirmDialog(second, 'Approve');
     await expect(second.locator('#main tr', { hasText: 'mistral:7b' })).toContainText('approved');
+  });
+
+  // B-11707: a template model's thinking mode is read from its own prompt and shown on the card; the entry can
+  // override it, and profiles inherit whatever it says.
+  test('B-11707: shows how a model thinks, and the catalogue entry can override it', async ({ page }) => {
+    await open(page, 'models');
+    await expectLive(page);
+    await page.locator('#main tr', { hasText: 'magistral:24b' }).click();
+    await expect(page.locator('[data-thinking]')).toHaveAttribute('data-thinking', 'template');
+    await expect(page.locator('#main')).toContainText("from the model's own prompt");
+    await page.locator('[data-edit]').click();
+    const modal = page.locator('#overlay .modal');
+    await expect(modal.locator('[data-f="thinkingTemplate"]')).toHaveValue(/<think>/);
+    await checkOverlay(page, 'the model edit dialog with the thinking mode');
+    await modal.locator('[data-f="thinking"]').selectOption('none');
+    await modal.getByRole('button', { name: 'Save' }).click();
+    await expect(page.locator('[data-thinking]')).toHaveAttribute('data-thinking', 'none');
+    await page.locator('[data-edit]').click();
+    await modal.locator('[data-f="thinking"]').selectOption('template');
+    await modal.locator('[data-f="thinkingTemplate"]').fill('Think first inside <think> and </think>, then answer briefly.');
+    await modal.getByRole('button', { name: 'Save' }).click();
+    await expect(page.locator('[data-thinking]')).toHaveAttribute('data-thinking', 'template');
+    await expect(page.locator('.tmsg')).toHaveCount(0, { timeout: 15_000 }); // the toasts fade before the contrast audit
+    await expectAxeClean(page, 'aa', 'the model card with its thinking mode');
   });
 
   // B-4307: a Chat Completions server (Apple's fm serve on a Unix socket) registered from the Models screen, and its

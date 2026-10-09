@@ -7,6 +7,7 @@ import { effectivePermissions } from '../../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission } from '../../http/middleware.js';
 import { badRequest, conflict, forbidden, HttpProblem, notFound } from '../../http/problem.js';
 import { THINK_LEVELS, type InstanceRow, type ModelRow, type ProfileRow, type ThinkLevel } from '../../gateway/repo.js';
+import { THINKING_MODES, thinkingMode } from '../../gateway/thinking.js';
 import { SERVER_KINDS } from '../../gateway/server.js';
 import { parseVaultRef } from '../../vault/policy.js';
 import type { Services } from '../../services.js';
@@ -61,6 +62,10 @@ export const modelView = (m: ModelRow) => ({
   approvedAt: m.approved_at,
   retireAt: m.retire_at,
   notes: m.notes,
+  // B-11707: how the model is made to think; `thinkingSet` is what the catalogue records (null: derived from the capabilities).
+  thinking: thinkingMode(m),
+  thinkingSet: m.thinking ?? null,
+  thinkingTemplate: m.thinking_template ?? null,
   // B-4304: held by a Chat Completions server: no pull, no digest.
   held: m.format === 'server',
   serverInstanceId: m.server_instance_id,
@@ -536,11 +541,11 @@ export function gatewayAdminRoutes(s: Services): Router {
   r.patch('/models/:id', models, async (req, res) => {
     const p = principalOf(req);
     const m = await loadModel(req);
-    const body = parseBody(z.object({ license: z.object({ name: z.string().trim().min(1).max(200), url: z.string().url().max(500).optional(), notes: z.string().max(1000).optional() }).optional(), label: z.enum(LABELS).optional(), notes: z.string().trim().max(1000).nullable().optional() }).strict(), req.body);
+    const body = parseBody(z.object({ license: z.object({ name: z.string().trim().min(1).max(200), url: z.string().url().max(500).optional(), notes: z.string().max(1000).optional() }).optional(), label: z.enum(LABELS).optional(), thinking: z.enum(THINKING_MODES).nullable().optional(), thinkingTemplate: z.string().trim().max(4000).nullable().optional(), notes: z.string().trim().max(1000).nullable().optional() }).strict(), req.body);
     if (m.state === 'retired') throw conflict('A retired model is read-only.');
     if (body.label && !clears(p.clearance, body.label)) throw forbidden('You cannot approve a model for data above your clearance.', { step: 'clearance' });
     if (body.label && m.state === 'approved' && labelRank(body.label) > labelRank(m.label)) throw conflict('Raising the label of an approved model needs a new approval: deprecate and re-import, or lower it.');
-    await g.repo.updateModel(m.id, { ...(body.license ? { license: { ...body.license, recordedBy: p.username, recordedAt: Date.now() } } : {}), ...(body.label ? { label: body.label } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}) });
+    await g.repo.updateModel(m.id, { ...(body.license ? { license: { ...body.license, recordedBy: p.username, recordedAt: Date.now() } } : {}), ...(body.label ? { label: body.label } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), ...(body.thinking !== undefined ? { thinking: body.thinking } : {}), ...(body.thinkingTemplate !== undefined ? { thinking_template: body.thinkingTemplate || null } : {}) });
     await audit(req, 'model.updated', { model: m.name }, { after: body });
     res.json(modelView((await g.repo.model(m.id))!));
   });
@@ -664,7 +669,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     const reachable = poolsList.filter((x) => pls.some((y) => y.pool_id === x.id) && (!p.pool_id || x.id === p.pool_id));
     const ceilings = await Promise.all(reachable.map((x) => s.zones.poolCeiling(x)));
     if (!ceilings.some((c) => labelRank(c) >= labelRank(p.label))) throw conflict(`No pool running ${m.name} is cleared for ${p.label} data.`);
-    if (p.think_ceiling !== 'off' && !m.capabilities.includes('thinking')) throw conflict(`${m.name} does not support thinking; set the ceiling to off.`);
+    // B-11707: a template model thinks through its convention, whatever its capability list says.
+    if (p.think_ceiling !== 'off' && thinkingMode(m) === 'none') throw conflict(`${m.name} does not support thinking; set the ceiling to off.`);
     if (p.tools.length && (!m.capabilities.includes('tools') || m.evaluation?.toolsWithheld)) throw conflict(`${m.name} has no tools capability${m.evaluation?.toolsWithheld ? ' (withheld until its tool-calling test passes)' : ''}.`);
   };
 

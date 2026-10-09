@@ -46,7 +46,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 34 | Chaining agents, skills, tools and workflows; WebDAV for the file store; profiles and presence; IMAP in CI; release (1.5.0) | Person (new); Runs, Registry, Settings, Messages and feed, Groups and events | **Done** (B-3606 dropped) |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama (1.6.0) | Overview, Jobs and queues, Storage, Configuration, Social and messaging (new); Tenants; Models | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge (1.6.0) | Groups and events, Storage, Apps, Vault, Knowledge, Classifiers | **Done** |
-| 36b | Model thinking templates; the tool-calling evaluation sends a system prompt (1.6.0; B-11707, pulled forward from 1.7.0 on 2026-10-08) | Models, Profiles | Next |
+| 36b | Model thinking templates; the tool-calling evaluation sends a system prompt (1.6.0; B-11707, pulled forward from 1.7.0 on 2026-10-08) | Models, Profiles | **Done** |
 | 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, Profiles, Identity, User stores, Settings, MCP servers | **Done** (B-7202 partial) |
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Usage and audit, Profiles, Registry, Runs, Flags, Apps | **Done** |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Shared, Apps, Settings | **Done** |
@@ -1271,7 +1271,13 @@ Delivered on `sprint-36` and its parts 36a to 36c (PR #64), migrations `038_grou
   before 1.6.0 stay separate, no server-side thumbnails, vision calls metered as embedding usage.
 
 Sprint 36b in the table above (B-11707, model thinking templates, 2 points) was pulled forward from 1.7.0 on 2026-10-08
-and is built after the release.
+and built after the release (this PR, migration `041e_thinking_templates`): a catalogue entry records how its model is made
+to think (native, a template such as Magistral's `<think>` convention, or none), detected at pull from the server's `show`
+and overridable by an admin; profiles inherit it through one request shaper used by chat, compare, agents, evaluations,
+workflow model steps and `/v1`; the tool-calling evaluation sends a system prompt as chat does. Unit suite 1174 passed;
+prototype smoke 51 of 51; the Models and Profiles specs passed (13). Known gaps in `docs/security.md`: a model whose
+template asks for `<think>` without a default system prompt is recorded as native when it claims the capability; only
+`<think>` tags are recognised; the built-in convention is one English text.
 
 ## Sprint 37: HTTP tool kind, prompt-injection defence, MCP server, SCIM, vault sharing, quotes (done)
 

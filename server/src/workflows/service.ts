@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { splitThink, thinkingMode, thinkingRequest } from '../gateway/thinking.js';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
@@ -1344,7 +1345,6 @@ export class WorkflowService implements WorkflowToolRunner {
     if (r.profile.num_ctx) options.num_ctx = r.profile.num_ctx;
     if (r.profile.temperature != null) options.temperature = r.profile.temperature;
     const req: ChatRequest & { format?: unknown } = { model: r.model.name, messages, options };
-    if (r.model.capabilities.includes('thinking')) req.think = think === 'off' ? false : r.model.name.startsWith('gpt-oss') ? think : true;
     if (cfg.format === 'json') req.format = n.output ? jsonSchema(n.output) : 'json';
 
     let prompt = 0;
@@ -1361,7 +1361,8 @@ export class WorkflowService implements WorkflowToolRunner {
       const calls: ChatTurn['toolCalls'] = [];
       try {
         lease = await this.d.gateway.acquire(r.profile, r.model, c.label, { signal: c.signal });
-        for await (const chunk of lease.client.chat({ ...req, messages: msgs, ...(tools.length ? { tools } : {}) }, c.signal)) {
+        const thinkReq = thinkingRequest(r.model, think, msgs); // B-11707: by the model's thinking mode
+        for await (const chunk of lease.client.chat({ ...req, ...thinkReq, messages: msgs, ...(tools.length ? { tools } : {}) }, c.signal)) {
           if (chunk.message?.content) text += chunk.message.content;
           for (const tc of chunk.message?.tool_calls ?? []) if (tc?.function?.name) calls.push({ name: tc.function.name, arguments: (tc.function.arguments ?? {}) as Record<string, unknown> });
           if (chunk.done) {
@@ -1375,6 +1376,7 @@ export class WorkflowService implements WorkflowToolRunner {
       }
       if (!pt && !ot) {
         pt = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
+        if (thinkingMode(r.model) === 'template' && think !== 'off') text = splitThink(text).content; // B-11707
         ot = Math.ceil(text.length / 4);
       }
       instance = lease?.instance.name ?? instance;

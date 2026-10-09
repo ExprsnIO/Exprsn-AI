@@ -269,6 +269,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   tenant, adopted when a scan releases a version and released by the trash purge), `apps/forms-held.ts`
   (`s.apps.forms.held`, B-4701: public submissions the `user-input` guardrail holds, decided from the moderation and
   flag queues) and `vault/anomalies.ts` (`s.revealWatch`, B-4803: reveal history and flags for a secret's owner).
+- 1.6.0 Sprint 36b (B-11707): `gateway/thinking.ts` (`thinkingMode`, `detectThinking` from `show.system` and
+  `show.template` at pull, `thinkingRequest` turning a profile's level into the request for a native or template model
+  and appending a template model's convention, `ThinkSplitter` and `splitThink` for `<think>` blocks in content,
+  `EVALUATION_SYSTEM_PROMPT` for the conformance tests); used by `chat/service.ts`, `agents/service.ts`,
+  `evals/service.ts`, `workflows/service.ts` and `openai/service.ts`; `models.thinking` and `models.thinking_template`.
+  `templateModel` in `server/test/fake-ollama.ts` answers like Magistral.
 - 1.6.0 Sprint 36c: `knowledge/images.ts` (B-8801: image types from the bytes, the images inside PDF and Word
   documents as a document's parts, the vision profile's prompt and validated answer); image documents, their labels
   (`knowledge_doc_labels`) and the jobs `knowledge.classify` and `knowledge.reclassify` in `knowledge/service.ts`; the

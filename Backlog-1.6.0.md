@@ -32,14 +32,24 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | **Done** |
-| 36b | Model thinking templates and a tool-calling evaluation that sends a system prompt (B-11707, pulled forward from 1.7.0 on 2026-10-08: the owner's Magistral profiles) | B-11707 | 2 | Next |
+| 36b | Model thinking templates and a tool-calling evaluation that sends a system prompt (B-11707, pulled forward from 1.7.0 on 2026-10-08: the owner's Magistral profiles) | B-11707 | 2 | **Done** |
 | 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | **Done** (B-7202 partial) |
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | **Done** |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | **Done** |
 
 ### Progress
 
-**Sprint 39: done** (this PR), and with it the 1.6.0 release (B-5101). Content credentials (B-7901, migration
+**Sprint 36b: done** (this PR, after the release). Model thinking templates (B-11707, migration
+`041e_thinking_templates`): the catalogue records how a model is made to think (native, template, none), detected at
+pull from the server's `show` (a default system prompt asking for `<think>` blocks, or a chat template with `<think>`
+on a model without the capability) and overridable on the entry; profiles inherit it through one request shaper
+(`gateway/thinking.ts`) that chat, compare, agents, evaluations, workflow model steps and `/v1` use, with `<think>`
+blocks split out of the content as thinking; the tool-calling evaluation sends a system prompt as chat does, which is
+what let Magistral pass it. Unit suite 1174 passed; prototype smoke 51 of 51; Models and Profiles specs passed (13).
+Known gaps in `docs/security.md`: a template model without a default system prompt that claims the capability is
+recorded as native; only `<think>` tags are recognised; one English convention text.
+
+**Sprint 39: done** (PR #71), and with it the 1.6.0 release (B-5101). Content credentials (B-7901, migration
 `041_provenance_artifacts`): a generated PNG carries a C2PA manifest store (CBOR, JUMBF, COSE_Sign1 written here, no
 reference library) signed by a content-credentials certificate the tenant's issuing CA makes with its key in custody,
 verified by `GET /api/images/:id/content-credentials` and offline by `exprsn-ai c2pa:verify`. Versioned artifacts

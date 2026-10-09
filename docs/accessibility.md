@@ -393,6 +393,12 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   with their names; the dialog closes with Close and Escape and returns focus. Checked by `chat.spec.ts` and
   `images.spec.ts` with axe-core (Standard, light) on the panel and the dialog.
 
+- **Models and Profiles: the thinking mode** (B-11707, Sprint 36b): the model card's "Thinking" row names the mode in
+  words ("template (a convention in the system prompt)"), never a colour or an icon alone; the edit dialog adds a
+  labelled select ("Thinking") and a labelled textarea ("Thinking convention") inside the existing `formgrid`, so
+  they reflow at 320 px with the rest; the Profiles publishing checks state the inherited mode in the check's text.
+  `e2e/tests/models.spec.ts` and `profiles.spec.ts` run axe-core on the dialog and on the editor.
+
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 
 The platform administration screens join the same checks: axe-core and the in-page checker on the screen and every

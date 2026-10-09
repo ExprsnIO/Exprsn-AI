@@ -637,7 +637,8 @@
 
 - Sprints 35 to 39 as above, released on 2026-10-09 (PR #71). Dropped: B-5001, capability tokens (owner, 2026-10-07).
   Partial: B-7202, SCIM against the Entra ID and Okta validators (a local conformance suite stands in). B-11707
-  (Sprint 36b, model thinking templates) was pulled forward from 1.7.0 on 2026-10-08 and lands after the release.
+  (Sprint 36b, model thinking templates) was pulled forward from 1.7.0 on 2026-10-08 and landed after the release
+  (migration `041e_thinking_templates`, the Sprint 36b section below).
 - Checks on the release tree: lint, typecheck and the console parse check; 1170 unit and API tests across 126 files,
   1 skipped; the PostgreSQL integration suite (52 files); the prototype smoke (51 screens); the full Playwright
   console suite run locally, 168 passed, 0 failed, after fixes to the sweep's screen list, the e2e harness driver,
@@ -646,6 +647,28 @@
   `audit:verify-export` and `c2pa:verify`.
 
 ## 1.5.0
+
+### Model thinking templates (Sprint 36b, B-11707)
+
+- Migration `041e_thinking_templates`: `models.thinking` (native, template, none; null derived from the capabilities)
+  and `models.thinking_template`.
+- A catalogue entry records how its model is made to think, and profiles inherit it (B-11707): a pull reads the mode
+  from the server's `show` (a default system prompt that asks for `<think>` blocks makes a template model and is
+  kept as its convention; the thinking capability alone makes a native one); `PATCH /api/admin/models/:id` overrides
+  `thinking` and `thinkingTemplate`, audited. `server/src/gateway/thinking.ts` turns a profile's level into the
+  request for its model in chat, compare, agent runs, evaluations, workflow model steps and `/v1`: the think
+  parameter for a native model; for a template model the convention appended to the system prompt (added when the
+  profile has none, left alone when it already carries `<think>`), the think flag when the server claims the
+  capability, and the `<think>…</think>` block split out of the answer as thinking across chunk boundaries; with the
+  level off, a direct-answer prompt in place of a missing one, so the server substitutes none of its own. A profile
+  on Magistral thinks without a hand-written convention. The publish check refuses a thinking ceiling only on a
+  `none` model.
+- The catalogue evaluation sends a system prompt with both tests, as chat sends a profile's: without one Ollama
+  substituted the model's own, under which Magistral answered the tool-calling test in prose and had its tools
+  withheld.
+- Console: the model card's "Thinking" row and the edit dialog's mode and convention; the Profiles checks name the
+  inherited mode. The Models board carries the row. `server/test/fake-ollama.ts` has `templateModel`, a
+  Magistral-like model; e2e: `models.spec.ts`, `profiles.spec.ts`.
 
 ### Chaining agents, skills, tools and workflows (Sprint 34a, B-4102 to B-4107)
 

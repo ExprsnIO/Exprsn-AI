@@ -414,6 +414,19 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
   it ends with its key, with the app's settings turned off, or when the designers end it.
 
+## Model thinking templates (1.6.0, Sprint 36b)
+
+- **The convention comes from the model, not from the person (B-11707).** A template model's own default system
+  prompt, read at pull from the server's `show`, is what the gateway appends when a profile asks for thinking; an
+  admin may replace it on the catalogue entry, audited. A profile's system prompt that already carries `<think>` is
+  left alone, so a hand-written convention still wins. The appended text never includes anything from the
+  conversation.
+- **Thinking stays thinking.** A `<think>` block a template model writes into its content is split out before the
+  content reaches the screening guards and the stored answer, so it is screened and sealed as thinking (the same
+  path as native thinking) and never shown as the answer. An unterminated block counts as thinking in full.
+- **The evaluation sends its own prompt.** Both conformance tests carry a fixed system prompt, so the server
+  substitutes none of the model's own and the tool-calling test judges the model, not its default prompt.
+
 ## Tools, agents, skills and workflows called from chat (1.7.0, Sprint 40a)
 
 - **Nothing new decides what may run (B-4001).** The conversation's capabilities are the profile's tool list
@@ -780,6 +793,10 @@ filter, private `/tmp`, only the state directory writable.
   flag's detail and dropped by `vault.reveals.prune`. A flag on a secret without an owner or creator goes to no one but
   vault administrators.
 
+- Model thinking templates (1.6.0, Sprint 36b, B-11707). The mode is read from the server's `show` at pull; a
+  model whose template asks for `<think>` without saying so in a default system prompt is recorded as native when it
+  claims the capability, and an admin corrects it by hand. The splitter recognises `<think>` and `</think>` only;
+  a model that thinks under other tags shows its draft as content. The built-in convention is one English text.
 - SCIM 2.0 provisioning (1.6.0, Sprint 37c, B-7201, B-7202). A SCIM token is a bearer secret for one store with no
   sender binding (no mTLS, no DPoP): anyone holding it creates, changes and deprovisions that store's users and their
   group memberships, which through group mappings means their roles, clearance and workspaces (never more than the
