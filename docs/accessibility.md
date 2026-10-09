@@ -466,6 +466,16 @@ dialogs.
 
 ## Screens changed in 1.7.0
 
+- **Settings: MCP access, standing approvals; Identity: MCP server, standing approvals** (B-12201, Sprint 41a): the
+  Standing approvals section of MCP access is a table with column headers (what each covers, the client, the class and
+  label as pills with text, until when, the calls covered) whose Revoke buttons name the tool in their accessible name
+  ("Revoke the standing approval for records_create"); revoking confirms in a dialog that says what changes. "Grant a
+  standing approval" opens a dialog of labelled fields with hints (workspace, tool, client, class, period, reason);
+  the tool list is filled for the chosen workspace, a refusal is shown in an `role="alert"` region, and the dialog
+  returns focus on close. The Identity screen's MCP server tab lists the tenant's approvals the same way, with the
+  person in the Revoke button's name. `e2e/tests/mcp-server.spec.ts` runs axe-core (Standard and Enhanced, light and
+  dark) and the in-page checker on the dialog and both panels and checks reflow at 320 and 640 px; the two new design
+  states on Settings and one on Identity are in the `y-accessibility.spec.ts` sweep.
 - **Chat: tools, agents, skills and workflows from the composer (Sprint 40a, B-4008).** The composer is a
   `combobox` with `aria-autocomplete="list"`; typing `/`, `@` or `+` as the first character opens a `listbox`
   picker (`aria-controls` and `aria-activedescendant` set only while it is open, `aria-expanded` otherwise false)

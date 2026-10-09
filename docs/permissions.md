@@ -55,7 +55,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `connections:manage` | yes | 21 | x |  |  |  |  |  |  |  |  | x |  |  |  |  |
 | `training:submit` | yes | 19 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
 | `training:manage` | yes | 8 | x |  |  |  |  |  |  | x |  |  |  |  |  |  |
-| `identity:manage` | yes | 59 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
+| `identity:manage` | yes | 60 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `users:manage` | yes | 15 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `tenant:manage` | yes | 51 | x | x |  |  |  |  |  |  |  |  |  |  |  |  |
 | `zones:manage` | yes | 20 | x |  |  |  |  |  |  |  |  |  |  |  |  |  |
@@ -668,6 +668,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `PUT /api/admin/identity-policy/signup`
 - `GET /api/admin/mcp-server`
 - `GET /api/admin/mcp-server/workspaces/{workspaceId}/tools`
+- `DELETE /api/admin/mcp-server/approvals/{id}`
 - `PUT /api/admin/mcp-server/settings`
 - `PUT /api/admin/mcp-server/workspaces/{workspaceId}`
 - `GET /api/admin/identity-providers/{id}/scim`
@@ -1792,6 +1793,10 @@ These need a signed-in session or credential and no particular permission; the h
 - `GET /api/me/mcp-holds`
 - `GET /api/me/mcp-server`
 - `POST /api/me/mcp-holds/{id}/decide`
+- `DELETE /api/me/mcp-approvals/{id}`
+- `GET /api/me/mcp-approvals`
+- `GET /api/me/mcp-approvals/tools`
+- `POST /api/me/mcp-approvals`
 - `POST /mcp/{tenant}/{workspace}`
 
 ## Public routes

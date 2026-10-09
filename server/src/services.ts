@@ -889,6 +889,7 @@ function registerPlatformJobs(s: Services): void {
   s.jobs.register('chat.sweep', async (p, ctx) => {
     const interrupted = await s.chat.sweepInterrupted(String(p.tenantId ?? ctx.job.tenant_id));
     await s.chatInvocations.expireCards(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-4003): cards past their expiry
+    await s.mcpServer.expireStanding(String(p.tenantId ?? ctx.job.tenant_id)); // 1.7.0 (B-12201): standing approvals past their period
     await s.chat.store.expire(24 * 3_600_000);
     return { interrupted };
   });

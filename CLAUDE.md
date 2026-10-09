@@ -383,6 +383,12 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   a profile's model over `apps/ai.ts`'s `generate`, `normaliseDraft`, `validateDraft` and `freeId`, always shadow) behind
   `POST /admin/guardrails/sets/:id/describe` in `routes/guardrails.ts`, which saves a valid draft into the set's open
   draft with `save`; `fakeRuleDraft` and `isRuleDraftPrompt` in `server/test/fake-ollama.ts` answer the draft prompt.
+
+- 1.7.0 Sprint 41a: standing approvals in `mcp/server/service.ts` (B-12201: `StandingRow` in `mcp_standing_approvals`,
+  `standingFor` consulted by `call` when no per-call approval was claimed, `grantStanding`, `writeTools` for the grant
+  form, `standing` and `standingAll` views, `revokeStanding`, `expireStanding` from the chat sweep) behind
+  `routes/mcp-access.ts`; `ToolCallContext.standing` in `registry/dispatch.ts` covers the side effect and a
+  `confirm: always` tool but never a `require-approval` verdict.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

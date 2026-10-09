@@ -1308,6 +1308,12 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/admin/mcp-servers/{id}/oauth/discover', 'mcp:manage'],
   ['POST /api/mcp-oauth/start', 'tools:invoke'],
   ['POST /api/me/mcp-holds/{id}/decide', 'authenticated'],
+  // 1.7.0, Sprint 41a (B-12201): standing approvals for MCP server write calls
+  ['DELETE /api/admin/mcp-server/approvals/{id}', 'identity:manage'],
+  ['DELETE /api/me/mcp-approvals/{id}', 'authenticated'],
+  ['GET /api/me/mcp-approvals', 'authenticated'],
+  ['GET /api/me/mcp-approvals/tools', 'authenticated'],
+  ['POST /api/me/mcp-approvals', 'authenticated'],
   ['POST /mcp/{tenant}/{workspace}', 'authenticated'],
   ['POST /oauth/register', 'public'],
   ['POST /t/{tenant}/oauth/register', 'public'],

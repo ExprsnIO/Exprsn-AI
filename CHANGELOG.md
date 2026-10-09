@@ -74,6 +74,24 @@
   promotion and review flow on the saved rule. Prototype board first; `e2e/tests/guardrails.spec.ts` drafts "hold
   answers that quote a card number", replays, promotes and approves as a second admin, with axe-core.
 
+### Standing approvals for MCP write calls (Sprint 41a, B-12201)
+
+- Migration `043_mcp_standing_approvals`: `mcp_standing_approvals`. Setting `MCP_STANDING_APPROVAL_MAX_DAYS` (30).
+- A standing approval (B-12201): a person grants, from a browser session under Settings, MCP access, that an MCP client
+  may run write calls as them in one workspace's MCP server without a per-call approval: one published write tool or
+  every one, one client (its OAuth client id) or any, up to write or destructive calls, for 1 to the tenant's longest
+  period of days, at their clearance in that workspace. A covered call runs at once and is audited `mcp.server.call`
+  with the approval that covered it and metered as before; the approval counts the calls it covered. A call the
+  tool-call guardrail holds still waits for a reviewer in the Flags queue (the hold's message now names the
+  guardrail). The approval expires on its own (the chat sweep, audited `mcp.server.standing.expired`) and is revoked
+  by its owner, or by an identity admin for any of the tenant's under Identity, MCP server (`mcp.server.standing.revoked`
+  with `by`); the next covered call then waits again. Routes `GET|POST /api/me/mcp-approvals`,
+  `GET /api/me/mcp-approvals/tools`, `DELETE /api/me/mcp-approvals/:id`, `DELETE /api/admin/mcp-server/approvals/:id`.
+- Console: the Settings screen's MCP access panel lists the approvals with Revoke and grants one from a dialog that
+  offers the server's write tools; the Identity screen's MCP server tab lists the tenant's with Revoke. Prototype boards
+  first; `e2e/tests/mcp-server.spec.ts` covers the grant, a covered call, the admin's view, the revoke and the hold that
+  follows, with axe-core and the reflow checks.
+
 ## 1.6.0
 
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)
