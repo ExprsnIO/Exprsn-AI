@@ -4934,3 +4934,107 @@ group. Bookmarks list it for whoever saved it.
 | `GET /api/feed/users/:id?unlisted=true` | On one's own page, adds one's own unlisted posts (nobody else's are ever listed) |
 
 The catalogue events `post.*` carry `visibility` and, for a quote, `quoteOf` (optional fields).
+
+## Sprint 38c (1.6.0): row and field policies, DLP, legal holds, compliance exports (B-8101 to B-8103, B-7601 to B-7603)
+
+Migration `040c_policies_dlp` (`app_policies`, `users.attributes`, `dlp_rules`, `dlp_patterns`, `legal_holds`,
+`compliance_exports`). New permissions: `compliance:manage` (tenant-admin, legal-review) and `compliance:export`
+(legal-review; also an API key scope). New settings: `DLP_MAX_TEXT_BYTES` (1 MiB), `COMPLIANCE_EXPORT_MAX_ROWS`
+(100 000) and `COMPLIANCE_EXPORT_MAX_DAYS` (0: any range). Job: `compliance.export`.
+
+### Row and field policies (B-8101, B-8102)
+
+`server/src/apps/policies.ts` (`s.apps.policies`). A policy belongs to an app and covers one entity or every entity
+of the app. It names its **subjects** (`{kind: everyone | role | group | workspace | user, value?}`: a role id, a
+directory or tenant group name or id, a workspace id, a user id or username), the **rows** its subjects reach (a
+record filter in the query grammar, or null for every row) and per-field **grants** (`fields: {<name>: {read, unmasked,
+create, update, mask: last4 | hash | hidden}}`, `otherFields` for the rest). A filter value may name the reader:
+`$user.id`, `$user.username`, `$user.clearance`, `$user.roles`, `$user.groups`, `$user.workspaces` (the three lists
+only with `in`, standing alone) and `$user.attributes.<name>` (set by a tenant admin, below). Rows may only name
+indexed or unique fields (or `id`, `state`, `createdAt`, `updatedAt`, `createdBy`) of every entity the policy covers.
+
+Enforcement is the reader's **grant** on an entity (`AppService.grantFor`): an entity without an enabled policy is
+open as before; once it has one, a reader reaches the union of the rows of the policies that name them (a policy
+whose placeholder the reader has no value for grants nothing), and a reader no policy names reaches nothing (an empty
+page, `404` on a read, `403 step: policy` on a write). Field grants of the matching policies combine permissively.
+The grant narrows `GET`/`POST …/records`, `…/records/query`, `…/records/aggregate`, single reads, updates, deletes,
+transitions, bulk writes, exports (the CSV carries masked values), the `records.*` built-in tools and workflow record
+steps (the same service), and form submissions by a signed-in person. A field without `read` is left out of
+`values` and listed in `hidden`; a field without `unmasked` is shown through its mask and listed in `masked`
+(`last4`: every letter or digit but the last four becomes `*`, `***-**-6789`; `hash`: a 12-character SHA-256 prefix;
+`hidden`: null). Filtering or sorting by a field without `read` is `403 step: policy`. Holders of `apps:design` are
+not subject to policies. Labels apply first: a policy never shows a record above the reader's clearance.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/policies` | `apps:design`. `{policies: [Policy], placeholders}`. A Policy is `{id, name, description, enabled, entity (null: every entity), subjects, rows, fields, otherFields, createdBy, updatedBy, createdAt, updatedAt}` |
+| `POST /api/apps/:app/policies` `{name, description?, enabled?, entity?, subjects, rows?, fields?, otherFields?}` | `apps:design`. `201` Policy. `422` for a row condition on a field that is not indexed in every covered entity (`Field not indexed`), an unknown placeholder, a list placeholder compared with anything but `in`, a field grant naming a field no covered entity has, or a subject naming an unknown workspace or user. Audited `app.policy.created` |
+| `PUT /api/apps/:app/policies/:id` | `apps:design`. Replaces the policy (the same body and checks). Audited `app.policy.updated` |
+| `DELETE /api/apps/:app/policies/:id` | `apps:design`. `204`. Audited `app.policy.deleted` |
+| `PATCH /api/admin/users/:id` `{attributes?: {<name>: string}}` | `users:manage`. The user's attributes policies compare (`$user.attributes.<name>`): names `[a-z][a-z0-9_]{0,62}`, string values up to 200 characters, at most 50; `{}` clears them. `GET /api/admin/users/:id` answers `attributes` |
+
+### Explain (B-8103)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/entities/:entity/policies/explain` `{userId | username, recordId?, field?}` | `apps:design`. `{user: {id, username, clearance, roles, groups, workspaces, attributes, designer}, policed, none, rows (the resolved filter, null for every row), policies: [{id, name, entity, matches, subject, reason, rows}], record: {reachable, by} | null, field: {name, read, unmasked, create, update, mask, by} | null}`. `reason` says why a policy does not name the user (no subject names them, or a fact it compares is not set); `by` names the policy that reaches the record or grants the field |
+
+### DLP (B-7601)
+
+`server/src/compliance/dlp.ts` (`s.dlp`). A rule names what it detects (`detectors`: the built-in kinds `email`,
+`phone`, `iban`, `payment_card`, `national_id`, `private_key`, `cloud_access_key`, `bearer_token`, `high_entropy`,
+and `pattern:<id>` for the tenant's own RE2 patterns), the label the content rises to (`raiseTo`), the action by that
+label (`label`: raise only; `redact`: replace the detected spans with `[redacted <kind>]`; `hold`: keep it for a
+reviewer) and its scopes (`answer`: chat and `/v1` answers; `agent`: agent run outputs; `upload`: attachments and file
+versions). Detections below score 0.8 are ignored; a tenant pattern also carries the label it implies. Every scope's
+feature calls `inspect` after its guardrail checkpoint: the message (and its conversation), run, attachment or file
+version carries the raised label; a hold files the answer in the flag queue as `DLP: <rule>` (an agent run ends
+`failed` with the reason; an upload is rejected with it); a redaction is what is stored. Content raised above its
+owner's clearance is held whatever the rule says. Chat records the outcome in the message's `guard` (`dlp`), the
+OpenAI-compatible API audits `api.chat.dlp` (and answers `finish_reason: content_filter`), agents audit
+`agent.run.dlp`, uploads carry `findings.dlp`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/dlp` | `compliance:manage`. `{rules: [Rule], patterns: [Pattern], detectors, scopes, labels}`. A Rule is `{id, name, enabled, detectors, raiseTo, action, scopes, createdAt, updatedAt}`; a Pattern `{id, name, pattern, label, enabled, createdAt, updatedAt}` |
+| `POST /api/compliance/dlp/rules` `{name, enabled?, detectors, raiseTo, action, scopes}` | `201` Rule; `422` for a `pattern:<id>` of another tenant. Audited `dlp.rule.created` |
+| `PUT /api/compliance/dlp/rules/:id`, `DELETE …/rules/:id` | Replace (audited `dlp.rule.updated`) or remove (`204`, `dlp.rule.deleted`) |
+| `POST /api/compliance/dlp/patterns` `{name, pattern, label, enabled?}` | `201` Pattern; `422` when RE2 rejects the pattern (with the position). Audited `dlp.pattern.created` |
+| `PUT /api/compliance/dlp/patterns/:id`, `DELETE …/patterns/:id` | Replace (`dlp.pattern.updated`) or remove (`204`; `409` while a rule detects with it; `dlp.pattern.deleted`) |
+| `POST /api/compliance/dlp/test` `{text, scope?, label?}` | `{label, raised, action, text, rules: [{id, name, action, raiseTo, kinds}], detections: [{kind, span, score, rule}]}`. Nothing is stored or audited |
+
+### Legal holds (B-7602)
+
+`server/src/compliance/holds.ts` (`s.legalHolds`). A hold on a user or a workspace suspends every retention purge of
+their conversations (`chat.retention`), memories (`memory.purge`) and files (`files.purge`) while it is active;
+agent runs have no purge to suspend. Placing one is under dual control: a holder of `compliance:manage` asks and
+names another holder as approver; nothing is suspended until that person approves. The reason is sealed with the
+tenant key. The people concerned are not told.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/holds` | `compliance:manage`. `{holds: [Hold], approvers: [{userId, displayName, username}], scopes}`. A Hold is `{id, scope: user | workspace, scopeId, subject, reason, state: pending | active | rejected | withdrawn | released, requestedBy, approver, decidedBy, decidedAt, releasedBy, releasedAt, note, createdAt, updatedAt}` (people as `{id, displayName, username}`) |
+| `POST /api/compliance/holds` `{scope, scopeId, reason, approverId}` | `201` Hold (pending). `403 step: dual-control` for naming oneself; `422` for an approver who is not another holder of `compliance:manage`; `409` while a hold on the subject is pending or active. Audited `legal_hold.requested`; the approver is notified (`compliance`) |
+| `GET /api/compliance/holds/:id` | One hold |
+| `POST /api/compliance/holds/:id/decide` `{decision: approved | rejected, note?}` | The approver (never the requester: `403 step: dual-control`) decides; `409` once decided. Approved suspends the purges at once. Audited `legal_hold.approved` / `legal_hold.rejected`; the requester is notified |
+| `POST /api/compliance/holds/:id/withdraw` | The requester withdraws a pending request. Audited `legal_hold.withdrawn` |
+| `POST /api/compliance/holds/:id/release` `{note?}` | Any holder of `compliance:manage` ends an active hold; the next purge treats the content as before. Audited `legal_hold.released` |
+
+### Compliance exports (B-7603)
+
+`server/src/compliance/exports.ts` (`s.complianceExports`). An export is the conversations (with their messages,
+content opened; held, withdrawn and hidden ones by their state, their thinking withheld), files (metadata and the
+version list; the bytes stay in the file store), memories (text opened), agent runs (input and output opened) and
+accounts (with roles) of one user and/or one workspace whose `createdAt` is in `[from, to]`, written by the
+`compliance.export` job as JSON Lines (`{kind: export}` first, then `conversation`, `file`, `memory`, `run`, `user`,
+and `{kind: summary, counts, omitted, label}` last), sealed with the tenant key in parts of about 1 MiB under
+`compliance/<tenant>/<export>/`. Rows above the requester's clearance (read when the job runs) are left out and
+counted (`omitted`); the export's label is the highest it carries. More than `COMPLIANCE_EXPORT_MAX_ROWS` objects
+(conversations count their messages) fails the export with the reason.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/exports` | `compliance:export` (a person, or an API key scoped to it). `{exports: [Export]}`: `{id, params, scope, state: queued | running | ready | failed, label, counts, omitted, createdBy, apiKeyId, error, createdAt, finishedAt, file}` |
+| `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
+| `GET /api/compliance/exports/:id` | One export |
+| `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
