@@ -15542,6 +15542,23 @@
                           "type": "integer"
                         }
                       }
+                    },
+                    "owners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "settings": {
+                      "$ref": "#/components/schemas/InventorySettings"
                     }
                   },
                   "required": [

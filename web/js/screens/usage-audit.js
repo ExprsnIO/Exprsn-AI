@@ -243,6 +243,7 @@
         if (ctx.params.tab) st.tab = ctx.params.tab;
       }
       const tenantName = App.me.tenant ? App.me.tenant.name : 'This tenant';
+      const canSiem = App.can('tenant:manage'); // 1.6.0, Sprint 38a (B-7501)
       const clearance = App.me.user.clearance;
 
       // ---------- loading ----------
@@ -271,10 +272,10 @@
       const load = () => {
         if (st.loading) return;
         st.loading = true;
-        Promise.all([App.get('/api/admin/audit/summary'), getEvents(), App.get('/api/admin/exports'),
+        Promise.all([App.get('/api/admin/audit/summary'), getEvents(), App.get('/api/admin/exports'), App.get('/api/admin/audit/siem').catch(() => null),
           canUsage ? App.get('/api/admin/usage/daily?days=14') : null, canUsage ? getUsage() : null, canUsage ? App.get('/api/admin/quotas') : null])
-          .then(([summary, events, exports, daily, usage, quotas]) => {
-            Object.assign(st, { summary, events, eventsEnd: events.length < 100, exports, daily: daily || [], usage, quotas, loaded: true, loadError: null });
+          .then(([summary, events, exports, siemDest, daily, usage, quotas]) => {
+            Object.assign(st, { summary, events, eventsEnd: events.length < 100, exports, siemDest, daily: daily || [], usage, quotas, loaded: true, loadError: null });
             if (st.selectFirst) { st.selectFirst = false; if (events[0]) { st.sel = events[0].id; st.inspect = 'event'; } }
             watchExports();
           })
@@ -294,6 +295,7 @@
       };
       const reloadSummary = () => App.get('/api/admin/audit/summary').then((s) => { st.summary = s; refresh(); }).catch((err) => App.fail(err));
       const reloadExports = () => App.get('/api/admin/exports').then((x) => { st.exports = x; watchExports(); refresh(); }).catch((err) => App.fail(err));
+      const reloadSiem = () => App.get('/api/admin/audit/siem').then((x) => { st.siemDest = x; refresh(); }).catch((err) => App.fail(err, 'SIEM destinations could not be loaded'));
       const reloadUsage = () => getUsage().then((u) => { st.usage = u; refresh(); }).catch((err) => App.fail(err, 'Usage could not be loaded'));
       const loadDetail = (id) => { st.details[id] = { pending: true }; return App.get('/api/admin/audit/' + encodeURIComponent(id)).then((d) => { st.details[id] = d; refresh(); }).catch((err) => { st.details[id] = { error: err }; refresh(); }); };
 
@@ -418,7 +420,38 @@
         if (siem) rows.push(['<span class="mono">SIEM stream</span>', siem.enabled ? 'Every audit event, continuous, to ' + esc(siem.url || 'the configured endpoint') : 'Not configured. Set SIEM_URL on the server to stream audit events.', siem.enabled ? fmt(siem.delivered) + ' sent' + (siem.pending ? ', ' + fmt(siem.pending) + ' pending' : '') + (siem.dropped ? ', ' + fmt(siem.dropped) + ' dropped' : '') : '<span class="muted">-</span>', 'platform' + (siem.lastDeliveredAt ? '<div class="muted" style="font-size:12px">last ' + esc(when(siem.lastDeliveredAt)) + '</div>' : ''), UI.pill(siem.state) + (siem.lastError ? '<div class="muted" style="font-size:12px">' + esc(siem.lastError) + '</div>' : ''), '']);
         body = '<div class="hstack"><div class="eyebrow">Exports</div><span class="right hstack gap6">' + UI.btn('Refresh', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-xrefresh' }) + UI.btn('New export', { size: 'sm', icon: 'download', attrs: 'data-export' }) + '</span></div>'
           + UI.table(['File', 'Scope', { label: 'Rows', right: true }, 'Requested by', 'State', ''], rows, { clickable: false, minWidth: '640px', emptyTitle: 'No exports yet', emptyText: 'Exports you and other admins request appear here.' })
-          + UI.notice('Audit exports hold rows up to your clearance, <b>' + esc(clearance) + '</b>. A selection with rows above it is blocked unless you choose a filtered export. Every download is written to the audit chain.', 'info');
+          + UI.notice('Audit exports hold rows up to your clearance, <b>' + esc(clearance) + '</b>. A selection with rows above it is blocked unless you choose a filtered export. Every download is written to the audit chain.', 'info')
+          + siemSection();
+      }
+
+      // ----- 1.6.0, Sprint 38a (B-7501): audit streaming per tenant, under dual control -----
+      function siemSection() {
+        const d = st.siemDest;
+        if (!d) return '';
+        const me = App.me.user.id;
+        return '<div class="hstack" style="margin-top:12px"><div class="eyebrow">Streaming to a SIEM</div><span class="right hstack gap6">' + UI.iconbtn('refresh', 'Refresh destinations', { attrs: 'data-siemrefresh', cls: 'sm ghost' }) + (canSiem ? UI.btn('Propose destination', { size: 'sm', icon: 'plus', attrs: 'data-siempropose' }) : '') + '</span></div>'
+          + UI.table(['Destination', 'Kind', 'Address', 'State', { label: 'Delivered', right: true }, 'Last', ''], d.destinations.map((x) => ({ cells: ['<b>' + esc(x.name) + '</b>' + (x.hasToken ? '<div class="muted" style="font-size:11px">bearer token sealed</div>' : '') + '<div class="muted" style="font-size:11px">proposed by ' + esc(x.proposedByName || x.proposedBy) + (x.approvedByName ? ', approved by ' + esc(x.approvedByName) : '') + '</div>', esc(x.kind === 'https' ? 'HTTPS, NDJSON' : 'syslog over TLS'), '<span class="mono" style="overflow-wrap:anywhere">' + esc(x.url) + '</span>',
+              UI.pill(x.state === 'proposed' ? 'awaits a second admin' : x.state, x.state === 'active' ? 'ok' : x.state === 'proposed' ? 'warn' : 'neutral') + (x.state === 'active' ? ' ' + UI.pill(x.connection, x.connection === 'connected' ? 'ok' : x.connection === 'failing' ? 'danger' : 'neutral') : ''),
+              fmt(x.delivered) + (x.dropped ? ' <span class="muted">(' + fmt(x.dropped) + ' dropped)</span>' : ''), esc(x.lastDeliveredAt ? whenRow(x.lastDeliveredAt) : '-') + (x.lastError ? '<div class="muted" style="font-size:11px">' + esc(x.lastError) + '</div>' : ''),
+              '<span class="hstack gap6" style="justify-content:flex-end">' + (canSiem && x.state === 'proposed' ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-siemapprove="' + esc(x.id) + '"' + (x.proposedBy === me ? ' title="Dual control: someone else must approve what you proposed"' : '') }) + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-siemreject="' + esc(x.id) + '"' }) : '') + (canSiem && x.state !== 'rejected' ? UI.btn('Test', { size: 'xs', kind: 'ghost', attrs: 'data-siemtest="' + esc(x.id) + '"' }) : '') + (canSiem && (x.state === 'active' || x.state === 'proposed') ? UI.btn(x.state === 'active' ? 'Disable' : 'Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-siemdisable="' + esc(x.id) + '"' }) : '') + '</span>'],
+            attrs: 'data-siemrow="' + esc(x.id) + '"' })), { clickable: false, minWidth: '760px', emptyTitle: 'No destinations', emptyText: canSiem ? 'Propose an HTTPS or syslog-over-TLS destination; a second tenant admin approves it before anything is sent.' : 'A tenant admin proposes destinations; a second one approves them.' })
+          + UI.notice('<b>Dual control.</b> A destination streams this tenant\'s audit events only after a second tenant admin approves it; the proposer cannot. Tokens are sealed and never shown again; every decision and test is on the chain. ' + (d.platform && d.platform.enabled ? 'The platform stream (SIEM_URL) also carries every event.' : 'The platform stream (SIEM_URL) is not configured.') + ' At most ' + esc(d.max) + ' proposed or active destinations per tenant.', 'info');
+      }
+      function siemProposeModal() {
+        ctx.modal({
+          title: 'Propose a SIEM destination', onClose,
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('', { attrs: 'data-sname', placeholder: 'Splunk HEC (SOC)' })) + UI.field('Kind', UI.select([{ value: 'https', label: 'HTTPS, NDJSON batches' }, { value: 'syslog', label: 'syslog over TLS (RFC 5424)' }], 'https', 'data-skind')) + UI.field('Address', UI.input('', { attrs: 'data-surl', placeholder: 'https://host/path, or host:port' }), 'https://host/path for HTTPS, host:port for syslog. Cloud metadata and unlisted internal addresses are refused.') + UI.field('Bearer token', UI.input('', { type: 'password', attrs: 'data-stoken' }), 'HTTPS only. Sealed with the tenant key, never shown again.') + UI.field('Private CA (PEM)', UI.textarea('', { attrs: 'data-sca', placeholder: 'Optional: the CA that signed the receiver\'s certificate' })) + UI.field('Note', UI.input('', { attrs: 'data-snote' })) + '</div>'
+            + UI.notice('Nothing is sent until another tenant admin approves. Audited audit.siem.proposed.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Propose', { kind: 'primary', attrs: 'data-sgo' }),
+          onMount(m) {
+            m.querySelector('[data-sgo]').addEventListener('click', () => {
+              const v = (q) => m.querySelector(q).value;
+              App.post('/api/admin/audit/siem', { name: v('[data-sname]').trim(), kind: v('[data-skind]'), url: v('[data-surl]').trim(), token: v('[data-stoken]') || null, caPem: v('[data-sca]').trim() || null, note: v('[data-snote]').trim() || null })
+                .then((x) => { App.closeOverlay(); st.dirty = false; ctx.toast('Proposed: ' + esc(x.name) + '. A second tenant admin can approve it now. Audited audit.siem.proposed.', 'ok'); reloadSiem(); reloadEvents(); })
+                .catch((err) => { const p = err.problem || {}; m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc(p.title || 'Not proposed') + '.</b> ' + esc(p.detail || err.message), 'danger'); });
+            });
+          }
+        });
       }
 
       // ----- inspector -----
@@ -508,7 +541,7 @@
       function exportModal(content) {
         const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         const today = new Date(), monthAgo = new Date(Date.now() - 29 * 86400000);
-        const contents = [{ value: 'audit', label: 'Audit events' }].concat(canUsage ? [{ value: 'usage', label: 'Usage per day, user and model' }] : []);
+        const contents = [{ value: 'audit', label: 'Audit events (CSV)' }, { value: 'jsonl', label: 'Audit events as JSONL with chain proof' }].concat(canUsage ? [{ value: 'usage', label: 'Usage per day, user and model' }] : []);
         const wsOpts = [{ value: '', label: 'All workspaces' }].concat(((st.quotas && st.quotas.workspaces) || []).map((w) => ({ value: w.id, label: w.name })));
         ctx.modal({
           title: 'Export CSV', onClose,
@@ -521,7 +554,13 @@
           onMount(m) {
             const $m = (s) => m.querySelector(s);
             const show = (s, on) => { $m(s).style.display = on ? '' : 'none'; };
-            const sync = () => { const a = $m('[data-xcontent]').value === 'audit'; show('[data-xaudit]', a); show('[data-xusage]', !a); show('[data-xfiltered]', false); show('[data-xgo]', true); };
+            const sync = () => {
+              const c = $m('[data-xcontent]').value;
+              show('[data-xaudit]', c === 'audit'); show('[data-xusage]', c === 'usage'); show('[data-xfiltered]', false); show('[data-xgo]', true);
+              $m('[data-xmsg]').innerHTML = c === 'jsonl'
+                ? UI.notice('Every event of the window, one JSON document per line, with its hashes; a checkpoint is signed at the window\'s end. Rows above your ' + esc(clearance) + ' clearance are redacted to their hashes, so the chain still verifies offline: <span class="mono">exprsn-ai audit:verify-export file.jsonl</span>.', 'info')
+                : UI.notice('Audit exports include rows up to your ' + esc(clearance) + ' clearance. Leave a date empty for no bound. The request is written to the audit chain.', 'info');
+            };
             $m('[data-xcontent]').addEventListener('change', sync); sync();
             const done = (x, extra) => {
               App.closeOverlay(); st.dirty = false; st.tab = 'exports'; st.polls = 0;
@@ -531,7 +570,11 @@
             const send = async (filtered) => {
               const from = $m('[data-xfrom]').value, to = $m('[data-xto]').value;
               try {
-                if ($m('[data-xcontent]').value === 'usage') {
+                if ($m('[data-xcontent]').value === 'jsonl') {
+                  const b = {}; if (from) b.from = dateToMs(from); if (to) b.to = dateToMs(to, true);
+                  const x = await App.post('/api/admin/audit/exports/jsonl', b);
+                  done(x, x.redacted ? ' ' + fmt(x.redacted) + ' events above your clearance are redacted to their hashes.' : '');
+                } else if ($m('[data-xcontent]').value === 'usage') {
                   const b = {}; if (from) b.from = +from.replace(/-/g, ''); if (to) b.to = +to.replace(/-/g, ''); if ($m('[data-xws]').value) b.workspaceId = $m('[data-xws]').value;
                   done(await App.post('/api/admin/usage/exports', b));
                 } else {
@@ -648,6 +691,18 @@
       ctx.on('click', '[data-checkpoint]', () => signCheckpoint());
       ctx.on('click', '[data-export]', () => exportModal());
       ctx.on('click', '[data-xrefresh]', () => { st.polls = 0; reloadExports(); });
+      ctx.on('click', '[data-siemrefresh]', () => reloadSiem());
+      ctx.on('click', '[data-siempropose]', () => siemProposeModal());
+      const siemAct = (id, action, note) => App.post('/api/admin/audit/siem/' + encodeURIComponent(id) + '/' + action, note === undefined ? {} : { note })
+        .then((x) => { ctx.toast(action === 'approve' ? 'Approved: ' + esc(x.name) + ' now receives this tenant\'s audit events. Audited audit.siem.approved.' : action === 'reject' ? 'Rejected. Audited audit.siem.rejected.' : 'Disabled: nothing more is sent to ' + esc(x.name) + '. Audited audit.siem.disabled.', 'ok'); reloadSiem(); reloadEvents(); })
+        .catch((err) => App.fail(err, action === 'approve' ? 'Not approved' : action === 'reject' ? 'Not rejected' : 'Not disabled'));
+      ctx.on('click', '[data-siemapprove]', (e, t) => siemAct(t.dataset.siemapprove, 'approve'));
+      ctx.on('click', '[data-siemreject]', (e, t) => siemAct(t.dataset.siemreject, 'reject'));
+      ctx.on('click', '[data-siemdisable]', (e, t) => {
+        const id = t.dataset.siemdisable;
+        ctx.confirm({ title: 'Stop this destination', tone: 'danger', body: '<p class="fg2" style="margin:0">No more audit events are sent to it. Propose it again to resume; a second admin approves it again.</p>', ok: 'Stop' }).then((ok) => { if (ok) siemAct(id, 'disable'); });
+      });
+      ctx.on('click', '[data-siemtest]', (e, t) => App.post('/api/admin/audit/siem/' + encodeURIComponent(t.dataset.siemtest) + '/test', {}).then((r) => { ctx.toast(r.ok ? 'Test event delivered. Audited audit.siem.tested.' : 'Test failed: ' + esc(r.error || 'unknown error') + '. Audited audit.siem.tested.', r.ok ? 'ok' : 'danger', 6000); reloadSiem(); }).catch((err) => App.fail(err, 'Test not sent')));
       ctx.on('click', '[data-dl]', (e, t) => download(t.dataset.dl));
       ctx.on('click', '[data-openws]', (e, t) => ctx.navigate('tenants', { workspace: t.dataset.openws }));
       ctx.on('click', '[data-editquota]', (e, t) => (t.dataset.editquota ? ctx.navigate('tenants', { workspace: t.dataset.editquota, tab: 'quotas' }) : ctx.navigate('tenants', { tab: 'quotas' })));

@@ -15,7 +15,9 @@ export function inventoryAdminRoutes(s: Services): Router {
   r.get('/inventory', async (req, res) => {
     const p = principalOf(req);
     const items = await s.inventory.list(p.tenantId);
-    res.json({ items, counts: { total: items.length, incomplete: items.filter((x) => !x.complete).length, withIssues: items.filter((x) => x.issues.flags + x.issues.failedEvals > 0).length } });
+    // Owner candidates: the tenant's enabled users (id and display name only), for the Inventory tab's picker.
+    const owners = (await s.db('users').where({ tenant_id: p.tenantId, state: 'active' }).orderBy('display_name').limit(500).select('id', 'display_name')) as { id: string; display_name: string }[];
+    res.json({ items, owners: owners.map((u) => ({ id: u.id, name: u.display_name })), settings: await s.inventory.settings(p.tenantId), counts: { total: items.length, incomplete: items.filter((x) => !x.complete).length, withIssues: items.filter((x) => x.issues.flags + x.issues.failedEvals > 0).length } });
   });
 
   r.get('/inventory/settings', async (req, res) => {
