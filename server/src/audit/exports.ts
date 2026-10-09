@@ -7,6 +7,8 @@ import type { DataKeys } from '../platform/datakeys.js';
 import type { JobQueue } from '../platform/jobs.js';
 import { dayOf, dayToDate } from '../tenancy/quotas.js';
 import { rowToEvent, type AuditLog, type AuditQuery } from './chain.js';
+import { checkpointPayload, type AuditCheckpoints } from './checkpoints.js';
+import type { ExportHeader, ExportProof } from './export-verify.js';
 
 
 /** Plain-text size at which an export part is sealed and written. */
@@ -17,7 +19,7 @@ class ExportMissing extends Error {}
 export interface ExportRow {
   id: string;
   tenant_id: string;
-  kind: 'audit' | 'usage';
+  kind: 'audit' | 'usage' | 'audit-jsonl';
   file: string;
   params: Record<string, unknown>;
   scope: string;
@@ -50,6 +52,9 @@ const iso = (ts: number) => new Date(ts).toISOString();
  * count, and the requester may ask for the filtered export instead.
  */
 export class ExportService {
+  /** 1.6.0, Sprint 38a (B-7501): signs the end of a JSONL export window; set by services.ts. */
+  checkpoints: AuditCheckpoints | null = null;
+
   constructor(
     private readonly db: Db,
     private readonly audit: AuditLog,
@@ -59,6 +64,7 @@ export class ExportService {
   ) {
     jobs.register('export.audit', (p, ctx) => this.runAudit(String(p.exportId), ctx.progress));
     jobs.register('export.usage', (p, ctx) => this.runUsage(String(p.exportId), ctx.progress));
+    jobs.register('export.audit-jsonl', (p, ctx) => this.runAuditJsonl(String(p.exportId), ctx.progress));
   }
 
   /** Counts audit rows in the selection above a clearance. */
@@ -68,14 +74,14 @@ export class ExportService {
     return { total: Number(t?.n ?? 0), above: Number(a?.n ?? 0) };
   }
 
-  async request(input: { tenantId: string; tenantSlug: string; kind: 'audit' | 'usage'; params: Record<string, unknown>; scope: string; maxLabel: Label; userId: string }): Promise<ExportRow> {
+  async request(input: { tenantId: string; tenantSlug: string; kind: 'audit' | 'usage' | 'audit-jsonl'; params: Record<string, unknown>; scope: string; maxLabel: Label; userId: string }): Promise<ExportRow> {
     const id = ulid();
     const stamp = new Date().toISOString().slice(0, 10);
     const row: ExportRow = {
       id,
       tenant_id: input.tenantId,
       kind: input.kind,
-      file: `${input.kind}-${input.tenantSlug}-${stamp}-${id.slice(-6).toLowerCase()}.csv`,
+      file: `${input.kind === 'audit-jsonl' ? 'audit' : input.kind}-${input.tenantSlug}-${stamp}-${id.slice(-6).toLowerCase()}.${input.kind === 'audit-jsonl' ? 'jsonl' : 'csv'}`,
       params: input.params,
       scope: input.scope.slice(0, 300),
       max_label: input.maxLabel,
@@ -146,13 +152,14 @@ export class ExportService {
       buf = [];
       size = 0;
     };
+    const raw = async (l: string) => {
+      buf.push(l);
+      size += l.length;
+      if (size >= PART_BYTES) await flush();
+    };
     return {
-      line: async (cells: unknown[]) => {
-        const l = csvLine(cells);
-        buf.push(l);
-        size += l.length;
-        if (size >= PART_BYTES) await flush();
-      },
+      line: (cells: unknown[]) => raw(csvLine(cells)),
+      raw,
       finish: async (rows: number, omitted: number): Promise<{ rows: number; omitted: number }> => {
         await flush();
         const key = `exports/${e.tenant_id}/${e.id}/manifest.json`;
@@ -192,6 +199,60 @@ export class ExportService {
         if (page.length < 1000) break;
       }
       return await out.finish(rows, above);
+    } catch (err) {
+      await this.db('exports').where({ id }).update({ state: 'failed' });
+      throw err;
+    }
+  }
+
+  /**
+   * B-7501: a time window of the chain as JSONL with its proof (`export-verify.ts` describes the file). Every event in
+   * the window is written, those above the export's clearance redacted to their hashes, so the chain stays
+   * recomputable; the window's last sequence is signed (a checkpoint is made there if none exists).
+   */
+  private async runAuditJsonl(id: string, progress: (pct: number, m?: string) => Promise<void>): Promise<unknown> {
+    const e = await this.load(id);
+    try {
+      const p = e.params as { from?: number; to?: number };
+      const q: AuditQuery = { ...(p.from != null ? { from: p.from } : {}), ...(p.to != null ? { to: p.to } : {}) };
+      const allowed = new Set<string>(labelsUpTo(e.max_label));
+      const [t] = await this.audit.query(e.tenant_id, q).count({ n: '*' });
+      const total = Number(t?.n ?? 0);
+      const out = this.writer(e);
+      let rows = 0;
+      let redacted = 0;
+      let after = 0;
+      let first: ExportHeader['first'] = null;
+      let last: ExportHeader['last'] = null;
+      const lines: string[] = [];
+      for (;;) {
+        const page = await this.audit.query(e.tenant_id, q).andWhere('seq', '>', after).orderBy('seq', 'asc').limit(1000);
+        for (const raw of page) {
+          const ev = rowToEvent(raw);
+          first ??= { seq: ev.seq, prev_hash: ev.prev_hash };
+          last = { seq: ev.seq, hash: ev.hash };
+          if (allowed.has(ev.label)) lines.push(JSON.stringify({ type: 'event', ...ev }) + '\n');
+          else {
+            redacted++;
+            lines.push(JSON.stringify({ type: 'event', seq: ev.seq, id: ev.id, ts: ev.ts, prev_hash: ev.prev_hash, hash: ev.hash, redacted: true }) + '\n');
+          }
+          after = ev.seq;
+          rows++;
+        }
+        await progress(total ? (rows / total) * 90 : 90, `${rows} events`);
+        if (page.length < 1000) break;
+      }
+      const header: ExportHeader = { type: 'header', tenant: e.tenant_id, from: p.from ?? null, to: p.to ?? null, exportedAt: new Date().toISOString(), events: rows, redacted, first, last };
+      await out.raw(JSON.stringify(header) + '\n');
+      for (const l of lines) await out.raw(l);
+      let proof: ExportProof = { type: 'proof', algorithm: 'sha256-chain', checkpoint: null };
+      if (last && this.checkpoints) {
+        const c = await this.checkpoints.createAt(e.tenant_id, last.seq, `export:${e.id}`);
+        proof = { type: 'proof', algorithm: 'sha256-chain', checkpoint: { tenant: c.tenant_id, seq: c.seq, hash: c.hash, ts: c.ts, key: c.key, signature: c.signature, payload: checkpointPayload(c) } };
+      }
+      await out.raw(JSON.stringify(proof) + '\n');
+      await progress(95, `${rows} events, proof at ${last?.seq ?? 0}`);
+      return await out.finish(rows, redacted);
     } catch (err) {
       await this.db('exports').where({ id }).update({ state: 'failed' });
       throw err;

@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import type { Logger } from 'pino';
 import { FILE_VARS, SERVER_ENV_NAMES, type Config } from './config/index.js';
 import type { Db } from './db/knex.js';
@@ -5,6 +6,9 @@ import { AuditLog } from './audit/chain.js';
 import { AuditCheckpoints } from './audit/checkpoints.js';
 import { ExportService } from './audit/exports.js';
 import { SiemForwarder } from './audit/siem.js';
+import { SiemDestinations } from './audit/siem-destinations.js';
+import { InventoryService } from './governance/inventory.js';
+import { AnalyticsService } from './tenancy/analytics.js';
 import { DenialAudit } from './audit/denials.js';
 import { IdentityChain } from './identity/chain.js';
 import { configureSecretPolicy, secretPolicy } from './identity/secrets.js';
@@ -159,6 +163,12 @@ export interface Services {
   checkpoints: AuditCheckpoints;
   exports: ExportService;
   siem: SiemForwarder;
+  /** 1.6.0, Sprint 38a (B-7501): per-tenant audit streaming under dual control. */
+  siemDestinations: SiemDestinations;
+  /** 1.6.0, Sprint 38a (B-7301, B-7302): the AI system inventory. */
+  inventory: InventoryService;
+  /** 1.6.0, Sprint 38a (B-7401, B-7402): usage and cost analytics. */
+  analytics: AnalyticsService;
   tenants: TenantRepo;
   users: UserRepo;
   providers: ProviderRepo;
@@ -518,6 +528,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     checkpoints: new AuditCheckpoints(db, audit, kms, blobs, `${cfg.OPENBAO_KEY_PREFIX}audit-checkpoints`),
     exports: new ExportService(db, audit, blobs, keys, jobs),
     siem,
+    siemDestinations: new SiemDestinations(db, audit, keys, log, { policy: servicePolicy(cfg), hostname: hostname(), maxPerTenant: cfg.SIEM_TENANT_MAX_DESTINATIONS }),
+    inventory: new InventoryService(db, audit),
+    analytics: new AnalyticsService(db),
     tenants,
     users,
     providers,
@@ -666,6 +679,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
       await gateway.stop();
       await calc.close();
       siem.close();
+      await s.siemDestinations.close(); // 1.6.0, Sprint 38a (B-7501)
       await s.instances.stop();
       await jobs.stop();
       await chain.close();
@@ -721,6 +735,9 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   s.rotation.registerJobs();
   s.revealWatch.registerJobs(); // 1.6.0, Sprint 36b (B-4803): reveal history pruned
   s.vaultShares.registerJobs(); // 1.6.0, Sprint 37c (B-4801): expired shares removed
+  s.exports.checkpoints = s.checkpoints; // 1.6.0, Sprint 38a (B-7501): JSONL exports sign their window's end
+  s.registry.publishGate = (t, kind, id) => s.inventory.assertPublishable(t, kind, id); // 1.6.0, Sprint 38a (B-7301)
+  void s.siemDestinations.start().catch((err) => log.warn({ err: (err as Error).message }, 'SIEM destinations did not start')); // 1.6.0, Sprint 38a (B-7501)
   s.scim.registerJobs(); // 1.6.0, Sprint 37c (B-7202): group mappings re-applied to a SCIM store
   {
     const vaultRead = (tenantId: string, ownerId: string | null, ref: string, via: string) => s.vault.resolveFor(tenantId, ownerId, ref, { via });

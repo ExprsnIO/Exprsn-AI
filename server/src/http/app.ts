@@ -18,6 +18,8 @@ import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
+import { analyticsAdminRoutes } from '../routes/admin/analytics.js';
+import { inventoryAdminRoutes } from '../routes/admin/inventory.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
 import { guardrailRoutes } from '../routes/guardrails.js';
@@ -234,6 +236,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', auditAdminRoutes(s));
   api.use('/admin', tenantAdminRoutes(s));
   api.use('/admin', usageAdminRoutes(s));
+  api.use('/admin', analyticsAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7401, B-7402)
+  api.use('/admin', inventoryAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7301, B-7302)
   api.use('/admin', gatewayAdminRoutes(s));
   api.use(chatRoutes(s));
   api.use(guardrailRoutes(s));

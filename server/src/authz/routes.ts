@@ -1315,6 +1315,25 @@ export const ROUTE_PERMISSIONS: readonly (readonly [string, RouteAccess])[] = [
   ['POST /api/vault/kv/shares/{path}', 'secrets:write'],
   ['DELETE /api/vault/shares/{id}', 'secrets:write'],
   ['POST /api/feed/posts/{id}/quote', 'feed:write'],
+  // 1.6.0, Sprint 38a (B-7301, B-7302, B-7401, B-7402, B-7501): the AI inventory, analytics and prices, audit streaming and JSONL exports
+  ['DELETE /api/admin/analytics/prices/{id}', ['tenant:manage', 'usage:read']],
+  ['GET /api/admin/analytics/chargeback', 'usage:read'],
+  ['GET /api/admin/analytics/daily', 'usage:read'],
+  ['GET /api/admin/analytics/prices', 'usage:read'],
+  ['GET /api/admin/analytics/summary', 'usage:read'],
+  ['GET /api/admin/audit/siem', 'audit:read'],
+  ['GET /api/admin/inventory', 'models:manage'],
+  ['GET /api/admin/inventory/register', 'models:manage'],
+  ['GET /api/admin/inventory/settings', 'models:manage'],
+  ['PUT /api/admin/inventory/settings', 'models:manage'],
+  ['PATCH /api/admin/inventory/{kind}/{id}', 'models:manage'],
+  ['POST /api/admin/audit/exports/jsonl', 'audit:read'],
+  ['POST /api/admin/audit/siem', ['audit:read', 'tenant:manage']],
+  ['POST /api/admin/audit/siem/{id}/approve', ['audit:read', 'tenant:manage']],
+  ['POST /api/admin/audit/siem/{id}/disable', ['audit:read', 'tenant:manage']],
+  ['POST /api/admin/audit/siem/{id}/reject', ['audit:read', 'tenant:manage']],
+  ['POST /api/admin/audit/siem/{id}/test', ['audit:read', 'tenant:manage']],
+  ['PUT /api/admin/analytics/prices', ['tenant:manage', 'usage:read']],
   // ---- end of routes ----
 ];
 

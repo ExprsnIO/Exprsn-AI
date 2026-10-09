@@ -47,6 +47,7 @@ Commands:
       [--password]             read the admin's password from EXPRSN_ADMIN_PASSWORD or a prompt; without it a
                                single-use enrolment link is printed (PASSWORD_INVITE_HOURS)
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
+  audit:verify-export <file.jsonl> Verify a JSONL audit export offline against its chain proof (1.6.0, B-7501)
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
   kms:rewrap                   Re-wrap every data key (and re-sign checkpoints, backup manifests, image provenance and
                                training model cards) from the previous key-encryption key to the current one, then
@@ -350,6 +351,16 @@ async function main(): Promise<void> {
       case 'tenant:create':
         await tenantCreate(s, rest);
         break;
+      case 'audit:verify-export': {
+        const file = rest[0];
+        if (!file) throw new Error('Usage: audit:verify-export <file.jsonl>');
+        const { readFileSync } = await import('node:fs');
+        const { verifyAuditExport } = await import('./audit/export-verify.js');
+        const r = verifyAuditExport(readFileSync(file, 'utf8').split('\n'));
+        process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+        if (r.status !== 'verified') process.exitCode = 2;
+        break;
+      }
       case 'audit:verify': {
         const { values } = parseArgs({ args: rest, options: { tenant: { type: 'string' } } });
         const tenant = await s.tenants.bySlug(values.tenant ?? cfg.DEFAULT_TENANT);

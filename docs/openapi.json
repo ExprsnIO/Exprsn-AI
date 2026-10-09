@@ -10944,6 +10944,386 @@
           "totalResults",
           "Resources"
         ]
+      },
+      "InventoryItem": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "model",
+              "profile",
+              "agent",
+              "workflow",
+              "tool",
+              "mcp-server",
+              "dataset"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "issues": {
+            "type": "object",
+            "properties": {
+              "flags": {
+                "type": "integer"
+              },
+              "failedEvals": {
+                "type": "integer"
+              }
+            }
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "ownerId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ownerName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oversightRole": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provenance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lineageNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "knownIssuesNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "impactAssessment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status",
+          "lineage",
+          "issues",
+          "missing",
+          "complete"
+        ]
+      },
+      "InventorySettings": {
+        "type": "object",
+        "properties": {
+          "requireOwner": {
+            "type": "boolean"
+          },
+          "updatedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requireOwner"
+        ]
+      },
+      "AnalyticsRow": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "integer"
+          },
+          "messages": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "integer"
+          },
+          "users": {
+            "type": "integer"
+          },
+          "prompt": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "thinking": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "gpuMs": {
+            "type": "integer"
+          },
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "requests",
+          "messages",
+          "runs",
+          "users",
+          "tokens",
+          "gpuMs",
+          "cost"
+        ]
+      },
+      "UsagePrice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "model",
+              "pool"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "inputPerMillion": {
+            "type": "number"
+          },
+          "outputPerMillion": {
+            "type": "number"
+          },
+          "gpuHour": {
+            "type": "number"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "ref",
+          "currency",
+          "inputPerMillion",
+          "outputPerMillion",
+          "gpuHour"
+        ]
+      },
+      "SiemDestination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "https",
+              "syslog"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "hasToken": {
+            "type": "boolean"
+          },
+          "hasCa": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "active",
+              "rejected",
+              "disabled"
+            ]
+          },
+          "proposedBy": {
+            "type": "string"
+          },
+          "proposedAt": {
+            "type": "integer"
+          },
+          "approvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approvedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decidedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decidedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivered": {
+            "type": "integer"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "lastDeliveredAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "url",
+          "state",
+          "delivered",
+          "dropped",
+          "connection"
+        ]
       }
     },
     "responses": {
@@ -11239,6 +11619,573 @@
           }
         ],
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/chargeback": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7402: the chargeback for one month per workspace and model, JSON (default) or CSV with a total line; audited analytics.chargeback.exported",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "description": "YYYYMM (default: this month)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "one workspace (default: every workspace)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "json or csv",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "integer"
+                    },
+                    "currency": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "total": {
+                      "type": "object"
+                    },
+                    "workspace": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "month",
+                    "rows",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/daily": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7401: per day over the range, zero-filled: messages, runs, tokens and GPU-seconds",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "first day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "last day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "days back from today (default 14)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "day": {
+                        "type": "string"
+                      },
+                      "messages": {
+                        "type": "integer"
+                      },
+                      "runs": {
+                        "type": "integer"
+                      },
+                      "tokens": {
+                        "type": "integer"
+                      },
+                      "gpuSeconds": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/prices": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7402: the tenant's prices per model and per pool",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "prices": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UsagePrice"
+                      }
+                    }
+                  },
+                  "required": [
+                    "prices"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read and tenant:manage. B-7402: set the price of a model or a pool (one currency per tenant); audited analytics.price.set",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "model",
+                      "pool"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "inputPerMillion": {
+                    "type": "number"
+                  },
+                  "outputPerMillion": {
+                    "type": "number"
+                  },
+                  "gpuHour": {
+                    "type": "number"
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "scope",
+                  "ref",
+                  "currency"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePrice"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/prices/{id}": {
+      "delete": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read and tenant:manage. B-7402: remove a price; audited analytics.price.removed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the price",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/analytics/summary": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/analytics"
+        ],
+        "summary": "usage:read. B-7401: messages, tokens, users, runs, GPU time and cost by tenant (system admins), workspace, group, model, profile or user over a day range",
+        "parameters": [
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "description": "tenant, workspace, group, model, profile or user (default workspace)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "first day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "last day, YYYYMMDD",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "description": "days back from today when from is absent (default 14)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "description": "narrow to one group's members",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "by": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AnalyticsRow"
+                      }
+                    },
+                    "total": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "by",
+                    "rows",
+                    "total"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/exports/jsonl": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read. B-7501: request a JSONL export of a time window of the chain with its signed proof (events above the requester's clearance redacted to their hashes); 202 with the export; audited audit.export.requested",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer",
+                    "description": "window start, epoch ms"
+                  },
+                  "to": {
+                    "type": "integer",
+                    "description": "window end, epoch ms"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read. B-7501: the tenant's SIEM destinations with their state and delivery counters, and the platform stream's status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "platform": {
+                      "type": "object"
+                    },
+                    "max": {
+                      "type": "integer"
+                    },
+                    "destinations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SiemDestination"
+                      }
+                    }
+                  },
+                  "required": [
+                    "platform",
+                    "destinations"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: propose a destination (https: NDJSON batches with an optional bearer token; syslog: host:port over TLS, optional private CA); a second admin approves it; audited audit.siem.proposed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "https",
+                      "syslog"
+                    ]
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "caPem": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "kind",
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -11601,6 +12548,225 @@
         ],
         "summary": "Queues a CSV export. Without filtered, a selection with rows above the caller's clearance fails 403 Export blocked with {total, above, clearance}",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/approve": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: approve a proposed destination (someone other than the proposer); events flow from now on; audited audit.siem.approved",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/disable": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: stop an active (or withdraw a proposed) destination; audited audit.siem.disabled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/reject": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: reject a proposed destination; audited audit.siem.rejected",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiemDestination"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/siem/{id}/test": {
+      "post": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/audit"
+        ],
+        "summary": "audit:read and tenant:manage. B-7501: send one test event now and report the outcome; audited audit.siem.tested",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the destination",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -14336,6 +15502,251 @@
         ],
         "summary": "Hostnames, *.domain, addresses or CIDR networks. When not empty, workflow HTTP steps and webhooks may only reach hosts on it (on top of the internal-address rules). Audited tenant.hosts.updated",
         "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: the AI system inventory: every model, profile, agent, workflow, tool, MCP server and dataset with owner, oversight role, provenance, lineage, issues and completeness",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InventoryItem"
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer"
+                        },
+                        "incomplete": {
+                          "type": "integer"
+                        },
+                        "withIssues": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "counts"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/register": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7302: the register as CSV (default) or JSON, every system with its lineage and impact assessment; audited inventory.exported",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "csv or json",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/settings": {
+      "get": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: whether publishing an agent needs an owner in the inventory",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: turn the owner requirement for publishing agents on or off; audited inventory.settings.updated",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requireOwner": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requireOwner"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/admin/inventory/{kind}/{id}": {
+      "patch": {
+        "x-exprsn-since": "1.6.0",
+        "tags": [
+          "admin/inventory"
+        ],
+        "summary": "models:manage. B-7301: set a system's owner, oversight role, data provenance, lineage note, known issues and impact assessment; audited inventory.updated",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "description": "model, profile, agent, workflow, tool, mcp-server or dataset",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "the system's id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ownerId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "oversightRole": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "provenance": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lineageNote": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "knownIssuesNote": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "impactAssessment": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItem"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Default"
           }
