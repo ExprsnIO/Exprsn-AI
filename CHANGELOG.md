@@ -59,6 +59,21 @@
   axe-core. Prototype boards: three more Import states, the dataset source on Knowledge, the imported engine on
   Classifiers, an imported version on Training.
 
+### The guardrail rule builder (Sprint 41b, B-9601, B-9602)
+
+- A rule drafted from a description (B-9601): `POST /api/admin/guardrails/sets/:id/describe` (`guardrails:manage`,
+  and `inference:invoke` because the draft is a model call made as the admin). The description passes the
+  `user-input` checkpoint; a published profile's model answers one rule through the same path as the low-code drafts
+  (decision D11b); the answer is normalised (a free id, the mechanism's kind as its type, "hold" and "mask" wordings as
+  actions), validated with the GuardrailRule schema and the RE2 compiler, and returned with a diff against the set's
+  working rules. A draft is always in shadow; with `save` a valid draft joins the set's open draft in shadow, so it
+  records findings and changes nothing until it is promoted (the false-positive limit) and published under the set's
+  dual control. Audit `guardrails.rule.drafted`, and `guardrails.rule.added` with `source: description` on save.
+- The Guardrails screen's "Describe a rule" (B-9602): the description, the profile and the checkpoint; the draft as
+  YAML with its diff, or the problems and what the model answered; "Save in shadow"; then the existing shadow replay,
+  promotion and review flow on the saved rule. Prototype board first; `e2e/tests/guardrails.spec.ts` drafts "hold
+  answers that quote a card number", replays, promotes and approves as a second admin, with axe-core.
+
 ## 1.6.0
 
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)

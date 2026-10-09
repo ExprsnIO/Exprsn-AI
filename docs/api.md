@@ -5594,3 +5594,18 @@ its labels from the model's `config.json` (`id2label`) and its files named by th
 revision, files: [{name, key, sha256}]}, labels, text}` answers `{scores: {<label>: 0..1}}`; without a worker the
 classifier cannot score (`CLASSIFIER_WORKER_URL`). The engine shows on the Classifiers screen with the others; its
 eval set is named and evaluated there. `GET /api/eval-sets` lists imported sets with their case counts.
+
+## Sprint 41b (1.7.0): the guardrail rule builder (B-9601, B-9602)
+
+No migration, settings or new permissions. Audit `guardrails.rule.drafted` on every draft and `guardrails.rule.added`
+with `source: description` when one is saved.
+
+### A rule drafted from a description (B-9601; `guardrails:manage` and `inference:invoke`)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/guardrails/sets/:id/describe` `{prompt, profile, checkpoint?, save?, label?}` | The description (3 to 4,000 characters) passes the `user-input` checkpoint as the admin (`422 Description refused` when a rule blocks or holds it); the published profile's model answers one rule through the gateway (metered to the admin, `503` when the model is unavailable, `403` naming `inference:invoke` when the admin's roles do not grant it); the answer is normalised (a free id in the set, the mechanism's kind as the type, "hold" and "approval" as `require-approval`, "mask" as `redact`, "refuse" as `block`), the console's `checkpoint` wins over the model's, and the rule is validated with the GuardrailRule schema and the RE2 compiler. `{rule, raw, yaml, valid, problems, diff, checkpoint, saved}`: `rule` (always `stage: shadow`, `onError: closed`, `enabled`) and `yaml` when it validates, `raw` the normalised answer, `problems` the schema or pattern findings, `diff` the set's working rules against the working rules plus the draft (`added`, `changed`, `removed`, `text`). Nothing is stored. With `save: true` a valid draft is appended to the set's open draft (created from the published rules when there is none; `409` when a version waits for review) and `saved` is `{version, status}`; a draft that does not validate is `422 Draft not usable` and nothing changes. The platform baseline refuses tenant admins as every write does (`403 Baseline locked`). |
+
+From the draft on, the rule follows the existing flow: `POST …/replay` runs the draft version over recorded traffic,
+`POST …/promote` moves it to `enforce` when reviewers' false positives are within the limit, and the version publishes
+through `…/draft/submit` and `…/draft/approve` (a second guardrail admin) or `…/draft/publish` for a tenant set.

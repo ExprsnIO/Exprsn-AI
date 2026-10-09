@@ -485,6 +485,23 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   model's own `config.json` and can be renamed on the Classifiers screen; thresholds, eval sets, publication and the
   minimum-sample rule apply as to every engine.
 
+## The guardrail rule builder (1.7.0, Sprint 41b)
+
+- **A draft is a suggestion in shadow (B-9601).** The model's answer never becomes an enforced rule by itself: the
+  server forces `stage: shadow` and `onError: closed` before validation, validates with the same schema and RE2
+  compiler as a hand-written rule, and saves only into the set's open draft, which runs nowhere until the version is
+  published, and even then only records what the rule would do until it is promoted within the false-positive limit.
+  Promotion and publication are the existing paths with their dual control; the builder adds no route that changes a
+  published rule.
+- **The description is screened, metered and audited.** It passes the `user-input` checkpoint as the admin (a secret
+  or a blocked phrase in the description refuses the draft, a redaction reaches the model redacted), the model call
+  needs `inference:invoke` and goes through the gateway like any turn (profile label, quota, metering, the
+  `model-output` checkpoint on the answer), and every draft is audited with the set, the profile, the mechanism and the
+  action, never the description.
+- **The baseline stays out of reach.** Drafting on the platform baseline needs a platform guardrail admin, like every
+  write; a drafted rule with a baseline rule's id gets a free id instead, so a tenant draft cannot relax a baseline rule
+  by name (the relaxation check runs again at save and at publish).
+
 ## Deployment hardening
 
 ## Model servers and platform administration (1.6.0, Sprint 35)
@@ -598,6 +615,11 @@ filter, private `/tmp`, only the state directory writable.
   imported engine's worker protocol is this server's own (one `POST /classify`), with no reference worker shipped; a
   worker must share the blob store (filesystem or S3) to read the files, and a classifier whose worker is missing
   scores nothing (its evaluation records errors per case).
+- The guardrail rule builder (1.7.0, Sprint 41b). The draft quality is the profile's model's: a vague description can
+  become a pattern on its last words, and only the schema and the RE2 compiler check it, so a reviewer reads the YAML and
+  the replay before promoting. The draft prompt is one English text with the mechanisms it names; a description that
+  needs a classifier or a guard-model category is drafted as a pattern or refused by the schema. A draft saved into a
+  set whose version waits for review is refused rather than queued.
 - The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
   only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
   Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's

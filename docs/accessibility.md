@@ -491,6 +491,12 @@ dialogs.
   dark mode. The log drawer's table goes through the accessibility pass. `e2e/tests/import.spec.ts` runs axe-core on
   the repositories, review, destination, done and log views, and the accessibility and reflow sweeps cover the screen
   and its states. The entry points on Models, Training, Classifiers and Knowledge are text buttons.
+- **Guardrails: Describe a rule (Sprint 41b, B-9602).** The dialog's description, profile and checkpoint are labelled
+  fields; the draft and its diff are code blocks with line numbers in a live region (`aria-live="polite"`), so the
+  result is announced when it lands; "Save in shadow" stays disabled until a draft validates, and a draft that does not
+  validate is a danger notice with the problems in text. The saved rule's note on the screen names the next steps.
+  `e2e/tests/guardrails.spec.ts` runs axe-core on the open dialog with a draft and on the screen with the published
+  rule, and the Guardrails accessibility and reflow sweeps pass at 320 and 640 px.
 
 ## How it was checked
 

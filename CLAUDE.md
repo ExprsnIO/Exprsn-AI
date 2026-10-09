@@ -379,6 +379,10 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   engine (B-3806: `config.model` names the staged files, `scoreImported` calls the worker at `CLASSIFIER_WORKER_URL`,
   `createImported`), and `registerClassifier` in `imports/service.ts` for a model import with `target: classifiers`.
   Fakes in `server/test/sprint40b-fakes.ts` (an open-data portal, a dataset hub, a classifier worker).
+- 1.7.0 Sprint 41b: `guardrails/drafts.ts` (B-9601: `draftRule`, the description through the `user-input` checkpoint and
+  a profile's model over `apps/ai.ts`'s `generate`, `normaliseDraft`, `validateDraft` and `freeId`, always shadow) behind
+  `POST /admin/guardrails/sets/:id/describe` in `routes/guardrails.ts`, which saves a valid draft into the set's open
+  draft with `save`; `fakeRuleDraft` and `isRuleDraftPrompt` in `server/test/fake-ollama.ts` answer the draft prompt.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
