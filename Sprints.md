@@ -50,8 +50,8 @@ from prototype data to live only when every control on it is backed by the serve
 | 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization (1.6.0) | Messages and feed, Vault, Registry, Guardrails, Profiles, Identity, User stores, Settings, MCP servers | **Done** (B-7202 partial) |
 | 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs (1.6.0) | Analytics (new); Models, Usage and audit, Profiles, Registry, Runs, Flags, Apps | **Done** |
 | 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release (1.6.0) | Images, Chat, Shared, Apps, Settings | **Done** |
-| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | Next |
-| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Planned |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (1.7.0; Sprint 38 until 2026-10-07) | Chat, Import (new); Training, Classifiers, Knowledge | **Done** |
+| 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder (1.7.0) | Workflows, Vault, Messages and feed, Moderation, Files, Guardrails | Next |
 | 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, custom roles, group moderation, event extras, linked conversations (1.7.0) | Vault, Settings, Groups and events | Planned |
 | 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release (1.7.0) | Groups and events, Files, Vault, Knowledge, Apps, Profiles, Jobs and queues, Plugins and events, AT-Protocol, Messages and feed | Planned |
 | 44–50 | Cloud deployments and integrations: AWS, Azure, DigitalOcean and Cloudflare accounts and credentials, deployments with plan, apply, verify and drift, managed data, GPU pools with scale-to-zero, cloud model backends, the Cloudflare edge, FinOps (2.0.0, [backlog](Backlog-2.0.0.md); after 1.7.0, which ends at Sprint 43; Sprints 40 to 46 until 2026-10-07) | Cloud accounts, Deployments, Cloud data, Cloud compute, Cloud spend (new); Models, Pools | Planned |
@@ -1350,6 +1350,30 @@ Delivered on `sprint-39` and its parts 39a to 39d (PR #70, then #71 onto `main`)
   in the manifest; artifacts come only from fenced blocks; a field type change on an entity with records fails a
   deployment; rollback restores design, not records; pulls are full reads; a public embed page is reachable by anyone
   who learns its id; the host site is trusted for who is behind the browser.
+
+## Sprint 40: Agents, tools, skills and workflows in chat; dataset import and the Import screen (1.7.0, done)
+
+Built in two parts off the 1.6.0 release. **40a** (B-4001 to B-4009, migration `042_chat_invocation`): what a
+conversation may call (`GET /api/conversations/:id/capabilities`), `/tool` calls from the composer through the
+dispatcher and the tool-call guardrail with held calls decided in the Flags queue, write and destructive tools behind
+in-chat approval cards (owner, then the guardrail's approver where a rule says so; denied and expired cards recorded),
+`@agent` runs bound to the conversation with a run card and the answer attributed to the agent, `+skill` chips sticky
+or for one turn within the profile's list, agents offered to the model as `agent:<name>` tools within the chain's
+depth and budgets, and `/workflow` with its approvals as cards; the Chat board and the live Chat screen with
+keyboard-first pickers and cards. **40b** (B-3804 to B-3807, migration `042b_dataset_import`): dataset import from
+CKAN datastores, Socrata, SDMX, e-Stat, OGD, OpenML, InvenioRDM and Hugging Face dataset repositories with streaming
+parsers, a schema preview with PII flags, sampling above the quota, scrub and versioning into `training_datasets`;
+knowledge sets (`knowledge_sources.kind = dataset`) with column mapping, grouping, publisher-following schedules,
+citations back to the row and a row-by-row refresh that keeps serving; classifier eval sets with minimum-sample
+warnings and the `imported` engine scored by a classifier worker; the Import screen live with its wizard, Imports
+queue and Repositories tab, and entry points on Models, Training, Classifiers and Knowledge. Screens: Chat, Runs,
+Import (new), Models, Training, Classifiers, Knowledge. Settings `CHAT_CARD_TTL_SECONDS`, `CHAT_AGENT_WAIT_SECONDS`,
+`CHAT_AGENT_CONTEXT_TURNS`, `IMPORT_DATASET_MAX_ROWS`, `CLASSIFIER_WORKER_URL`, `CLASSIFIER_WORKER_TIMEOUT_MS`. Unit
+suite 1191 passed and 1 skipped across 130 files; PostgreSQL integration passed; prototype smoke 51 of 51; the Chat,
+Runs, Import, Models, Training, Classifiers and Knowledge specs and the first-look sweep passed (21). Known gaps in
+[docs/security.md](docs/security.md): free text becomes arguments through one model turn; a model-proposed card is
+decided after its answer; handed-off runs are awaited by polling; Parquet, Excel and archives are not read; sources
+have no pinned revision; refresh reads the whole source; the classifier worker protocol is this server's own.
 
 ## Release 1.6.0
 
