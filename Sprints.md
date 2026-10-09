@@ -37,7 +37,7 @@ from prototype data to live only when every control on it is backed by the serve
 | 25 | ACME server, AT-Protocol keys, DIDs and labeler, secret leases, plugins (1.4.0) | — | **Done** |
 | 26 | Identity gaps and AT-Protocol sign-in, moderation actions and appeals, file store (1.4.0) | — | **Done** |
 | 27 | AT-Protocol firehose, low-code data apps, groups and events (1.4.0) | — | **Done** |
-| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** |
+| 28 | Customer-service channels, messaging, workspace feed, load test, release (1.4.0) | — | **Done** (B-2105 partial) |
 | 29 | Permission matrices and custom roles, prototype boards, trust, identity, apps and files screens (1.5.0) | Certificates, Vault, Plugins and events, Apps, Files (new); Sign in, Settings, Identity | **Done** (screens in Sprint 30) |
 | 30 | Domain screens; CalDAV and CardDAV; model-based memory management; MongoDB connections (1.5.0) | Moderation, Groups and events, Channels, Messages and feed, Roles and access (new); Memory, Connections | **Done** |
 | 31 | AT-Protocol PDS and feed generator; import repositories and model import; RSVP race and relay commit signatures (1.5.0) | AT-Protocol (new); Models | **Done** |
@@ -1393,6 +1393,109 @@ interop job in CI. B-3104 (the DAV conformance run) stays partial and B-3606 (ca
 dropped by the owner (not needed); it had been held because macOS 27 Calendar refuses Basic authentication over plain HTTP, and capturing over TLS needs a per-host
 certificate trust on the owner's Mac that was not approved. The known gaps of each sprint are in
 [docs/security.md](docs/security.md). Tagging `v1.5.0` and publishing the image and chart remain with the maintainers.
+
+## Sprint 24: Trust foundations: CA issuance and OCSP, secrets, the event catalogue, core (done)
+
+Delivered on `sprint-24` and its three parts (78 points), migrations `026_pki_secrets`, `026b_secrets` and `026c_core`,
+the first of the 1.4.0 sprints that re-implement exprsn-platform's server features in Exprsn-AI (server-only, no
+console screen changed):
+
+- **B-1601 to B-1604**: a platform root and per-tenant intermediate CAs (P-256, RSA 3072) with keys only in the
+  signer or OpenBao, profiles and CSR issuance, numbered CRLs and OCSP, interoperable with `openssl x509`, `crl`,
+  `verify` and `ocsp`.
+- **B-1701 to B-1703**: versioned KV secrets, tenant transit keys with rewrap and trim, path policies with `explain`
+  (transit key material sealed with the tenant key rather than held in OpenBao, a known gap).
+- **B-2001, B-2002**: the event catalogue at `GET /api/events/catalogue`, every emitted event checked against its
+  schema; plugin manifests, grants and lifecycle as data (nothing runs a plugin until Sprint 25).
+- **B-2101 to B-2104**: generic realtime rooms, the tenant read-through cache (Redis or memory, invalidated over the
+  bus), the `plugins` and `events replay` CLI commands (B-2103 partial here; `pki`, `secrets` and `users import`
+  followed in Sprints 25 and 26), and `docs/openapi.json` covering every registered route, checked by a test.
+- Before the sprint: the gateway slot deadlock fixed (#23). Unit suite 599 passed, console suite 57 passed; the
+  PostgreSQL integration tests against throwaway servers, MySQL and Redis in CI.
+
+## Sprint 25: ACME server, AT-Protocol trust, leases, plugins (done)
+
+Delivered on `sprint-25` and its four parts (77 points), migrations `027_acme`, `027b_atproto`, `027c_leases` and
+`027d_plugins`:
+
+- **B-1605 to B-1607**: a per-tenant RFC 8555 ACME directory (http-01 through the service address checks, dns-01,
+  EAB, key change, revoke, tenant and account isolation), from which Exprsn-AI's own client obtains certificates;
+  PEM, DER, chain and PKCS#12 export, renewal and expiry notices; `exprsn-ai pki` and `docs/pki.md`.
+- **B-1608 to B-1611**: secp256k1 and P-256 AT-Protocol keys with rotation updating the DID document, per-tenant
+  `did:web` or `did:plc` with a platform fallback, a signed labeler with `queryLabels` and `subscribeLabels`, and
+  trusted labelers whose labels become flags.
+- **B-1704 to B-1706**: built-in PostgreSQL and MySQL lease engines, `vault:path#key` references in user stores,
+  data connections, MCP tokens and workflow HTTP headers, rotation notices.
+- **B-2003 to B-2005**: declarative plugin actions gated by grants, script handlers in the container sandbox with a
+  per-run scoped token, plugins installed from signed import bundles.
+- Decisions: a service DID and labeler per tenant with a platform fallback; built-in database leases registered only
+  by `connections:manage` holders in a zone whose ceiling covers the target. Unit suite 663 passed; the PostgreSQL
+  integration tests against throwaway servers, MySQL in CI. Gaps: dns identifiers only and no ARI for ACME, PLC not
+  run against the live directory, no CLI plugin import.
+
+## Sprint 26: Identity gaps and AT-Protocol sign-in, moderation, the file store (done)
+
+Delivered on `sprint-26` and its four parts (81 points), migrations `028_identity`, `028b_atproto_accounts`,
+`028c_moderation` and `028d_files`:
+
+- **B-1801 to B-1805, B-1807, B-1808**: self-registration under a per-tenant policy and invitations, verification
+  links, an MFA policy with a grace period and trusted devices (never for admins), GitHub and GitHub Enterprise Server
+  as a user store, CSV import of users as a job with a dry run, DIDs bound by a profile challenge or a sign-in, and
+  AT-Protocol OAuth as a client (PAR, PKCE, DPoP; tested against a local PDS double only).
+- **B-1901 to B-1907**: moderation checks with one flag per object, a registry of moderated object types, reports,
+  appeals that restore objects and negate labels, sanctions enforced on the next request, routed queues with SLA
+  escalation and a dead-letter queue, shadow and enforce external providers, notices.
+- **B-2401 to B-2405**: streamed, sealed, scanned files with versions and trash, shares and use-limited links,
+  quotas, sandboxed previews, search and folder knowledge sources; files are moderation objects.
+- The Sprint 24 leftovers closed: the `secrets` and `users import` CLI commands, and a chat turn reusing its own
+  slot for guard-model verdicts, tool-result screens and embeddings. Unit suite 710 passed, console suite 57 passed;
+  the PostgreSQL integration tests against throwaway servers, MySQL in CI.
+
+## Sprint 27: AT-Protocol firehose, low-code data apps, groups and events (done)
+
+Delivered on `sprint-27` and its three parts (71 points, PR #36), migrations `029_apps`, `029b_firehose` and
+`029c_groups`:
+
+- **B-1908**: per-tenant Jetstream or relay `subscribeRepos` subscriptions, one consumer per subscription through a
+  lease, a bounded queue with backpressure, cursor checkpoints and backoff; posts go through the moderation check
+  and become labels (relay commits not signature-verified until Sprint 31, B-3604).
+- **B-2201 to B-2208**: low-code apps: typed fields and validation, sealed records with indexed values in clear for
+  filter, sort, search and aggregation (the same 19 queries on SQLite, PostgreSQL and MySQL), CSV import and export as
+  jobs, lookups and a formula parser without eval, per-entity state machines, forms with public links under
+  `user-input`, record and schedule triggers with a `record` workflow step, AI fields that fail soft, signed design
+  bundles.
+- **B-2501 to B-2505**: groups with visibility and join modes, roles and a realtime room; events with time zones,
+  RSVPs, capacity and check-in; reminder jobs; RFC 5545 feeds with revocable signatures; sealed group posts.
+- Event catalogue version 3; new permissions `firehose:manage`, `apps:design`, `records:read`, `records:write`,
+  `groups:read`, `groups:write`, `groups:manage`. Unit suite 750 passed and 1 skipped across 61 files; the
+  PostgreSQL integration tests against throwaway servers, MySQL in CI. Known gaps: a held public form value was refused
+  rather than queued (closed in 1.6.0 by B-4701); two simultaneous RSVPs could both take the last place (closed in
+  1.5.0 by B-3603).
+
+## Sprint 28: Customer-service channels, messaging, the workspace feed, load test, release 1.4.0 (done)
+
+Delivered on `sprint-28` and its four parts (84 points, PR #37), migrations `030_channels`, `030b_social` and
+`030c_feed`; the feed part started from the messaging part's social-relations commit, so messaging and the feed
+share one module of blocks, mutes, follows, lists and contact rules:
+
+- **B-2301 to B-2304, B-1806**: chat channels bound to a published profile or agent with anonymous or identified
+  customers on `/api/public/channels`, held replies approved, edited or rejected, IMAP polling and signed provider
+  webhooks with an SMTP outbox, retention purges and CSV transcripts; email one-time codes as a second factor.
+- **B-2601 to B-2606**: direct and group conversations with roles, edits, threads, reactions, pins and forwards,
+  delivery and read receipts, typing and presence over sockets, attachments from the file store, keyword and semantic
+  search with summaries and catch-up digests, blocks and contact rules.
+- **B-2701 to B-2705**: posts with media, threaded comments, reactions, reposts and bookmarks; follows, blocks, mutes
+  and lists; home, workspace, group, user, list, hashtag and bookmark feeds with live delivery; posts through the
+  `user-input` guardrail with holds; hashtags, trending and a weekly digest.
+- **B-2105**, partial: the platform load test (`npm run loadtest:platform`, `docs/loadtest.md`) met every `ci`
+  target on SQLite and on PostgreSQL every target but the records query p95 (732 ms against 250 ms), fixed in 1.5.0
+  by B-3601; it found and fixed two bugs in the database job queue and the webhook fan-out.
+- **B-2801**: the release. Decisions at the merge: customer-service email through both IMAP polling and provider
+  webhooks; email one-time codes count as the second factor for admin roles that require one (a known gap in
+  `docs/security.md`); messaging and the feed stay in Exprsn-AI. Event catalogue version 5; new permissions
+  `channels:manage`, `channels:review`, `social:*`, `messages:*`, `feed:*`; new dependencies `imapflow` and
+  `mailparser`. Unit suite 794 passed and 1 skipped across 66 files; the PostgreSQL integration tests against
+  throwaway servers, MySQL and Redis in CI.
 
 ## Release 1.4.0
 
