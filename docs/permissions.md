@@ -83,7 +83,7 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `firehose:manage` | yes | 15 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
-| `apps:design` | yes | 22 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
+| `apps:design` | yes | 37 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
 | `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `compliance:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  | x |  |
@@ -1231,6 +1231,21 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/drafts`
 - `POST /api/apps/import`
 - `DELETE /api/apps/{app}/policies/{id}`
+- `DELETE /api/apps/pipelines/{id}`
+- `GET /api/apps/deployments/{id}`
+- `GET /api/apps/pipelines`
+- `GET /api/apps/pipelines/{id}`
+- `GET /api/apps/pipelines/{id}/deployments`
+- `GET /api/apps/{app}/packages`
+- `GET /api/apps/{app}/packages/{id}`
+- `PATCH /api/apps/pipelines/{id}`
+- `POST /api/apps/deployments/{id}/rollback`
+- `POST /api/apps/packages/git-import`
+- `POST /api/apps/packages/import`
+- `POST /api/apps/pipelines`
+- `POST /api/apps/pipelines/{id}/promote`
+- `POST /api/apps/{app}/packages`
+- `POST /api/apps/{app}/packages/{id}/git`
 - `GET /api/apps/{app}/policies`
 - `POST /api/apps/{app}/entities/{entity}/policies/explain`
 - `POST /api/apps/{app}/policies`

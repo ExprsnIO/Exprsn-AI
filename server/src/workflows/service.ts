@@ -520,7 +520,8 @@ export class WorkflowService implements WorkflowToolRunner {
   }
 
   /** Starts a run of the published version, or a dry run of the draft (mocked models and calls, no side effects). */
-  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string; chain?: RunChain }) {
+  /** 1.6.0 (B-8202): `caller` names what awaits the run (an app deployment); `onCallerDone` hears of its end. */
+  async start(p: Principal, id: string, input: { input: Record<string, unknown>; dry: boolean; trigger?: string; chain?: RunChain; caller?: { kind: string; id: string; node: string } }) {
     const w = await this.workflow(p, id);
     let graph: WfGraph;
     if (input.dry) {
@@ -538,7 +539,7 @@ export class WorkflowService implements WorkflowToolRunner {
       const err = checkValue(input.input, trigger.output);
       if (err) throw new HttpProblem(400, 'Invalid request', `The run input does not match the trigger: ${err}.`);
     }
-    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label, ...(input.chain ? { chain: input.chain } : {}) });
+    return this.createRun(w, p, { graph, version: input.dry ? null : w.published_version, draftRev: input.dry ? w.draft_rev : null, mode: input.dry ? 'dry' : 'run', trigger: input.trigger ?? 'manual', input: input.input, label: w.label, ...(input.chain ? { chain: input.chain } : {}), ...(input.caller ? { caller: input.caller } : {}) });
   }
 
   /**
