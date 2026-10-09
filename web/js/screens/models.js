@@ -59,6 +59,17 @@
       st.query = st.query || ''; st.lifecycle = st.lifecycle || 'all'; st.cap = st.cap || 'all';
       st.reveal = st.reveal || {}; st.jobs = st.jobs || {};
       const canManage = App.can('models:manage'), canPools = App.can('pools:manage');
+      const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
+      // 1.6.0, Sprint 38a (B-7301, B-7302): the AI inventory tab.
+      st.view = st.view || 'catalogue'; st.invKind = st.invKind || 'all';
+      if (ctx.params.tab && ctx.params.tab !== st.paramsTab) { st.paramsTab = ctx.params.tab; st.view = ctx.params.tab; }
+      const loadInventory = () => {
+        if (st.invLoading) return;
+        st.invLoading = true;
+        App.get('/api/admin/inventory').then((inv) => { st.inv = inv; st.invError = null; }).catch((err) => { st.invError = err; }).finally(() => { st.invLoading = false; st.invLoaded = true; refresh(); });
+      };
+      if (st.view === 'inventory' && canManage && !st.invLoaded && !st.invLoading) loadInventory();
+      const reloadInventory = () => { st.invLoaded = false; ctx.rerender(); };
       // Toasts lay out as a flex row; one wrapping span keeps a message with markup on one flowing line.
       const say = (html, kind, ms) => ctx.toast('<span>' + html + '</span>', kind, ms);
       if (ctx.params.model) { st.wantModel = ctx.params.model; delete ctx.params.model; }
@@ -242,6 +253,40 @@
           selected: sel && m.id === sel.id, attrs: 'data-id="' + esc(m.id) + '"'
         })), all.length ? { emptyTitle: 'No models match', emptyText: 'Clear the filters or request an import.' } : { emptyTitle: 'The catalogue is empty', emptyText: 'Request an import to pull a model from the Ollama library onto a pool.' });
 
+      // ----- the AI inventory tab (B-7301, B-7302) -----
+      const INV_KINDS = [['all', 'All'], ['model', 'Models'], ['profile', 'Profiles'], ['agent', 'Agents'], ['workflow', 'Workflows'], ['tool', 'Tools'], ['mcp-server', 'MCP servers'], ['dataset', 'Datasets']];
+      const tabs = canManage ? UI.tabs([{ id: 'catalogue', label: 'Catalogue', count: all.length }, { id: 'inventory', label: 'AI inventory', count: st.inv ? st.inv.counts.total : undefined }], st.view) : '';
+      const invItems = st.inv ? st.inv.items.filter((x) => st.invKind === 'all' || x.kind === st.invKind) : [];
+      const invSel = st.inv && st.invSel ? st.inv.items.find((x) => x.kind + ':' + x.id === st.invSel) : null;
+      let invBody = '';
+      if (st.view === 'inventory') {
+        if (st.invError) invBody = UI.problem('The inventory could not be loaded', st.invError.message, st.invError.problem && st.invError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-invreload' }) + '</div>';
+        else if (!st.inv) invBody = UI.notice('Loading…', 'info');
+        else {
+          const c = st.inv.counts, req = st.inv.settings && st.inv.settings.requireOwner;
+          invBody = '<div class="hstack wrap"><div class="eyebrow">Systems</div>' + UI.seg(INV_KINDS.map((k) => ({ id: k[0], label: k[1] })), st.invKind, 'data-invkind aria-label="Kind"') + '<span class="right hstack gap6">' + UI.btn('Export register, CSV', { size: 'sm', icon: 'download', attrs: 'data-invexport="csv"' }) + UI.btn('JSON', { size: 'sm', icon: 'download', attrs: 'data-invexport="json"' }) + UI.iconbtn('refresh', 'Refresh', { attrs: 'data-invreload', cls: 'sm ghost' }) + '</span></div>'
+            + (c.incomplete ? UI.notice('<b>' + fmtN(c.incomplete) + ' of ' + fmtN(c.total) + ' systems have no owner.</b> ' + (req ? 'An agent without an owner is not published until one is named.' : 'Publishing does not need an owner in this tenant yet; the switch below turns that on.'), 'warn') : c.total ? UI.notice('Every system has an owner.', 'ok') : '')
+            + UI.table(['Kind', 'System', 'Status', 'Owner', 'Oversight', 'Lineage', { label: 'Issues', right: true }, 'Register'], invItems.map((x) => ({
+              cells: [esc(x.kind), '<b>' + esc(x.name) + '</b>' + (x.version ? ' <span class="mono muted">' + esc(x.version) + '</span>' : ''), UI.pill(x.status, /^(published|approved|healthy|ready|active)$/.test(x.status) ? 'ok' : 'neutral'), x.ownerName ? esc(x.ownerName) : '<span class="muted">none</span>', esc(x.oversightRole || '-'), '<span class="mono muted" style="font-size:11px">' + esc(x.lineage.length ? x.lineage.map((l) => l.kind + ':' + l.name).join(' > ') : '-') + '</span>',
+                (x.issues.flags + x.issues.failedEvals) ? UI.pill([x.issues.flags ? x.issues.flags + ' flags' : '', x.issues.failedEvals ? x.issues.failedEvals + ' failed eval' : ''].filter(Boolean).join(', '), 'warn') : '0', x.complete ? UI.pill('complete', 'ok') : UI.pill('incomplete', 'warn')],
+              attrs: 'data-invsel="' + esc(x.kind + ':' + x.id) + '"', selected: !!invSel && invSel.kind === x.kind && invSel.id === x.id
+            })), { minWidth: '860px', emptyTitle: 'Nothing of this kind', emptyText: 'Models, profiles, agents, workflows, tools, MCP servers and datasets appear here as they are created.' })
+            + '<div class="hstack wrap" style="margin-top:8px">' + UI.toggle('Publishing an agent needs an owner', !!req, 'data-invrequire') + '<span class="muted" style="font-size:12px">The register (CSV or JSON) lists every system with its owner, oversight role, provenance, model lineage, known issues and the impact assessment, for ISO/IEC 42001 and EU AI Act deployer records.</span></div>';
+        }
+      }
+      let invInspector = '';
+      if (st.view === 'inventory') {
+        if (!invSel) invInspector = '<aside class="inspector w360"><div class="eyebrow">AI inventory</div><div class="fg2" style="font-size:12px">Pick a system to name its owner and oversight role, record where its data came from and keep its impact assessment. Known issues count the open flags raised in its runs and its failed evaluations.</div></aside>';
+        else {
+          const owners = [{ value: '', label: 'none' }].concat((st.inv.owners || []).map((u) => ({ value: u.id, label: u.name })));
+          invInspector = '<aside class="inspector w360"><div class="eyebrow">' + esc(invSel.kind) + '</div><div class="md-name">' + esc(invSel.name) + '</div>'
+            + (invSel.missing.length ? UI.notice('<b>Incomplete:</b> missing ' + esc(invSel.missing.join(', ')) + '.' + (invSel.kind === 'agent' && !invSel.ownerId && st.inv.settings.requireOwner ? ' It cannot be published.' : ''), 'warn') : UI.notice('Complete.', 'ok'))
+            + UI.kv([['Status', esc(invSel.status)], ['Lineage', '<span class="mono" style="font-size:11px;overflow-wrap:anywhere">' + esc(invSel.lineage.length ? invSel.lineage.map((l) => l.kind + ':' + l.name).join(' > ') : 'none') + '</span>'], ['Known issues', [invSel.issues.flags ? invSel.issues.flags + ' open flags' : '', invSel.issues.failedEvals ? invSel.issues.failedEvals + ' failed evaluation' : ''].filter(Boolean).join(', ') || 'none']], 1)
+            + '<div class="formgrid">' + UI.field('Owner', UI.select(owners, invSel.ownerId || '', 'data-invf="ownerId"')) + UI.field('Oversight role', UI.input(invSel.oversightRole || '', { attrs: 'data-invf="oversightRole"', placeholder: 'Who reviews its output, how often' })) + UI.field('Data provenance', UI.textarea(invSel.provenance || '', { attrs: 'data-invf="provenance"', placeholder: 'Where its prompts, weights and data came from' })) + UI.field('Lineage note', UI.input(invSel.lineageNote || '', { attrs: 'data-invf="lineageNote"', placeholder: 'Fine-tunes, adapters, base model terms' })) + UI.field('Known issues', UI.textarea(invSel.knownIssuesNote || '', { attrs: 'data-invf="knownIssuesNote"', placeholder: 'What is known to go wrong and how it is handled' })) + UI.field('Impact assessment', UI.textarea(invSel.impactAssessment || '', { attrs: 'data-invf="impactAssessment"', placeholder: 'Risk level, affected people, human oversight' })) + '</div>'
+            + '<div class="hstack wrap gap6">' + UI.btn('Save', { kind: 'primary', size: 'sm', attrs: 'data-invsave' }) + (invSel.issues.flags ? UI.btn('Open flags', { size: 'sm', attrs: 'data-go="flags"' }) : '') + '</div></aside>';
+        }
+      }
+
       root.innerHTML = '<style>'
         + '.md-steps{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}.md-steps span{color:var(--muted);font-weight:500}.md-steps .cur{color:var(--fg);font-weight:700}.md-steps .done{color:var(--fg2)}.md-steps .sep{color:var(--faint-text)}'
         + '.md-name{font-family:var(--mono);font-size:14px;font-weight:500;overflow-wrap:anywhere}'
@@ -252,8 +297,8 @@
         + '<div class="page">'
         + UI.pagehead('Model catalog', 'Weights enter only through the import path: GGUF or safetensors, verified by digest, approved by a second person; models a server holds are registered without a pull',
           UI.iconbtn('refresh', 'Refresh', { attrs: 'data-reload', cls: 'sm ghost' }) + (canManage ? UI.btn('Model servers', { icon: 'pools', attrs: 'data-servers' }) + UI.btn('Request import', { kind: 'primary', attrs: 'data-request' }) : ''))
-        + problem + body
-        + '</div>' + inspector;
+        + tabs + (st.view === 'inventory' ? invBody : problem + body)
+        + '</div>' + (st.view === 'inventory' ? invInspector : inspector);
 
       // ---------- handlers ----------
       ctx.on('click', 'tr.row', (e, t) => { if (!t.dataset.id) return; st.selected = t.dataset.id; ctx.rerender(); });
@@ -267,6 +312,26 @@
       ctx.on('click', '[data-go]', (e, t) => { e.preventDefault(); ctx.navigate(t.dataset.go); });
       ctx.on('click', '[data-dismiss]', () => { st.showImportProblem = null; ctx.rerender(); });
       ctx.on('click', '[data-reload]', () => reload());
+      ctx.on('click', '[data-tab]', (e, t) => { st.view = t.dataset.tab; ctx.rerender(); });
+      ctx.on('click', '[data-invkind] [data-seg]', (e, t) => { st.invKind = t.dataset.seg; ctx.rerender(); });
+      ctx.on('click', 'tr[data-invsel]', (e, t) => { st.invSel = t.dataset.invsel; ctx.rerender(); });
+      ctx.on('click', '[data-invreload]', () => reloadInventory());
+      ctx.on('click', '[data-invexport]', (e, t) => {
+        const a = document.createElement('a'); a.href = '/api/admin/inventory/register?format=' + t.dataset.invexport; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+        ctx.toast('Register export started (' + t.dataset.invexport.toUpperCase() + '). Audited inventory.exported.', 'ok');
+      });
+      ctx.on('click', '[data-invrequire]', () => {
+        const next = !(st.inv && st.inv.settings && st.inv.settings.requireOwner);
+        App.api('PUT', '/api/admin/inventory/settings', { requireOwner: next }).then(() => { ctx.toast(next ? 'Agents without an owner are no longer published. Audited inventory.settings.updated.' : 'Publishing no longer needs an owner. Audited inventory.settings.updated.', 'ok'); reloadInventory(); }).catch((err) => App.fail(err, 'Not changed'));
+      });
+      ctx.on('click', '[data-invsave]', () => {
+        if (!invSel) return;
+        const v = (n) => { const el = ctx.$('[data-invf="' + n + '"]'); return el ? el.value : ''; };
+        const body = { ownerId: v('ownerId') || null, oversightRole: v('oversightRole').trim() || null, provenance: v('provenance').trim() || null, lineageNote: v('lineageNote').trim() || null, knownIssuesNote: v('knownIssuesNote').trim() || null, impactAssessment: v('impactAssessment').trim() || null };
+        App.patch('/api/admin/inventory/' + encodeURIComponent(invSel.kind) + '/' + encodeURIComponent(invSel.id), body)
+          .then((x) => { ctx.toast(x.complete ? 'Saved. ' + esc(x.name) + ' is complete. Audited inventory.updated.' : 'Saved. ' + esc(x.name) + ' is still incomplete: missing ' + esc(x.missing.join(', ')) + '. Audited inventory.updated.', x.complete ? 'ok' : 'warn'); reloadInventory(); })
+          .catch((err) => App.fail(err, 'Not saved'));
+      });
 
       // A form dialog that stays open when the server refuses, so nothing typed is lost.
       const formModal = (opts) => ctx.modal({

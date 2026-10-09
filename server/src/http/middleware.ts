@@ -143,8 +143,14 @@ export function authenticate(s: Services): RequestHandler {
       if (!key) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
       // Sprint 20 (B-1203): a key that requires signed requests is checked by /v1 only, so it is accepted nowhere else.
       if (key.signature_key && !/^\/v1(\/|$|\?)/.test(req.originalUrl)) return refuse(req, new HttpProblem(401, 'Unauthorized', 'This API key requires signed requests, which only /v1 checks; it is not accepted here.', { extensions: { error: 'invalid_token' } }));
-      const p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
+      let p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
       if (!p) throw unauthorized('The key owner is disabled.');
+      // 1.6.0 (B-7701): a key minted for an agent identity acts as the agent on the owner's behalf, within both grants.
+      if (key.agent_id) {
+        const identity = await s.agentIdentities.byId(key.agent_id);
+        if (!identity || !identity.enabled || identity.tenant_id !== key.tenant_id) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The agent identity behind this key is off or gone.', { extensions: { error: 'invalid_token' } }));
+        p = s.agentIdentities.narrowTo(p, identity);
+      }
       req.apiKey = key;
       req.principal = p;
       p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;

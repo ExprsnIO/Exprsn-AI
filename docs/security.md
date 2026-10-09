@@ -223,7 +223,100 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   the person disconnects. Metadata, registration, token and revocation requests use the internal-hosts dispatcher of
   MCP calls; tokens never enter model context.
 
+## The AI inventory, analytics and audit export (1.6.0, Sprint 38a)
+
+- **The inventory is a register, not a new authority.** It reads the objects it lists through the same tables their
+  own screens use and adds owner, oversight role, provenance, lineage note, known issues and impact assessment per
+  system (`inventory_systems`), under `models:manage`. The only enforcement it adds is the publish gate: with the
+  tenant's `requireOwner` setting on, the registry refuses to approve an agent that has no owner (`409`), on top of
+  the registry's own dual control. The gate is off by default so existing tenants keep publishing until their
+  register is filled in; turning it on is audited. Known issues are counted from open flags raised in the system's
+  agent or workflow runs and from failed evaluations; nothing is inferred from message text.
+- **Analytics reads the meter, never the content.** Every figure is a sum over `usage_records` (the rows the quotas
+  count), grouped by workspace, group, model, profile or user; `by=tenant` is for system admins. The group dimension
+  follows group membership, so a user's records count once per group they are in. Costs are computed at read time
+  from the tenant's prices and withheld for a row that mixes priced and unpriced records, so a partial figure never
+  reads as a total. Prices are `tenant:manage`, one currency per tenant, audited. The chargeback export is the same
+  computation and is audited with its total.
+- **Tracing carries token counts only.** `gen_ai.usage.*`, `gen_ai.response.model` and `gen_ai.provider.name` join
+  the allow-listed span attributes; the prompt and the answer still never leave the server.
+- **JSONL exports keep the chain verifiable.** A window holds every event between its bounds, those above the
+  requester's clearance redacted to their hashes (the hash covers all fields, so a redacted row cannot be recomputed,
+  but its `prev_hash` and `hash` still link the chain), and ends with a checkpoint signed by the KMS at the window's
+  last sequence (`AuditCheckpoints.createAt`, the same HMAC key as the scheduled checkpoints). `audit:verify-export`
+  needs nothing but the file; the HMAC is verified online by `audit:verify`. Requests and downloads are on the chain.
+- **Streaming per tenant is dual-controlled and guarded.** A destination is proposed by one tenant admin and approved
+  by another (the proposer cannot approve what they proposed); until then nothing is sent. Bearer tokens are sealed
+  with the tenant key and never shown again; a private CA is kept for the TLS connection. Every delivery dials
+  through the outbound address guard: HTTPS through the policy-checked dispatcher (no redirects), syslog through a
+  policy-checked lookup, so a destination whose name later resolves to a refused address stops working at that call.
+  Cloud metadata addresses are refused at save. Events are filtered per tenant before they reach a forwarder; the
+  platform stream (`SIEM_URL`) stays the operator's. Delivery is at least once with backoff; overflow is counted as
+  dropped on the row, and the chain in the database stays the record of truth.
+
+## Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c)
+
+- **Policies narrow, never widen (B-8101, B-8102).** A policy is applied after labels and workspace membership: a
+  reader reaches a record only when it is at a label they clear, in an app of their workspaces, and (once the entity
+  has a policy) in the rows a policy that names them allows. The row condition is run by the same query builder as any
+  filter, over the clear index, so a policy can only name indexed or unique fields (checked when it is saved, for
+  every entity it covers); a placeholder the reader has no value for makes the policy grant nothing, never everything.
+  A reader without `read` on a field cannot filter or sort by it (no inference from an ordering), and the field is not
+  in the record at all; a reader without `unmasked` gets the mask from the server (the full value never leaves it,
+  exports included). Grants combine permissively across the policies that name a reader, so a tenant that wants a
+  narrow result keeps its policies narrow. Designers (`apps:design`) are exempt: they define policies and can read the
+  records through the bundle export anyway; explain shows them what every reader gets. The user attributes policies
+  compare are set only by `users:manage` and audited with the user update.
+- **DLP acts after the guardrails, with no shadow stage (B-7601).** DLP rules are the tenant's data classification,
+  always in force for the scopes they name, kept by `compliance:manage` and audited. The built-in detectors are the
+  checksummed ones of the PII and secrets classifiers (scores below 0.8 are ignored); tenant patterns are compiled
+  with RE2 (linear time, no backtracking). A hold goes where a guardrail hold goes: the flag queue, where a reviewer
+  cleared for the label decides; an agent run ends failed with the rule's name; an upload is rejected with it. A
+  raised label is written to the message, the conversation (a high-water mark, never lowered), the run, the
+  attachment or the file version, and content raised above its owner's clearance is held regardless of the rule, so a
+  rule that only labels cannot show someone what they may not read. The DLP test endpoint stores and audits nothing.
+- **Legal holds are dual-controlled and quiet (B-7602).** A hold is asked for by one holder of `compliance:manage`
+  and approved by another (self-approval is refused), the reason is sealed with the tenant key (the audit chain keeps
+  a 500-character excerpt), and the people concerned are not told. An active hold is read by the chat, memory and file
+  purges on every run; releasing it is audited and takes effect at the next purge, nothing is deleted at once.
+- **Compliance exports are clearance-bound and sealed (B-7603).** The job reads the requester's clearance when it
+  runs and leaves out every row above it, counting what it left out; the export carries the highest label it holds and
+  is downloaded only by someone cleared for it. Parts are sealed with the tenant key (per-part AAD) in the blob store;
+  a download streams them part by part and is audited with the counts. An API key scoped to `compliance:export` (the
+  eDiscovery token) can do no more than its owner and is named in the audit events and the export row.
+
 ## Deployment hardening
+
+## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
+
+- **An adversarial gate beside the evaluations (B-7001).** A profile's or an agent's publish gate could require
+  passing evaluations, but nothing asked whether the model gives up its system prompt, follows an injected
+  instruction or reaches for an outside address. A red-team suite does, with the built-in attack categories (the
+  Sprint 37a corpus cases with a canary handed over as documents, jailbreaks, exfiltration through tools,
+  system-prompt extraction) and the tenant's own cases; every attack is judged deterministically (a canary, the
+  attack's address in the answer or in a tool call's arguments, eight consecutive words of the system prompt), so a
+  run's verdict does not depend on a judge model. A profile with a gated suite is published only once its settings
+  hash has a passing run, and no evaluation override opens that gate; an agent version is approved only once its
+  schema hash has one. Attacks against agents run as child runs under the agent's own budgets and approvals: a run
+  that pauses on an approval is cancelled and judged on what it reached for, so a red-team run never approves a
+  write.
+- **Every successful attack is reviewed (B-7002).** An attack that succeeded is a flag in the review queue (checkpoint
+  `red-team`, high severity for extraction and exfiltration), labelled as the suite and sealed like any excerpt; a
+  reviewer confirms it into an eval case or dismisses it. The flag names the attack, the target and the run, never
+  the suite's own cases beyond the one that succeeded.
+- **Agents as principals (B-7701).** A run used to act with everything its owner may do. With an identity, the run
+  acts within the identity's roles (as credential scopes, decided by the scope step of the policy pipeline) and the
+  lower of the owner's clearance and the identity's ceiling, so an agent granted no knowledge access cannot search
+  it even when an admin runs it, and a run labelled above the ceiling fails before it thinks. Audit events carry the
+  agent beside the user. Keys minted for an identity authenticate as the agent on the owner's behalf within the
+  identity's grants, the owner's and the key's scopes; they are refused the moment the identity is turned off, are
+  narrowed when the identity's roles are, and are never listed among the owner's personal keys. An identity's roles
+  never widen their author: every permission they grant, the author holds.
+- **Handoffs end the run (B-7801).** A handoff reuses the delegation path (a child run in the chain, within the
+  remaining budget, under the delegate's ceiling), so nothing an agent could not delegate to can be handed to; the
+  handed-to run's answer becomes the run's answer and the reader sees who answered.
+
+
 
 Container: non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, internal networks for
 the database and Ollama. systemd: `ProtectSystem=strict`, `NoNewPrivileges`, empty capability set, system-call
@@ -231,6 +324,20 @@ filter, private `/tmp`, only the state directory writable.
 
 ## Known gaps, tracked in the plan
 
+- The AI inventory, analytics and audit streaming (1.6.0, Sprint 38a). The inventory's owner gate applies to agents
+  only; profiles, workflows and tools publish without an owner, and the gate is off until a model admin turns it on.
+  Known issues count open flags from agent and workflow runs and failed evaluations; flags raised on a profile's
+  conversations are not linked to the profile, and models and tools show no issues. The register is a synchronous
+  download (no sealed export job), so it is not kept for later download. Analytics prices are per model or per pool,
+  not per instance: the meter records the pool a request ran on, not the instance. Costs are computed on each read and
+  nothing is stored per request, so a price change changes past months' chargebacks; keep the export if a figure
+  must stand. The group dimension counts a user's records once per group they belong to, so group rows do not sum to
+  the tenant's total. A JSONL export redacts rows above the requester's clearance to their hashes; the offline
+  verifier checks the chain and the checkpoint's hash but not its HMAC (that needs the key: `audit:verify`). Tenant
+  SIEM forwarders buffer in memory on the instance that appended the event (as the platform stream does): on a
+  multi-instance install each instance delivers the events it appended, and a restart drops what was buffered
+  (counted on the row only if the counters were flushed). A syslog destination opens one TLS connection per batch and
+  sends no structured data elements; HTTPS destinations get no retry on a 4xx beyond the forwarder's backoff.
 - HTTP tools and prompt-injection defence (1.6.0, Sprint 37a). The heuristic injection classifier is a set of
   patterns tuned on the corpus it is measured against (detection 100%, false positives 3.3% on it); new phrasings,
   other languages than English, Spanish, French, German and Dutch, and attacks split across chunks are missed, and a
@@ -1258,6 +1365,21 @@ filter, private `/tmp`, only the state directory writable.
   is removed from the graph (it then idles, subscribed to nothing). Webhook deliveries leave the platform at the
   step's label: the tenant's allowed hosts are the control, not the label (set a `ceiling` on the step to stop
   confidential data from reaching it).
+- Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b, B-7001, B-7002, B-7701, B-7801). The built-in
+  attacks are a fixed catalogue in English (plus the corpus's other languages); a model that resists them may fall to
+  phrasings it has not seen, and a tenant that does not add cases of its own measures only the catalogue. The judge is
+  deterministic: an attack whose canary comes back paraphrased, or a leak of fewer than eight consecutive words of the
+  system prompt, counts as resisted, and a benign answer that quotes the canary back ("I will not say FREEBIRD-01")
+  counts as a success for the attack. Exfiltration is judged on the address the attack names; a model that reaches
+  for another address is not caught. Workflow targets are judged on their step outputs with the attack in the first
+  string field of the trigger input, and their runs are not cancelled when they pause; workflow red-team runs are
+  finalised when their target is next read (there is no hook back from the workflow service). A red-team run of an
+  agent is metered to the person who started it, like an evaluation. The red-team gate covers profiles and agents;
+  workflows have suites and runs but no gate on publishing. Agent identities narrow by permission, not by object: an
+  identity granted `knowledge:read` reads every knowledge base its owner may, and a tool's own side-effect approvals
+  still apply. A key minted for an identity carries its owner's roles narrowed by the identity, so demoting the
+  owner demotes the key, but a different owner minting a key for the same identity gets their own narrowing. A
+  handoff hands the task the model wrote, not the run's messages; the specialist does not see the conversation.
 - Image classification in Knowledge (1.6.0, Sprint 36c, B-8801 to B-8805). The thumbnail is the stored image served as
   is: nothing is resized on the server, so a large image is sent whole (the console scales it). HEIC images have no
   thumbnail, since browsers do not show them. Only JPEG and 8-bit RGB or grey Flate images are taken out of PDFs
@@ -1265,3 +1387,14 @@ filter, private `/tmp`, only the state directory writable.
   are skipped as icons. A guardrail rule that names a vision classifier on text fails, and its `onError` decides. The
   vision profile's description and classification calls are metered as `embed` usage (knowledge indexing), with no
   user, not under a usage kind of their own.
+- Row and field policies, DLP, legal holds and compliance exports (1.6.0, Sprint 38c). A record a reader creates
+  outside the rows their policies allow is accepted and then out of their reach (the create grant is per field, not per
+  row); a lookup field's option list is not narrowed by policies; a policy's row condition is one filter of at most 30
+  conditions and 4 levels, and the reader's own filter is ANDed to it, not merged into those limits. DLP inspects at
+  most `DLP_MAX_TEXT_BYTES` characters of a text (the rest keeps its label); streamed chat answers are inspected when
+  finished, so a redacted span may have been shown while streaming, as with a guardrail redaction; the thinking of an
+  answer is not inspected by DLP; uploads are inspected only when they are text (UTF-8 or JSON), not inside PDF or
+  Office documents. A legal hold does not stop a user from deleting their own conversation, memory or file, and agent
+  runs have no retention purge to suspend. A compliance export matches by `createdAt`, not by activity in the range;
+  file bytes are not in it; conversations hold at most 10 000 messages each; nothing is signed, so an export's
+  integrity rests on the audit events around it.

@@ -39,6 +39,8 @@ export interface AgentDefinition {
   agents?: string[];
   /** B-4104: workflows (by name, in the run's workspace) this agent may start and await, offered as `workflow:<name>`. */
   workflows?: string[];
+  /** 1.6.0 (B-7801): specialist agents this agent may hand the conversation to; the handed-to run's answer is the run's answer. */
+  handoffs?: string[];
   budgets: AgentBudgets;
   /** Whether runs may propose memories about their work (Sprint 12); off when unset. */
   memory?: AgentMemoryPolicy;
@@ -177,6 +179,9 @@ export const referencedTools = (e: Pick<EntryRow, 'kind' | 'definition'>): strin
  * published to everyone and read-only here.
  */
 export class RegistryService {
+  /** 1.6.0, Sprint 38a (B-7301): asked before an agent is published; throws when the inventory entry is incomplete. */
+  publishGate: ((tenantId: string, kind: 'agent', id: string) => Promise<void>) | null = null;
+
   /** B-4105: the reference graph; unset, the chain checks and the "used by" guard are skipped. */
   private refs: ChainRefs | null = null;
 
@@ -386,6 +391,8 @@ export class RegistryService {
       throw conflict(`Approve stays disabled until the checks pass: ${checks.filter((c) => !c.ok).map((c) => c.name).join(', ')}.`);
     }
     const scope = await this.checkScope(e, input.scope ?? 'tenant', input.workspaces ?? []);
+    // 1.6.0, Sprint 38a (B-7301): an agent with no owner in the AI inventory is incomplete and is not published.
+    if (e.kind === 'agent' && this.publishGate && e.tenant_id) await this.publishGate(e.tenant_id, 'agent', e.id);
     const next: EntryRow = { ...e, status: 'published', checks, checked_at: t, approved_hash: e.schema_hash, reviewed_by: p.userId, reviewed_at: t, review_note: input.note ?? null, publish_scope: scope.scope, publish_workspaces: scope.workspaces, updated_at: t };
     await this.save(next);
     return next;

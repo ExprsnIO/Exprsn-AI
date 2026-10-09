@@ -153,6 +153,21 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
 
 ## Screens changed in 1.6.0
 
+- **Apps: policies and explain** (B-8103, Sprint 38c): a Policies tab for designers lists the app's policies in a
+  table whose state is a pill with its word; the editor is a labelled form (name, description, entity, the subjects as
+  labelled kind and value controls with a text Remove button each, the row condition as three labelled controls with
+  a sentence of hints, an Enabled switch with `role="switch"` and `aria-checked`, and the field grants as a table of
+  labelled checkboxes and mask selects, one row per field). Placeholder and list mistakes are refused before the
+  request in a toast that names the valid placeholders. Explain is a labelled form (reader, entity, record, field) whose
+  answer is a key-value list and a table: reachable or not, and each grant, is a pill with its word, with the policy
+  named in text. `e2e/tests/apps-policies.spec.ts` runs axe-core on the tab with an explain answer.
+- **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
+  exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
+  label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,
+  danger) is also said in words, with the redacted text in a `pre`. The rule, pattern, hold and export dialogs are
+  labelled forms (detectors and scopes as labelled checkboxes, the approver a labelled select of named people); every
+  refusal (a pattern in use, dual control, an export above one's clearance) is a problem block with its trace id.
+  `e2e/tests/compliance.spec.ts` runs axe-core on the tab.
 - **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
   Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
   unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
@@ -218,6 +233,24 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   the New channel, Distance filter and New category dialogs and the six new design states, and checks each at 320
   and 640 px; `e2e/tests/social.spec.ts` sweeps the Social and messaging states (now six).
 
+- **Models: the AI inventory tab** (B-7301, B-7302, Sprint 38a): a second tab in the ARIA tablist (Catalogue, AI
+  inventory), reachable with the arrow keys; a labelled segmented control filters by kind; every system is a table row
+  with a selected state, and the inspector is a form of labelled fields (owner as a select of the tenant's users,
+  oversight role, provenance, lineage note, known issues, impact assessment) with a Save button; the completeness
+  notice names what is missing in words, not by colour alone. The owner-requirement control is a `role="switch"` with
+  `aria-checked`, and the register exports are buttons whose names say the format. Toasts repeat the server's outcome.
+- **Analytics** (B-7401, B-7402, Sprint 38a): the chart is an SVG with `role="img"` and a label, each bar a focusable
+  list item with an accessible name (day and value) and a title, and a labelled segmented control picks the metric;
+  the dimension and period controls are labelled; the table has a Total row; cost cells that are withheld say "no
+  price" with a title explaining why. The price and chargeback dialogs are forms with labelled fields and hints, and
+  a refused save stays in the dialog with the server's words. Remove buttons name the price they remove.
+- **Usage and audit: JSONL exports and SIEM destinations** (B-7501, Sprint 38a): the export dialog's content select
+  swaps the hint text to explain the JSONL proof; the destinations table names the proposer and approver in each row;
+  state is a pill with words (awaits a second admin, active, disabled); the Approve button a proposer cannot use
+  carries a title saying why, and the refusal is a toast with the server's reason. Propose is a dialog of labelled
+  fields with hints (address forms, where the token goes). `e2e/tests/analytics.spec.ts` checks the screen with
+  axe-core and the in-page checker; `models.spec.ts` the inventory tab; `usage-audit.spec.ts` the export and the
+  dual-control flow with a second signed-in admin. The full sweeps run at the release (B-5101).
 - **Registry: HTTP tools and allowed hosts** (B-8904, Sprint 37a): the entry form's Kind select offers Tool (HTTP
   request), which swaps the fields inside the same dialog so focus stays in it. Every HTTP field is labelled with a
   hint (method, URL template, input schema, query parameters, headers, body, response mapping, cap and timeout); the
@@ -290,6 +323,20 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   labelled Close button; a refused repost is a problem panel in words. Your unlisted posts is an inspector panel whose
   Open and Copy link buttons sit beside the post's opening words. `e2e/tests/messages.spec.ts` runs both checkers in
   Standard and Enhanced on the feed with an unlisted post opened by link.
+
+- **Profiles: Red team** (B-7001, B-7002, Sprint 38b): the panel under the Evaluations tab repeats the evaluations
+  panel's structure: a notice states the gate in words (refused until, allowed) with its actions as buttons, the
+  suites and run history are tables with a header row, every result is a pill with its word (passed, failed, error)
+  beside the count, and Results opens a drawer whose outcome column says resisted or succeeded, never colour alone;
+  the flag of a successful attack is a link named by the flag. The suite modal labels every field with a hint, the
+  categories are labelled checkboxes with their attack counts, and errors land in a notice inside the modal.
+- **Registry: Identity and Red team** (B-7701, B-7001, Sprint 38b): both are modals opened from buttons on the agent
+  card, each with a title naming the agent; roles, ceiling and the on/off switch are labelled fields, keys are a
+  table whose state is a pill with its word, Mint key opens an inline labelled form, and the minted key is announced
+  in a notice marked as shown once. The handoffs field in the agent form is labelled with a hint like the delegates
+  field. Run and gate changes close the modal and confirm in a toast.
+- **Runs: handoffs** (B-7801, Sprint 38b): a run that handed off says who answered in its page head and in the list
+  entry (an arrow to the specialist's name), and a notice explains the handoff with a button to the specialist's run.
 
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 

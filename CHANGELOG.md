@@ -2,6 +2,40 @@
 
 ## 1.6.0 (in progress)
 
+### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
+
+- Migration `040_inventory_analytics`: `inventory_systems`, `inventory_settings`, `usage_prices`,
+  `audit_siem_destinations`.
+- The AI system inventory (B-7301): one list of the tenant's models, profiles, agents, workflows, tools, MCP servers
+  and datasets, each with an accountable owner, a human-oversight role, data provenance, model lineage (agent →
+  profile → model → base weights), known issues (open flags raised in its runs, failed evaluations) and whether the
+  entry is complete, on the Models screen's Inventory tab (`models:manage`). With the tenant's "publishing an agent
+  needs an owner" switch on, the registry refuses to approve an agent that has no owner. Audited `inventory.updated`
+  and `inventory.settings.updated`. `server/src/governance/inventory.ts`.
+- The register (B-7302): `GET /api/admin/inventory/register` as CSV or JSON, every system with its lineage and the
+  tenant's impact assessment, for ISO/IEC 42001 and EU AI Act deployer records; audited `inventory.exported`.
+- The Analytics screen (B-7401, `usage:read`): messages, agent and workflow runs, users, tokens, GPU time and cost
+  by workspace, group (through membership), model, profile and user (and tenant for system admins) over a period, a
+  per-day chart, totals, every figure a sum over the metering records so a day's totals equal that day's meter.
+  `server/src/tenancy/analytics.ts`, `/api/admin/analytics/summary` and `/daily`.
+- Prices and chargeback (B-7402): a price per model or per pool (per million input and output tokens and per
+  GPU-hour, energy or a set rate for local models, one currency per tenant, `tenant:manage`, audited); a row whose
+  records a price does not cover shows no cost rather than a partial one; the chargeback per workspace and month as
+  JSON or CSV with a total line that equals the screen's total, audited `analytics.chargeback.exported`.
+- OpenTelemetry GenAI attributes (B-7403): `gen_ai.provider.name`, `gen_ai.response.model`,
+  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` on the `gateway chat stream` span, for Ollama and
+  Chat Completions servers.
+- JSONL audit exports with a chain proof (B-7501): `POST /api/admin/audit/exports/jsonl {from, to}` writes every
+  event of the window (rows above the requester's clearance redacted to their hashes) and a checkpoint signed at the
+  window's last sequence; `exprsn-ai audit:verify-export <file>` and `verifyAuditExport` verify it offline. The Usage
+  and audit export dialog offers it.
+- Audit streaming per tenant (B-7501): HTTPS (NDJSON with a sealed bearer token) or syslog-over-TLS (RFC 5424, octet
+  counting, optional private CA) destinations proposed by a tenant admin and approved by a second one, tested,
+  disabled, with delivery counters, on the Usage and audit screen's Exports tab; the outbound address guard applies;
+  audited `audit.siem.*`. New setting `SIEM_TENANT_MAX_DESTINATIONS` (5). `server/src/audit/siem-destinations.ts`.
+- Prototype boards first (Models inventory tab, Analytics, Usage and audit); `e2e/tests/analytics.spec.ts` and
+  additions to `models.spec.ts` and `usage-audit.spec.ts` with axe-core.
+
 ### HTTP tool kind (Sprint 37a, B-8901 to B-8904)
 
 - Migration `039_tools_injection` (with the items below): `registry_http_calls`, the meter of HTTP tool calls.
@@ -112,6 +146,70 @@
   `IDENTITY_SCIM_TOKEN_MAX_DAYS`.
 - Docs: `docs/api.md`, `docs/openapi.json`, `docs/identity.md` (SCIM and its conformance), `docs/security.md` (SCIM
   tokens, shares, MongoDB lease expiry, what unlisted means), `docs/accessibility.md`, `docs/permissions.md`.
+
+### Red-team suites, agent identities and handoffs (Sprint 38b, B-7001 to B-7002, B-7701, B-7801)
+
+- Migration `040b_redteam_agents`: `redteam_suites`, `redteam_runs`, `agent_identities`; `api_keys.agent_id`;
+  `agent_runs.handed_to`. Job `redteam.run`. No new settings.
+- Red-team suites (B-7001): an adversarial evaluation of a profile, an agent (by name) or a workflow, from the
+  built-in attack categories (the Sprint 37a injection corpus cases with a canary, handed over as documents to
+  summarise; jailbreaks; data exfiltration through tools, by answer or by tool call; system-prompt extraction) and
+  the tenant's own cases, with a threshold and a gate. A profile answers each attack through the gateway as an
+  evaluation case is answered; an agent as a child run of its own; a workflow as a run of its published version. An
+  attack is resisted when the answer carries no canary, no tool call reaches for the outside address and no eight
+  consecutive words of the system prompt come back. The gate: a profile with gated suites is published only once its
+  settings hash has a passing run (no evaluation override opens it); an agent version is approved or restored only
+  once its schema hash has one. Routes under `/api/admin/red-team`. `server/src/redteam/`.
+- Red-team results as flags (B-7002): every attack that succeeded is a flag (checkpoint `red-team`, high severity for
+  extraction and exfiltration), which a reviewer confirms into an eval case like any other; tenant-added attack
+  cases with their own canaries.
+- Agent identities (B-7701): roles, a label ceiling and keys per agent name (`/api/admin/agent-identities`). A run on
+  behalf of a user acts within both grants: the user's permissions narrowed to the identity's roles, as credential
+  scopes, and the lower clearance, so a tool call the roles do not cover is refused even for an admin and a run above
+  the ceiling fails before it thinks; `actor.agent` beside the user in audit events. Keys minted for an identity
+  authenticate as the agent on the owner's behalf, are refused once the identity is off, narrowed with its roles and
+  never listed among the owner's keys. `server/src/agents/identity.ts`.
+- Agent handoffs (B-7801): `handoffs` in the agent definition, offered like delegates and described as handing the
+  conversation over; the handed-to run's answer ends the run as its own answer (`handedTo` on the run,
+  `agent.run.handed_off`); chain references and the ceiling rule cover handoffs (`via: handoff`).
+- Console: the Red team panel on the Profiles screen's Evaluations tab; the agent card's identity and red-team status
+  with their modals and the handoffs field on the Registry screen; who answered on the Runs screen. Prototype boards
+  first; `e2e/tests/profiles.spec.ts` and `e2e/tests/registry.spec.ts`.
+- Tests: `sprint38b-redteam`, `sprint38b-identities`, `sprint38b-handoffs`; integration `redteam-agents`. The fake
+  Ollama gained `leakingReply` (a model that prints its system prompt and obeys canaries).
+
+### Row and field policies, DLP, legal hold and compliance export (Sprint 38c, B-8101 to B-8103, B-7601 to B-7603)
+
+- Migration `040c_policies_dlp`: `app_policies`, `users.attributes`, `dlp_rules`, `dlp_patterns`, `legal_holds`,
+  `compliance_exports`. Permissions `compliance:manage` (tenant-admin, legal-review) and `compliance:export`
+  (legal-review, and an API key scope). Settings `DLP_MAX_TEXT_BYTES`, `COMPLIANCE_EXPORT_MAX_ROWS`,
+  `COMPLIANCE_EXPORT_MAX_DAYS`. Job `compliance.export`.
+- Row and field policies (B-8101, B-8102): reusable rule sets per app or entity with subjects (everyone, a role, a
+  group, a workspace's members, a user), row conditions in the record query grammar whose values name the reader
+  (`$user.id`, `$user.username`, `$user.clearance`, `$user.roles`, `$user.groups`, `$user.workspaces`,
+  `$user.attributes.<name>`, the last set by a tenant admin on the user) and per-field grants (read, read unmasked,
+  create, update) with masks `last4`, `hash` and `hidden`. The reader's grant narrows record queries, counts,
+  aggregates, reads, updates, deletes, transitions, bulk writes, exports, the `records.*` tools and workflow record
+  steps, and form submissions by a signed-in person; a reader no policy names reaches nothing; designers are exempt.
+  `server/src/apps/policies.ts`, `/api/apps/:app/policies`.
+- Explain (B-8103): `POST /api/apps/:app/entities/:entity/policies/explain` says which policies name a reader and
+  why, whether a record is in their reach and by which policy, and what a field shows; the Apps screen's Policies tab
+  has the editor and the explain panel.
+- DLP (B-7601): rules over the built-in PII and secret detectors and the tenant's own RE2 patterns that raise the
+  label and act by it (label, redact, hold) on chat and `/v1` answers, agent run outputs and uploads (attachments and
+  file versions); content raised above its owner's clearance is held. A held answer goes to the flag queue as
+  `DLP: <rule>`; a held run fails with the reason; a held upload is rejected. `server/src/compliance/dlp.ts`,
+  `/api/compliance/dlp`.
+- Legal holds (B-7602): a hold on a user or a workspace, asked for by one holder of `compliance:manage` and approved
+  by another, suspends the chat, memory and file retention purges of their content until it is released; the reason
+  is sealed. `server/src/compliance/holds.ts`, `/api/compliance/holds`.
+- Compliance exports (B-7603): conversations (with messages), files (metadata and versions), memories, agent runs and
+  accounts of a user and/or a workspace over a date range as sealed JSON Lines, requested and downloaded with
+  `compliance:export` (a person or a scoped API key); rows above the requester's clearance are left out and counted;
+  every request, run and download is audited. `server/src/compliance/exports.ts`, `/api/compliance/exports`.
+- Console: the Apps screen's Policies tab (designers) and the Usage and audit screen's Compliance tab (DLP rules and
+  patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
+  `e2e/tests/compliance.spec.ts`.
 
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 

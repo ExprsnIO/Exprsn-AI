@@ -729,6 +729,8 @@ export function gatewayAdminRoutes(s: Services): Router {
     await validate(p.tenantId, next, next.status === 'published');
     // Sprint 21 (B-1303): a version whose gated evaluations have not passed for its settings is not published.
     await s.evals.gate(p.tenantId, before, next);
+    // 1.6.0 (B-7001): and the red-team gate, which no evaluation override opens.
+    await s.redteam.gateProfile(p.tenantId, before, next);
     await g.repo.updateProfile(p.tenantId, before.id, { ...patch, version: next.version, updated_by: p.userId });
     await g.repo.snapshot(next, note, p.userId);
     return next;

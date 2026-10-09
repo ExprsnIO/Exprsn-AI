@@ -363,7 +363,7 @@ export class OpenAIServer implements ModelServer {
     if (dropped.length) this.o.onDropped?.(request.model, dropped);
     const headers = new AbortController();
     const timer = setTimeout(() => headers.abort(new Error('timed out waiting for the instance')), headerTimeoutMs);
-    const span = startChild('gateway chat stream', SpanKind.CLIENT, { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': request.model });
+    const span = startChild('gateway chat stream', SpanKind.CLIENT, { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': request.model, 'gen_ai.provider.name': 'openai' });
     const t0 = Date.now();
     let firstAt: number | null = null;
     let res;
@@ -430,6 +430,8 @@ export class OpenAIServer implements ModelServer {
       // Usage when the server reports it, otherwise the same estimate the gateway uses elsewhere (four characters a token).
       const promptTokens = u?.prompt_tokens ?? request.messages.reduce((a, m) => a + estimate(m.content ?? ''), 0);
       const outputTokens = u?.completion_tokens ?? estimate(content) + estimate(thinking) + [...calls.values()].reduce((a, c) => a + estimate(c.name + c.args), 0);
+      // B-7403: token counts on the stream span as gen_ai.usage.* (the server's figures, or the same estimate).
+      span?.setAttributes({ 'gen_ai.response.model': request.model, 'gen_ai.usage.input_tokens': promptTokens, 'gen_ai.usage.output_tokens': outputTokens });
       yield {
         message: { role: 'assistant', content: '' },
         done: true,

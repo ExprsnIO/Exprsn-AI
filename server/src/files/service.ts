@@ -97,7 +97,7 @@ export interface VersionRow {
   declared_type: string | null;
   label: Label;
   reason: string | null;
-  findings: { scanner?: string; detections?: Record<string, number> } | null;
+  findings: { scanner?: string; detections?: Record<string, number>; dlp?: { label: Label; action: string | null; rules: string[] }; shared?: boolean } | null;
   blob_key: string | null;
   sealed_key: string | null;
   /** 1.6.0 (B-4601): the shared object this version reads (`file_blobs`); null for an object of its own. */
@@ -684,8 +684,26 @@ export class FileService {
         if (found) return await reject(`Malware detected: ${found}`, { scanner: 'clamav' });
         scanner = 'clamav: clean';
       }
-      const findings = { scanner, detections: result.detections };
-      const label = highest(v.label, result.label);
+      let label = highest(v.label, result.label);
+      // 1.6.0 (B-7601): the tenant's DLP rules on text uploads: the label rises; a hold rejects the version.
+      let dlpFinding: { label: Label; action: string | null; rules: string[] } | undefined;
+      if (/^text\//.test(result.type) || result.type === 'application/json') {
+        const max = s.cfg.DLP_MAX_TEXT_BYTES;
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of await this.plain(v)) {
+          chunks.push(chunk);
+          size += chunk.length;
+          if (size >= max) break;
+        }
+        const dlp = await s.dlp.inspect({ tenantId: v.tenant_id, text: Buffer.concat(chunks).subarray(0, max).toString('utf8'), scope: 'upload', label });
+        if (dlp.rules.length) {
+          label = highest(label, dlp.label);
+          dlpFinding = { label: dlp.label, action: dlp.action, rules: dlp.rules.map((x) => x.name) };
+          if (dlp.action === 'hold') return await reject(`Held by the DLP rule ${dlpFinding.rules.join(', ')}.`, { scanner, detections: result.detections, dlp: dlpFinding });
+        }
+      }
+      const findings = { scanner, detections: result.detections, ...(dlpFinding ? { dlp: dlpFinding } : {}) };
       const user = (await this.db('users').where({ id: v.created_by ?? '' }).first('clearance')) as { clearance: Label } | undefined;
       const ws = await s.tenants.workspace(v.tenant_id, v.workspace_id);
       if (user && labelRank(label) > labelRank(user.clearance)) return await reject(`Classified ${label}, above the uploader's clearance.`, findings);
@@ -923,6 +941,10 @@ export class FileService {
     const now = Date.now();
     const fq = this.db('files').where({ tenant_id: tenantId }).whereNotNull('trashed_at');
     if (o.workspaceId) fq.andWhere({ workspace_id: o.workspaceId });
+    // 1.6.0 (B-7602): a legal hold on the owner or the workspace keeps their trashed files.
+    const held = await s.legalHolds.held(tenantId);
+    if (held.users.length) fq.andWhere((w) => w.whereNull('owner_id').orWhereNotIn('owner_id', held.users));
+    if (held.workspaces.length) fq.whereNotIn('workspace_id', held.workspaces);
     if (!o.all) fq.andWhere('purge_after', '<=', now);
     const files = ((await fq.limit(5000)) as Record<string, unknown>[]).map(fileFrom);
     let bytes = 0;

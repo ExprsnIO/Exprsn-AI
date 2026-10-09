@@ -3,6 +3,7 @@ import { connect } from 'node:net';
 import { ulid } from 'ulid';
 import { json, type Db } from '../db/knex.js';
 import { highest, labelRank, type Label } from '../authz/labels.js';
+import { noDlp, type DlpInspector } from '../compliance/dlp-types.js';
 import type { BlobStore } from '../platform/blob.js';
 import type { DataKeys } from '../platform/datakeys.js';
 import type { JobQueue } from '../platform/jobs.js';
@@ -21,7 +22,7 @@ export interface AttachmentRow {
   state: 'quarantined' | 'scanning' | 'rejected' | 'ready';
   label: Label;
   reason: string | null;
-  findings: { scanner?: string; detections?: Record<string, number> } | null;
+  findings: { scanner?: string; detections?: Record<string, number>; dlp?: { label: Label; action: string | null; rules: string[] } } | null;
   blob_key: string | null;
   created_at: number;
 }
@@ -140,6 +141,8 @@ export async function clamScan(host: string, port: number, data: Buffer, timeout
  * use only ready attachments, and the conversation's label rises to the attachment's.
  */
 export class AttachmentService {
+  /** 1.6.0 (B-7601): DLP on text uploads (set by services.ts). */
+  dlp: DlpInspector;
   constructor(
     private readonly db: Db,
     private readonly blobs: BlobStore,
@@ -149,6 +152,7 @@ export class AttachmentService {
     private readonly o: { maxBytes: number; clamd?: { host: string; port: number } }
   ) {
     jobs.register('attachment.scan', (p) => this.scan(String(p.id)), { timeoutMs: 5 * 60_000 });
+    this.dlp = noDlp;
   }
 
   async upload(input: { tenantId: string; workspaceId: string | null; userId: string; name: string; declaredType: string | null; label: Label; data: Buffer }): Promise<AttachmentRow> {
@@ -218,15 +222,26 @@ export class AttachmentService {
     }
     let label = a.label;
     let detections: Record<string, number> = {};
+    let dlpFinding: { label: Label; action: string | null; rules: string[] } | undefined;
+    let dlpHold: string | null = null;
     if (TEXT_TYPES.includes(type.type)) {
-      const c = classify(data.toString('utf8'));
+      const text = data.toString('utf8');
+      const c = classify(text);
       detections = c.detections;
       label = highest(a.label, c.label);
+      // 1.6.0 (B-7601): the tenant's DLP rules on the upload: the label rises; a hold refuses the attachment.
+      const dlp = await this.dlp.inspect({ tenantId: a.tenant_id, text, scope: 'upload', label });
+      if (dlp.rules.length) {
+        label = highest(label, dlp.label);
+        dlpFinding = { label: dlp.label, action: dlp.action, rules: dlp.rules.map((x) => x.name) };
+        if (dlp.action === 'hold') dlpHold = `Held by the DLP rule ${dlp.rules.map((x) => x.name).join(', ')}.`;
+      }
     }
     // Owner and workspace limits: a file classified above what may be processed here is not admitted.
     const user = (await this.db('users').where({ id: a.user_id }).first('clearance')) as { clearance: Label } | undefined;
     const ws = a.workspace_id ? ((await this.db('workspaces').where({ id: a.workspace_id }).first('label_ceiling')) as { label_ceiling: Label } | undefined) : undefined;
-    const findings = { scanner, detections };
+    const findings = { scanner, detections, ...(dlpFinding ? { dlp: dlpFinding } : {}) };
+    if (dlpHold) return reject(dlpHold, findings);
     if (user && labelRank(label) > labelRank(user.clearance)) return reject(`Classified ${label}, above your clearance.`, findings);
     if (ws && labelRank(label) > labelRank(ws.label_ceiling)) return reject(`Classified ${label}, above this workspace's ceiling of ${ws.label_ceiling}.`, findings);
     const key = `attachments/${a.tenant_id}/${a.id}`;

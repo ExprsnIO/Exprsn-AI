@@ -14,7 +14,7 @@ tool kind (the rest of the port decided on 2026-10-06 is in `Backlog-1.7.0.md`).
 every control is backed by the server); every server item ships its routes, permission, audit events, jobs, tests on
 SQLite, PostgreSQL and MySQL, `docs/api.md` and `docs/openapi.json` entries and any known gaps in `docs/security.md`.
 
-**Size.** 74 items, 363 points (1 point ≈ half a day for one engineer, tests included): P1 245, P2 118. Reconciled on
+**Size.** 75 items, 365 points (1 point ≈ half a day for one engineer, tests included): P1 247, P2 118 (B-11707, 2 points, pulled forward from 1.7.0 into Sprint 36b on 2026-10-08). Reconciled on
 2026-10-07 from main (32 items, 158 points in Sprints 35 to 37) and `docs/backlog-1.6-gaps`: the industry gaps (B-69
 to B-80, 23 items, 121 points), the low-code gaps (B-81 to B-85, 11 items, 59 points) and their second pass (B-86,
 B-87 and two points on B-7101, 5 items, 23 points), groomed on 2026-10-05, now fill Sprints 37 to 39; B-50 capability
@@ -32,13 +32,44 @@ sixteen answered design questions (`design/platform-admin/DECISIONS.md`); the `J
 | --- | --- | --- | --- | --- |
 | 35 | Platform administration live screens; tenant provisioning templates; model servers beyond Ollama | B-4202–B-4207, B-4501, B-4301–B-4307 | 76 | **Done** |
 | 36 | Groups depth and categories; blob deduplication; held form values queued; vault access anomalies; image classification in Knowledge | B-4401–B-4405, B-4601, B-4701, B-4803, B-8801–B-8805 | 61 | **Done** |
+| 36b | Model thinking templates and a tool-calling evaluation that sends a system prompt (B-11707, pulled forward from 1.7.0 on 2026-10-08: the owner's Magistral profiles) | B-11707 | 2 | Next |
 | 37 | Quote posts and per-post visibility; vault sharing and MongoDB leases; HTTP tool kind; prompt-injection defence; SCIM; MCP server and authorization | B-4901, B-4801, B-4802, B-8901–B-8904, B-6901–B-6903, B-7201–B-7202, B-7101–B-7103 | 73 | **Done** (B-7202 partial) |
-| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | Next |
-| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Planned |
+| 38 | AI inventory; red-team harness; usage and cost analytics; compliance log export; agent identities; row and field permissions; DLP, legal hold and eDiscovery; agent handoffs | B-7301–B-7302, B-7001–B-7002, B-7401–B-7403, B-7501, B-7701, B-8101–B-8103, B-7601–B-7603, B-7801 | 76 | **Done** |
+| 39 | Image provenance; versioned artifacts; app packages, environments and promotion; data model generation; AI field upgrades; outside database sync; entity APIs; app embedding; release | B-7901, B-8001, B-8201–B-8204, B-8301, B-8401–B-8402, B-8501, B-8601–B-8603, B-8701–B-8702, B-5101 | 77 | Next |
 
 ### Progress
 
-**Sprint 37: done** (this PR). The HTTP tool kind (B-8901 to B-8904): registry tools that call web APIs from a URL
+**Sprint 38: done** (this PR). The AI inventory (B-7301, B-7302, migration `040_inventory_analytics`): one register of
+models, profiles, agents, workflows, tools, MCP servers and datasets with an owner, an oversight role, provenance,
+lineage, an impact assessment and known issues counted from run flags and failed evaluations, on the Models screen's
+Inventory tab, exported as CSV or JSON; the owner gate (an agent with no owner cannot be approved) is a tenant setting,
+off by default so existing tenants keep publishing. Analytics (B-7401 to B-7403): a new Analytics screen summing
+`usage_records` by workspace, group, model, profile and user and per day, prices per model or pool with a chargeback
+export per workspace that sums to the screen, and `gen_ai.*` usage attributes on the chat stream span. Audit export
+(B-7501): time-windowed JSONL files that end in a KMS-signed checkpoint and verify offline with
+`audit:verify-export`, and per-tenant SIEM destinations (HTTPS, syslog over TLS) under dual control. Red-team suites
+(B-7001, B-7002, migration `040b_redteam_agents`): built-in attack categories (the Sprint 37a corpus, jailbreaks,
+exfiltration through tools, system-prompt extraction) and tenant cases run against profiles, agents and workflows by
+the job `redteam.run`, judged deterministically; a gate beside the evaluation gate that no override opens; every
+successful attack a flag a reviewer turns into an eval case. Agent identities (B-7701): an agent as a principal with
+roles, a label ceiling and scoped keys, its runs narrowed to both grants, `actor.agent` on audit events. Handoffs
+(B-7801): a specialist agent listed in the configuration answers through the chain and is named on the Runs screen.
+Policies (B-8101 to B-8103, migration `040c_policies_dlp`): reusable rule sets per app entity with row conditions
+over the user's attributes, groups and roles and field permissions with last-four, hash and hidden masks, enforced in
+records queries, tools, forms, exports and workflows, with an editor and an explain view on Apps. DLP (B-7601): PII,
+secret and tenant-pattern detectors on answers, agent outputs and uploads that raise the label and hold or redact by
+rule; legal holds (B-7602) on users and workspaces under dual control that chat, memory and file purges respect; a
+compliance export API (B-7603) with the `compliance:export` scope. Unit suite 1130 passed; PostgreSQL integration
+passed on the merged migrations (MySQL ran for 38c only); prototype smoke 51 of 51; the specs for the touched screens
+passed. Choices to know: SIEM destinations, DLP, holds and exports live on the Usage and audit screen (Settings is
+personal settings); prices are per model or pool, not per instance; handoff attribution is on the Runs screen until
+agents reach chat in Sprint 40; `gen_ai` usage is on chat spans only. Known gaps in `docs/security.md`: a fixed
+English attack catalogue and a deterministic judge; identities narrow by permission, not by object; a handoff hands
+the task, not the messages; costs are computed on read, so a price change alters past chargebacks; no offline HMAC
+check; a record created outside one's own rows is accepted then unreachable; DLP inspects finished answers up to
+`DLP_MAX_TEXT_BYTES`; a hold does not stop self-deletion; exports are unsigned.
+
+**Sprint 37: done** (PR #65). The HTTP tool kind (B-8901 to B-8904): registry tools that call web APIs from a URL
 template, headers, a body and a response mapping, only to the tenant's allowed hosts, credentials only as vault
 references, every call metered and audited. Prompt-injection defence (B-6901 to B-6903): knowledge chunks, crawled
 pages and tool, MCP and HTTP results reach the model marked as untrusted content, an `untrusted-content` checkpoint with
@@ -494,7 +525,7 @@ references, and the tool-call guardrail.
 | --- | --- |
 | Live streaming | Dropped (2026-10-05): no live streaming in Exprsn-AI |
 | End-to-end-encrypted messaging | Dropped (2026-10-05): server-side guardrails and AI features stay |
-| Governance voting | 1.7 or later (port decision D7); not yet in a backlog |
+| Governance voting | 1.7 or later (port decision D7); B-116 in [Backlog-1.7.0.md](Backlog-1.7.0.md) since 2026-10-07, unscheduled |
 | Recurring events and VTIMEZONE in calendar feeds | 1.7 or later |
 | Web push notifications | 1.7 or later |
 | SMS one-time codes | 1.7 or later; needs a paid SMS provider |

@@ -2,6 +2,7 @@ import { ulid } from 'ulid';
 import type { Logger } from 'pino';
 import { json, type Db } from '../db/knex.js';
 import { clears, highest, labelRank, type Label } from '../authz/labels.js';
+import { noDlp, type DlpInspector } from '../compliance/dlp-types.js';
 import { ChainLimit, type ChainRef, type ChainService } from '../chain/context.js';
 import { authorize, effectivePermissions, type Principal } from '../authz/policy.js';
 import { actorFrom, type AuditLog } from '../audit/chain.js';
@@ -59,6 +60,8 @@ interface RunRow {
   caller_kind?: string | null;
   caller_id?: string | null;
   caller_node?: string | null;
+  /** 1.6.0 (B-7801): the specialist this run handed the conversation to, whose answer became this run's answer. */
+  handed_to?: string | null;
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -156,6 +159,10 @@ export class AgentService {
   chains: ChainService | null = null;
   /** B-3902: a run a workflow step awaits ended (or stopped at its budget); the workflow run is resumed. */
   onCallerDone: ((tenantId: string, kind: string, id: string) => Promise<void>) | null = null;
+  /** 1.6.0 (B-7701): the principal a run acts as, narrowed to the agent's identity; unset, runs act as their owner. */
+  identity: ((p: Principal, agentName: string) => Promise<Principal>) | null = null;
+  /** 1.6.0 (B-7601): DLP on a run's output: its label rises, a redaction is what is stored, a hold fails the run. */
+  dlp: DlpInspector = noDlp;
 
   constructor(
     private readonly db: Db,
@@ -242,6 +249,7 @@ export class AgentService {
       scheduleId: r.schedule_id ?? null,
       chain: r.chain_id ? { id: r.chain_id, node: r.chain_node ?? null } : null,
       caller: r.caller_kind && r.caller_id ? { kind: r.caller_kind, id: r.caller_id, node: r.caller_node ?? null } : null,
+      handedTo: json<{ agent: string; run: string } | null>(r.handed_to ?? null, null),
       createdAt: Number(r.created_at),
       startedAt: r.started_at == null ? null : Number(r.started_at),
       finishedAt: r.finished_at == null ? null : Number(r.finished_at)
@@ -364,7 +372,7 @@ export class AgentService {
     const parent = (await this.db('agent_runs').where({ tenant_id: ctx.principal.tenantId, id: ctx.source.id }).first()) as RunRow | undefined;
     if (!parent) throw new Error('The delegating run no longer exists.');
     const pdef = (await this.registry.get(parent.tenant_id, parent.agent_id))?.definition as AgentDefinition | undefined;
-    if (!(pdef?.agents ?? []).includes(entry.name)) throw new Error(`tool_unavailable: ${entry.name} is not one of ${parent.agent_name}'s delegates.`);
+    if (!(pdef?.agents ?? []).includes(entry.name) && !(pdef?.handoffs ?? []).includes(entry.name)) throw new Error(`tool_unavailable: ${entry.name} is not one of ${parent.agent_name}'s delegates.`);
     const pb = json<AgentBudgets>(parent.budgets, MAX_BUDGETS);
     const pu = json<RunUsage>(parent.usage, EMPTY_USAGE);
     const own = this.budgets((entry.definition as unknown as AgentDefinition).budgets);
@@ -386,7 +394,7 @@ export class AgentService {
       if (err instanceof HttpProblem) throw new Error(`tool_unavailable: ${entry.name}: ${err.detail ?? err.title}`, { cause: err });
       throw err;
     }
-    await this.audit.append({ tenantId: parent.tenant_id, action: 'agent.run.delegated', kind: 'system', actor: { service: 'agents', user: parent.user_id }, target: { run: child.id, agent: child.agent, version: child.agentVersion }, label: child.label, detail: { parentRun: parent.id, parentAgent: parent.agent_name, budgets, chain: child.chain?.id ?? null } });
+    await this.audit.append({ tenantId: parent.tenant_id, action: 'agent.run.delegated', kind: 'system', actor: { service: 'agents', user: parent.user_id, agent: parent.agent_name }, target: { run: child.id, agent: child.agent, version: child.agentVersion }, label: child.label, detail: { parentRun: parent.id, parentAgent: parent.agent_name, budgets, chain: child.chain?.id ?? null } });
     throw new ToolPending({ kind: 'agent-run', id: child.id }, `${entry.name} is working on it as run ${child.id}. This run pauses and continues with its answer.`);
   }
 
@@ -640,10 +648,10 @@ export class AgentService {
     const ref = chainRefOfRun(r);
     if (ref && this.chains) await this.chains.finish(ref, state === 'budget' ? 'failed' : state === 'queued' ? 'running' : state, (upd.error as string | null | undefined) ?? null, state === 'budget' ? 'budget' : null);
     // B-3902: the workflow step awaiting this run picks up its end (a budget stop ends it for the step too).
-    if (r.caller_kind === 'workflow-run' && r.caller_id && ENDED.includes(state)) await this.onCallerDone?.(r.tenant_id, r.caller_kind, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the workflow run awaiting an agent run'));
+    if ((r.caller_kind === 'workflow-run' || r.caller_kind === 'redteam-run') && r.caller_id && ENDED.includes(state)) await this.onCallerDone?.(r.tenant_id, r.caller_kind, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the workflow run awaiting an agent run'));
     // B-4102: the agent run that delegated to this one picks up its answer (or its typed error).
     if (r.caller_kind === 'agent-run' && r.caller_id && ENDED.includes(state)) await this.resumeAwaiting(r.tenant_id, r.caller_id).catch((err: unknown) => this.log.warn({ run: r.id, err: (err as Error).message }, 'could not resume the agent run that delegated to this one'));
-    if (state === 'failed' || state === 'succeeded') await this.audit.append({ tenantId: r.tenant_id, action: `agent.run.${state}`, kind: 'system', actor: { service: 'agents', user: r.user_id }, target: { run: r.id, agent: r.agent_name, version: r.agent_version }, label: r.label, detail: { error: upd.error ?? null, usage: extra.usage ?? null } });
+    if (state === 'failed' || state === 'succeeded') await this.audit.append({ tenantId: r.tenant_id, action: `agent.run.${state}`, kind: 'system', actor: { service: 'agents', user: r.user_id, agent: r.agent_name }, target: { run: r.id, agent: r.agent_name, version: r.agent_version }, label: r.label, detail: { error: upd.error ?? null, usage: extra.usage ?? null } });
   }
 
   /** A run's task and final answer, opened, for memory extraction (B-3701). */
@@ -690,16 +698,26 @@ export class AgentService {
       if (!agent || agent.status === 'retired') throw new Error(`${run.agent_name} is retired.`);
       const def = agent.definition as unknown as AgentDefinition;
       const budgets = json<AgentBudgets>(run.budgets, MAX_BUDGETS);
-      const resolved = await this.resolveProfile(p, def.profile, run.label);
+      // 1.6.0 (B-7701): with an identity, the run acts within the agent's roles and ceiling as well as the owner's.
+      const acting = this.identity ? await this.identity(p, run.agent_name) : p;
+      if (acting.agent && labelRank(run.label) > labelRank(acting.clearance)) throw new Error(`${run.agent_name}'s identity handles data up to ${acting.clearance}; this run is ${run.label}.`);
+      const handoffs = def.handoffs ?? [];
+      const resolved = await this.resolveProfile(acting, def.profile, run.label);
       // B-4103: the tools the agent's skills (and what they build on) need are offered with its own; B-4102, B-4104:
       // so are its delegates (`agent:<name>`) and the workflows it lists (`workflow:<name>`).
-      const closure = await skillClosure(this.registry, p, def.skills ?? []);
+      const closure = await skillClosure(this.registry, acting, def.skills ?? []);
       const names = [...new Set([...(def.tools ?? []), ...closure.tools])];
-      const own = await this.tools.resolve(p, names, run.label);
-      const callees = await this.tools.resolveCallees(p, { agents: def.agents ?? [], workflows: def.workflows ?? [] }, run.label, own.tools.map((t) => t.fn));
+      const own = await this.tools.resolve(acting, names, run.label);
+      // 1.6.0 (B-7801): a handoff is offered like a delegate, described as handing the conversation over.
+      const callees = await this.tools.resolveCallees(acting, { agents: [...new Set([...(def.agents ?? []), ...handoffs])], workflows: def.workflows ?? [] }, run.label, own.tools.map((t) => t.fn));
+      for (const t of callees.tools) {
+        if (t.entry.kind === 'agent' && handoffs.includes(t.entry.name) && !(def.agents ?? []).includes(t.entry.name)) {
+          t.def = { ...t.def, function: { ...t.def.function, description: `Hand the conversation to ${t.entry.name}, a specialist that answers the user in your place; pass it the context it needs as the task. Your run ends with its answer. ${t.entry.description ?? ''}`.trim() } };
+        }
+      }
       const tools = [...own.tools, ...callees.tools];
       const hidden = [...own.hidden, ...callees.hidden];
-      const offered = names.length + (def.agents?.length ?? 0) + (def.workflows?.length ?? 0);
+      const offered = names.length + (def.agents?.length ?? 0) + handoffs.length + (def.workflows?.length ?? 0);
       // The agent's memory policy decides whether the run may propose memories (through the `remember` tool).
       const policy = def.memory?.write === 'propose' && this.proposeMemory ? def.memory : null;
       const toolsOn = (tools.length > 0 || !!policy) && resolved.model.capabilities.includes('tools') && !resolved.model.evaluation?.toolsWithheld;
@@ -731,7 +749,7 @@ export class AgentService {
             else if (!policy.types.includes(type)) error = `The agent's memory policy does not allow ${type} memories.`;
             else {
               try {
-                const mem = await this.proposeMemory!(p, { agent: run.agent_name, runId: run.id, text, type, label: run.label });
+                const mem = await this.proposeMemory!(acting, { agent: run.agent_name, runId: run.id, text, type, label: run.label });
                 proposals++;
                 result = { memory: mem.id, state: 'proposed', note: 'A curator decides whether it is kept.' };
               } catch (err) {
@@ -757,10 +775,10 @@ export class AgentService {
           if (isNew && tool && usage.toolCalls >= budgets.toolCalls) await budgetStop(`Stopped at ${usage.toolCalls} of ${budgets.toolCalls} tool calls.`);
           const awaited = !!call.awaiting;
           let outcome: ToolOutcome;
-          if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, chain }, tool, call.arguments, call.awaiting);
+          if (tool && call.awaiting) outcome = await this.tools.awaitResult({ principal: acting, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, chain }, tool, call.arguments, call.awaiting);
           else if (!tool) outcome = { name: call.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `tool_unavailable: ${call.name} is not one of this agent's tools${hidden.length ? ` (hidden: ${hidden.map((h) => `${h.name}, ${h.reason}`).join('; ')})` : ''}.` };
           else if (call.decision === 'rejected') outcome = { name: tool.entry.name, arguments: call.arguments, ok: false, denied: true, decision: null, durationMs: 0, error: `Rejected by ${call.decidedBy ?? 'the approver'}${call.note ? `: ${call.note}` : ''}. Nothing was run.` };
-          else outcome = await this.tools.call({ principal: p, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, approved: call.decision === 'approved', chain }, tool, call.arguments);
+          else outcome = await this.tools.call({ principal: acting, label: run.label, source: { kind: 'agent-run', id: run.id }, signal, approved: call.decision === 'approved', chain }, tool, call.arguments);
 
           if (outcome.pending) {
             // B-1006: the call is running elsewhere (a workflow paused on an approval). Keep the step waiting and
@@ -805,6 +823,20 @@ export class AgentService {
             meta: { ...(tool ? this.toolMeta(tool, outcome) : { tool: call.name }), ...(call.decision ? { approval: { decision: call.decision, by: call.decidedBy ?? null, note: call.note ?? null } } : {}) },
             detail: { arguments: outcome.arguments, result: outcome.result ?? null, error: outcome.error ?? null, ...(outcome.errorType ? { errorType: outcome.errorType } : {}) }
           });
+          // 1.6.0 (B-7801): a handoff's answer is this run's answer; the reader sees which agent answered.
+          if (tool && awaited && call.awaiting?.kind === 'agent-run' && handoffs.includes(tool.entry.name) && outcome.ok) {
+            const child = call.awaiting.id;
+            const answer = outcome.result && typeof outcome.result === 'object' && 'answer' in outcome.result ? (outcome.result as { answer: unknown }).answer : outcome.result;
+            const text = typeof answer === 'string' ? answer : JSON.stringify(answer ?? '');
+            pending = pending.slice(1);
+            tick();
+            await this.checkpoint(run, n, { messages, pending }, usage);
+            await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), handed_to: JSON.stringify({ agent: tool.entry.name, run: child }), updated_at: Date.now() });
+            await charge({ steps: isNew ? 1 : 0 });
+            await this.audit.append({ tenantId: run.tenant_id, action: 'agent.run.handed_off', kind: 'system', actor: { service: 'agents', user: run.user_id, agent: run.agent_name }, target: { run: run.id, agent: run.agent_name, to: tool.entry.name, toRun: child }, label: run.label, detail: { step: stepN } });
+            await this.finish({ ...run, handed_to: JSON.stringify({ agent: tool.entry.name, run: child }) }, 'succeeded', { output: text, usage, error: null });
+            return { state: 'succeeded', steps: usage.steps, handedTo: tool.entry.name };
+          }
           // B-6901: a result reaches the model as untrusted content, datamarked when the profile marks it.
           messages.push({ role: 'tool', tool_name: call.name, content: toolResultContent(outcome.ok ? outcome.result : { error: outcome.error, ...(outcome.errorType ? { type: outcome.errorType } : {}) }, { name: tool?.entry.name ?? call.name, untrusted: outcome.ok ? (outcome.untrusted ?? null) : null, marking: resolved.profile.trust_marking !== false }) });
           pending = pending.slice(1);
@@ -882,7 +914,24 @@ export class AgentService {
         await this.db('agent_runs').where({ id: run.id }).update({ usage: JSON.stringify(usage), updated_at: Date.now() });
         await charge({ tokens, steps: 1, wallMs: Date.now() - started, gpuMs: gpuNs / 1e6 });
         if (!pending.length) {
-          await this.finish(run, 'succeeded', { output: content, usage, error: null });
+          // 1.6.0 (B-7601): DLP on the run's answer. A raised label is the run's; a hold ends the run with the reason
+          // (a reviewer reads the step's detail); a redaction is the stored output.
+          let output = content;
+          const dlp = await this.dlp.inspect({ tenantId: run.tenant_id, text: content, scope: 'agent', label: run.label });
+          if (dlp.rules.length) {
+            const names = dlp.rules.map((x) => x.name).join(', ');
+            if (dlp.raised) {
+              run.label = dlp.label;
+              await this.db('agent_runs').where({ id: run.id }).update({ label: dlp.label, updated_at: Date.now() });
+            }
+            await this.audit.append({ tenantId: run.tenant_id, action: 'agent.run.dlp', kind: 'system', actor: { service: 'agents', user: run.user_id }, target: { run: run.id, agent: run.agent_name }, label: run.label, detail: { rules: dlp.rules.map((x) => x.name), action: dlp.action, label: dlp.label } });
+            if (dlp.action === 'hold') {
+              await this.finish(run, 'failed', { error: `Held by the DLP rule ${names}: the answer is kept for review.`, usage });
+              return { state: 'failed', steps: usage.steps };
+            }
+            if (dlp.action === 'redact') output = dlp.text;
+          }
+          await this.finish(run, 'succeeded', { output, usage, error: null });
           if (policy && this.memoryExtract) this.memoryExtract({ tenantId: run.tenant_id, workspaceId: run.workspace_id, userId: run.user_id, runId: run.id, agent: run.agent_name, label: run.label, types: policy.types, remaining: policy.maxPerRun - proposals });
           return { state: 'succeeded', steps: usage.steps };
         }
@@ -919,6 +968,25 @@ export class AgentService {
       await this.finish(run, 'failed', { error: detail, usage });
       return { state: 'failed', error: detail };
     }
+  }
+
+  /** 1.6.0 (B-7001): what a red-team run judges a child run by: its state, answer and the arguments of its tool calls. */
+  async redTeamEvidence(tenantId: string, runId: string): Promise<{ state: RunState; output: string | null; error: string | null; toolCalls: string[] } | null> {
+    const r = (await this.db('agent_runs').where({ tenant_id: tenantId, id: runId }).first()) as RunRow | undefined;
+    if (!r) return null;
+    const steps = (await this.db('agent_steps').where({ run_id: r.id, lane: 'do' }).orderBy('n')) as StepRow[];
+    const toolCalls: string[] = [];
+    for (const st of steps) {
+      const d = await this.open<Record<string, unknown>>(r.tenant_id, `agent-step:${st.id}`, st.detail, {});
+      toolCalls.push(`${st.title} ${JSON.stringify(d.arguments ?? {})}`);
+    }
+    // What the model planned but never ran (a call left pending at a budget stop or an approval) is evidence too.
+    const thinks = (await this.db('agent_steps').where({ run_id: r.id, lane: 'think' }).orderBy('n')) as StepRow[];
+    for (const st of thinks) {
+      const d = await this.open<{ toolCalls?: { name: string; arguments: unknown }[] }>(r.tenant_id, `agent-step:${st.id}`, st.detail, {});
+      for (const c of d.toolCalls ?? []) toolCalls.push(`${c.name} ${JSON.stringify(c.arguments ?? {})}`);
+    }
+    return { state: r.state, output: r.state === 'succeeded' ? await this.open<string | null>(r.tenant_id, `agent-run-output:${r.id}`, r.output, null) : null, error: r.error, toolCalls };
   }
 
   private toolMeta(tool: ResolvedTool, o: ToolOutcome, extra: Record<string, unknown> = {}) {

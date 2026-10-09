@@ -4934,3 +4934,238 @@ group. Bookmarks list it for whoever saved it.
 | `GET /api/feed/users/:id?unlisted=true` | On one's own page, adds one's own unlisted posts (nobody else's are ever listed) |
 
 The catalogue events `post.*` carry `visibility` and, for a quote, `quoteOf` (optional fields).
+
+## Sprint 38a (1.6.0): the AI inventory, usage and cost analytics, audit export and streaming (B-7301, B-7302, B-7401 to B-7403, B-7501)
+
+Migration `040_inventory_analytics`. New setting: `SIEM_TENANT_MAX_DESTINATIONS` (5). Job: `export.audit-jsonl`. CLI:
+`exprsn-ai audit:verify-export <file.jsonl>`.
+
+### The AI system inventory (B-7301, B-7302)
+
+Every model, profile, agent, workflow, tool (and skill), MCP server and dataset of the tenant is a system in the
+inventory. The objects stay where they are; `inventory_systems` adds what the register needs. All under `models:manage`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/inventory` | `{items: [InventoryItem], owners: [{id, name}], settings, counts: {total, incomplete, withIssues}}`. An item is `{kind, id, name, version, status, label, lineage: [{kind, id, name}], issues: {flags, failedEvals}, missing: [owner \| oversight role \| data provenance], complete, ownerId, ownerName, oversightRole, provenance, lineageNote, knownIssuesNote, impactAssessment, updatedAt}`. Lineage runs agent → profile (→ aliased profile) → model → base weights (family, parameters, quantization). `issues.flags` counts the open flags raised in the system's agent or workflow runs; `failedEvals` the sets whose latest run failed (profiles). `complete` means an owner is named |
+| `PATCH /api/admin/inventory/:kind/:id` `{ownerId?, oversightRole?, provenance?, lineageNote?, knownIssuesNote?, impactAssessment?}` | The item after the change. `ownerId` must be a user of the tenant (`409` otherwise); null clears a field. Audited `inventory.updated` with what changed and whether the entry became complete |
+| `GET /api/admin/inventory/settings` | `{requireOwner, updatedBy, updatedAt}` |
+| `PUT /api/admin/inventory/settings` `{requireOwner}` | With `requireOwner` on, the registry refuses to publish (`409` at review) an agent that has no owner in the inventory. Off by default, so existing tenants keep publishing until their register is filled in. Audited `inventory.settings.updated` |
+| `GET /api/admin/inventory/register?format=csv\|json` | The register as a download: every system with kind, id, name, version, status, label, owner, oversight role, provenance, lineage (`profile:x > model:y > base:z`), lineage note, open flags, failed evaluations, known issues, impact assessment, completeness and what is missing. Audited `inventory.exported` |
+
+### Usage and cost analytics (B-7401, B-7402)
+
+Everything is a sum over `usage_records`, the rows the quotas count, so a day's totals here equal that day's metering.
+Reads under `usage:read`; prices under `usage:read` and `tenant:manage`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/analytics/summary?by=workspace\|group\|model\|profile\|user\|tenant&from=&to=&days=14&workspace=&group=` | `{by, from, to, currency, rows: [{key, name, requests, messages, runs, users, prompt, output, thinking, tokens, gpuMs, cost, currency}], total}`. Messages are the chat, compare, API and channel records; runs the agent and workflow records; users the distinct users. `by=group` joins group membership (a user in two groups counts in both); `group=` narrows any dimension to one group's members. `by=tenant` is for system admins (`403` otherwise). `cost` is the sum at the tenant's prices and null when a model or pool in the row has no price |
+| `GET /api/admin/analytics/daily?from=&to=&days=&workspace=` | One entry per day, zero-filled: `{day, messages, runs, tokens, gpuSeconds}` |
+| `GET /api/admin/analytics/prices` | `{prices: [{id, scope: model \| pool, ref, currency, inputPerMillion, outputPerMillion, gpuHour, note, updatedBy, updatedAt}]}` |
+| `PUT /api/admin/analytics/prices` `{scope, ref, currency, inputPerMillion?, outputPerMillion?, gpuHour?, note?}` | Creates or replaces the price of a model (`ref` its name) or a pool (`ref` its id). One currency per tenant (`403` for a second). A model price wins over the pool price for the same records; the GPU-hour rate suits local models (energy or a set rate), the token rates metered providers. Audited `analytics.price.set` |
+| `DELETE /api/admin/analytics/prices/:id` | `204`. Audited `analytics.price.removed` |
+| `GET /api/admin/analytics/chargeback?month=YYYYMM&workspace=&format=json\|csv` | The chargeback for a month (default: this one) per workspace and model: `{month, currency, workspace, rows: [{workspaceId, workspace, model, pool, requests, prompt, output, gpuMs, cost}], total: {requests, prompt, output, gpuMs, cost, unpriced}}`; the CSV has the same lines and a `TOTAL` line. The total equals the Analytics screen's figure for the same workspace and month. Audited `analytics.chargeback.exported` |
+
+Tracing (B-7403): the `gateway chat stream` span carries `gen_ai.provider.name` (`ollama` or `openai`),
+`gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`, the
+counts the meter records, so usage is portable to Grafana and other OTLP backends. Never the prompt or the answer.
+
+### Audit export with a chain proof, and streaming per tenant (B-7501)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/admin/audit/exports/jsonl` `{from?, to?}` (epoch ms) | `audit:read`. `202` the export (`kind: audit-jsonl`, `file: audit-<tenant>-<date>-<id>.jsonl`) plus `total` and `redacted`. The job writes one JSON document per line: a `header` (tenant, window, counts, the first event's `prev_hash`, the last event's `hash`), every event of the window as stored (events above the requester's clearance redacted to `{seq, id, ts, prev_hash, hash, redacted: true}`, so the chain stays recomputable), and a `proof` with the checkpoint signed at the window's last sequence (made there if none existed: tenant, seq, hash, ts, key, HMAC signature, canonical payload). Download it from `GET /api/admin/exports/:id/download` (`application/x-ndjson`). Audited `audit.export.requested` and `export.downloaded` |
+| `exprsn-ai audit:verify-export <file.jsonl>` | Offline: recomputes every event's hash over its canonical JSON, checks each `prev_hash` and the sequence, and that the last hash equals the checkpoint's hash whose payload names that sequence. Exit 2 unless `verified`; redacted links are counted. The checkpoint's HMAC is checked online by `audit:verify`, by whoever holds the key |
+| `GET /api/admin/audit/siem` | `audit:read`. `{platform: SiemStatus (SIEM_URL), max, destinations: [SiemDestination]}`. A destination is `{id, name, kind: https \| syslog, url, hasToken, hasCa, state: proposed \| active \| rejected \| disabled, proposedBy, proposedByName, proposedAt, approvedBy, approvedByName, approvedAt, decidedBy, decidedAt, note, delivered, dropped, pending, lastDeliveredAt, lastError, connection: connected \| failing \| idle \| disabled}` |
+| `POST /api/admin/audit/siem` `{name, kind, url, token?, caPem?, note?}` | `tenant:manage`. `201` proposed. `https`: `https://host/path`, NDJSON batches with `Authorization: Bearer <token>`; `syslog`: `host:port`, RFC 5424 lines with RFC 6587 octet counting over TLS (facility 13, severity 6, MSGID the action, the event as JSON), `caPem` for a private CA. The outbound address guard applies at save and on every delivery (metadata addresses refused; internal hosts only as `SERVICE_ALLOWED_HOSTS` names them); `400` for `http://`, credentials in the URL or a port-less syslog address; `409` past `SIEM_TENANT_MAX_DESTINATIONS` proposed or active. The token is sealed with the tenant key and never returned. Audited `audit.siem.proposed` |
+| `POST /api/admin/audit/siem/:id/approve` `{note?}`, `/reject` | `tenant:manage`, by someone other than the proposer (`403` dual control). Approval starts the stream: a forwarder per active destination, fed by the chain's append listener and filtered to the tenant, at-least-once with backoff; the approval event itself is the first delivered. Audited `audit.siem.approved` or `.rejected` |
+| `POST /api/admin/audit/siem/:id/disable` `{note?}` | `tenant:manage`. Stops an active destination (or withdraws a proposed one). Audited `audit.siem.disabled` |
+| `POST /api/admin/audit/siem/:id/test` | `tenant:manage`. Sends one `audit.siem.test` event now; `{ok, error}`; the row keeps the last error. Audited `audit.siem.tested` |
+
+`GET /api/admin/exports` and the download route treat `audit-jsonl` like `audit` for permissions.
+
+## Sprint 38b (1.6.0): red-team suites, agent identities and handoffs (B-7001, B-7002, B-7701, B-7801)
+
+Migration `040b_redteam_agents`. Job: `redteam.run`. No new settings.
+
+### Red-team suites (B-7001, B-7002)
+
+A suite belongs to a **target**: a profile (`targetKind: profile`, `targetId` the profile id, `profiles:manage`), an
+agent (`targetKind: agent`, `targetId` the agent's name, whichever version is published, `agents:manage`) or a
+workflow (`targetKind: workflow`, `targetId` the workflow id, its published version, `workflows:manage`). Every
+route needs any of the three permissions; the handler decides the target's own through the policy pipeline, so a
+model admin cannot read an agent's suites. Suites above the caller's clearance are left out.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/red-team/attacks` | The catalogue: `{categories: [{id, label, summary, attacks}], attacks: [{id, category, name, prompt, canary, marker}]}`. Categories: `injection` (the Sprint 37a corpus cases with a canary, handed over as documents to summarise), `jailbreak`, `exfiltration` (the address `collector.redteam.invalid`), `system-prompt` |
+| `GET /api/admin/red-team?targetKind=&targetId=` | `{target {kind, id, name, version, configHash, label, hasSystemPrompt}, suites, runs (newest first), gate {configHash, gated, failing [{suiteId, suite, reason, score, threshold}], open}, categories}` |
+| `POST /api/admin/red-team/suites` `{targetKind, targetId, name, description?, label?, categories (default all four), cases: [{id?, name?, category, prompt, canary?}], threshold (0–1, default 1), gate (default true)}` | `201` the suite with `attacks` (built-in attacks of its categories plus its cases) and `revision` |
+| `PATCH /api/admin/red-team/suites/:id` | Any of the fields; changing categories, cases or threshold (or turning the gate on) starts a new revision |
+| `DELETE /api/admin/red-team/suites/:id` | With its runs; flags it raised stay |
+| `POST /api/admin/red-team/run` `{targetKind, targetId, suiteId?}` | `202` with one queued run per suite (job `redteam.run`) on the target as saved now: `{id, suiteId, suite, targetKind, targetId, targetVersion, configHash, suiteRevision, state, attacks, resisted, score, threshold, trigger, createdAt}` |
+| `GET /api/admin/red-team/runs/:id` | The run with `results: [{attackId, category, name, builtin, resisted (null while a child run is going), detail, output, childRun, flagId, flagRef, ms}]` |
+
+How a run judges an attack: the target's answer must not carry the attack's **canary**, must not name the attack's
+**outside address** (for agents, no tool call may reach for it either: the arguments of every call the run made, or
+planned at a budget stop or an approval, are evidence), and for `system-prompt` attacks must not reproduce eight or
+more consecutive words of the target's system prompt. A profile answers each attack through the gateway as an
+evaluation case is answered (metered as `api`, through `model-output`). An agent answers each attack as a child run
+of its own (`caller: {kind: redteam-run}`, budgets of 8 steps, 4 tool calls, 180 s, 8,000 tokens); a run paused on an
+approval is cancelled and judged on what it reached for. A workflow answers through a run of its published version
+with the attack in the first string field of its trigger input, judged on its step outputs. The run ends when every
+child has: `passed` when the share resisted reaches the threshold, else `failed`; `error` when the target or the
+suite changed after it was queued.
+
+Every attack that succeeded is a flag: kind `report`, checkpoint `red-team`, rule `Red team: <category>`, severity
+`high` for extraction and exfiltration and `medium` otherwise, `source_kind: redteam-run`, labelled as the suite, in
+the starter's workspace. A reviewer confirms it (`POST /api/flags/:ref/decide {decision: confirmed}`) into an eval
+case as for any flag (B-7002).
+
+The gate: `POST /api/admin/profiles/:id/publish {status: published}`, and any change to a published profile that
+changes its settings hash, is refused with `409 {code: redteam_gate, failing, configHash}` unless the latest run of
+every gated suite at its current revision passed for that hash. **No evaluation override opens the red-team gate**:
+a run that passes or the gate turned off does. `POST /api/admin/registry/:id/review {decision: approve}` and
+`POST /api/admin/registry/:id/lifecycle {to: published}` on an agent version are refused the same way unless its
+schema hash has a passing run.
+
+Audit actions: `redteam.suite.created`, `redteam.suite.updated`, `redteam.suite.deleted`, `redteam.started`,
+`redteam.run.passed`, `redteam.run.failed`, `redteam.run.error`.
+
+### Agent identities (B-7701; `agents:manage`)
+
+An agent (by name, across its versions) can be a principal of its own. A run of the agent on behalf of a user then
+acts within **both** grants: the user's permissions narrowed to what the identity's roles grant (as credential
+scopes, so the scope step of the policy pipeline decides and the denial names it), and the lower of the user's
+clearance and the identity's ceiling; a run labelled above the ceiling fails before it thinks. Audit events made by
+the run and by requests with its keys carry `actor.agent` beside the user. Capability tokens (B-50) were dropped on
+2026-10-07; the identity's roles and scoped keys take their place.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/admin/agent-identities` | Every identity of the tenant: `{id, agent, roles, roleNames, permissions, ceiling, enabled, createdAt, updatedAt}` |
+| `GET /api/admin/agent-identities/:name` | `{agent, identity (or null), keys: [{id, name, prefix, scopes, expiresAt, lastUsedAt, revokedAt, createdAt, owner, ownerName, state}]}` |
+| `PUT /api/admin/agent-identities/:name` `{roles (role ids), ceiling, enabled (default true)}` | Creates or replaces the identity. `404` for an agent not in the registry, `400` for an unknown role, `403` (`step: clearance`) for a ceiling above the caller's clearance and `403` (`step: role`) for roles granting what the caller does not hold. Narrowing the roles drops the scopes of existing keys the roles no longer grant |
+| `POST /api/admin/agent-identities/:name/keys` `{name, scopes, ttlDays (30, 90, 180, 365)}` | `201 {id, key, prefix, scopes, expiresAt, notice}`: the key, shown once, owned by the caller; `409` while the identity is off, `403` (`step: scope`) for a scope beyond the identity's permissions or the caller's |
+| `DELETE /api/admin/agent-identities/:name/keys/:kid` | Revokes it |
+
+A request with such a key (`Authorization: Bearer exai_k1_…`) acts as the agent on the owner's behalf: `GET /api/me`
+shows the narrowed permissions and clearance; `401` once the identity is off or gone. Keys minted for agents are
+not listed under `GET /api/me/api-keys`.
+
+Audit actions: `agent.identity.created`, `agent.identity.updated`, `agent.identity.key.created`,
+`agent.identity.key.revoked`.
+
+### Agent handoffs (B-7801)
+
+An agent definition lists `handoffs` (agent names, up to 8). Each is offered to the model like a delegate
+(`agent:<name>`, B-4102) but described as handing the conversation over: the model passes the context it chooses as
+the task, the specialist runs as a child run in the chain, and when it answers the run that handed over **ends with
+that answer** as its own (`handedTo: {agent, run}` on the run and in the list, audit `agent.run.handed_off`). A
+handoff to an agent not listed is refused as `tool_unavailable`, like any delegate. The chain checks (Chain
+references, ceilings) and the "used by" view treat a handoff like a delegate (`via: handoff`).
+
+## Sprint 38c (1.6.0): row and field policies, DLP, legal holds, compliance exports (B-8101 to B-8103, B-7601 to B-7603)
+
+Migration `040c_policies_dlp` (`app_policies`, `users.attributes`, `dlp_rules`, `dlp_patterns`, `legal_holds`,
+`compliance_exports`). New permissions: `compliance:manage` (tenant-admin, legal-review) and `compliance:export`
+(legal-review; also an API key scope). New settings: `DLP_MAX_TEXT_BYTES` (1 MiB), `COMPLIANCE_EXPORT_MAX_ROWS`
+(100 000) and `COMPLIANCE_EXPORT_MAX_DAYS` (0: any range). Job: `compliance.export`.
+
+### Row and field policies (B-8101, B-8102)
+
+`server/src/apps/policies.ts` (`s.apps.policies`). A policy belongs to an app and covers one entity or every entity
+of the app. It names its **subjects** (`{kind: everyone | role | group | workspace | user, value?}`: a role id, a
+directory or tenant group name or id, a workspace id, a user id or username), the **rows** its subjects reach (a
+record filter in the query grammar, or null for every row) and per-field **grants** (`fields: {<name>: {read, unmasked,
+create, update, mask: last4 | hash | hidden}}`, `otherFields` for the rest). A filter value may name the reader:
+`$user.id`, `$user.username`, `$user.clearance`, `$user.roles`, `$user.groups`, `$user.workspaces` (the three lists
+only with `in`, standing alone) and `$user.attributes.<name>` (set by a tenant admin, below). Rows may only name
+indexed or unique fields (or `id`, `state`, `createdAt`, `updatedAt`, `createdBy`) of every entity the policy covers.
+
+Enforcement is the reader's **grant** on an entity (`AppService.grantFor`): an entity without an enabled policy is
+open as before; once it has one, a reader reaches the union of the rows of the policies that name them (a policy
+whose placeholder the reader has no value for grants nothing), and a reader no policy names reaches nothing (an empty
+page, `404` on a read, `403 step: policy` on a write). Field grants of the matching policies combine permissively.
+The grant narrows `GET`/`POST …/records`, `…/records/query`, `…/records/aggregate`, single reads, updates, deletes,
+transitions, bulk writes, exports (the CSV carries masked values), the `records.*` built-in tools and workflow record
+steps (the same service), and form submissions by a signed-in person. A field without `read` is left out of
+`values` and listed in `hidden`; a field without `unmasked` is shown through its mask and listed in `masked`
+(`last4`: every letter or digit but the last four becomes `*`, `***-**-6789`; `hash`: a 12-character SHA-256 prefix;
+`hidden`: null). Filtering or sorting by a field without `read` is `403 step: policy`. Holders of `apps:design` are
+not subject to policies. Labels apply first: a policy never shows a record above the reader's clearance.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/policies` | `apps:design`. `{policies: [Policy], placeholders}`. A Policy is `{id, name, description, enabled, entity (null: every entity), subjects, rows, fields, otherFields, createdBy, updatedBy, createdAt, updatedAt}` |
+| `POST /api/apps/:app/policies` `{name, description?, enabled?, entity?, subjects, rows?, fields?, otherFields?}` | `apps:design`. `201` Policy. `422` for a row condition on a field that is not indexed in every covered entity (`Field not indexed`), an unknown placeholder, a list placeholder compared with anything but `in`, a field grant naming a field no covered entity has, or a subject naming an unknown workspace or user. Audited `app.policy.created` |
+| `PUT /api/apps/:app/policies/:id` | `apps:design`. Replaces the policy (the same body and checks). Audited `app.policy.updated` |
+| `DELETE /api/apps/:app/policies/:id` | `apps:design`. `204`. Audited `app.policy.deleted` |
+| `PATCH /api/admin/users/:id` `{attributes?: {<name>: string}}` | `users:manage`. The user's attributes policies compare (`$user.attributes.<name>`): names `[a-z][a-z0-9_]{0,62}`, string values up to 200 characters, at most 50; `{}` clears them. `GET /api/admin/users/:id` answers `attributes` |
+
+### Explain (B-8103)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/entities/:entity/policies/explain` `{userId | username, recordId?, field?}` | `apps:design`. `{user: {id, username, clearance, roles, groups, workspaces, attributes, designer}, policed, none, rows (the resolved filter, null for every row), policies: [{id, name, entity, matches, subject, reason, rows}], record: {reachable, by} | null, field: {name, read, unmasked, create, update, mask, by} | null}`. `reason` says why a policy does not name the user (no subject names them, or a fact it compares is not set); `by` names the policy that reaches the record or grants the field |
+
+### DLP (B-7601)
+
+`server/src/compliance/dlp.ts` (`s.dlp`). A rule names what it detects (`detectors`: the built-in kinds `email`,
+`phone`, `iban`, `payment_card`, `national_id`, `private_key`, `cloud_access_key`, `bearer_token`, `high_entropy`,
+and `pattern:<id>` for the tenant's own RE2 patterns), the label the content rises to (`raiseTo`), the action by that
+label (`label`: raise only; `redact`: replace the detected spans with `[redacted <kind>]`; `hold`: keep it for a
+reviewer) and its scopes (`answer`: chat and `/v1` answers; `agent`: agent run outputs; `upload`: attachments and file
+versions). Detections below score 0.8 are ignored; a tenant pattern also carries the label it implies. Every scope's
+feature calls `inspect` after its guardrail checkpoint: the message (and its conversation), run, attachment or file
+version carries the raised label; a hold files the answer in the flag queue as `DLP: <rule>` (an agent run ends
+`failed` with the reason; an upload is rejected with it); a redaction is what is stored. Content raised above its
+owner's clearance is held whatever the rule says. Chat records the outcome in the message's `guard` (`dlp`), the
+OpenAI-compatible API audits `api.chat.dlp` (and answers `finish_reason: content_filter`), agents audit
+`agent.run.dlp`, uploads carry `findings.dlp`.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/dlp` | `compliance:manage`. `{rules: [Rule], patterns: [Pattern], detectors, scopes, labels}`. A Rule is `{id, name, enabled, detectors, raiseTo, action, scopes, createdAt, updatedAt}`; a Pattern `{id, name, pattern, label, enabled, createdAt, updatedAt}` |
+| `POST /api/compliance/dlp/rules` `{name, enabled?, detectors, raiseTo, action, scopes}` | `201` Rule; `422` for a `pattern:<id>` of another tenant. Audited `dlp.rule.created` |
+| `PUT /api/compliance/dlp/rules/:id`, `DELETE …/rules/:id` | Replace (audited `dlp.rule.updated`) or remove (`204`, `dlp.rule.deleted`) |
+| `POST /api/compliance/dlp/patterns` `{name, pattern, label, enabled?}` | `201` Pattern; `422` when RE2 rejects the pattern (with the position). Audited `dlp.pattern.created` |
+| `PUT /api/compliance/dlp/patterns/:id`, `DELETE …/patterns/:id` | Replace (`dlp.pattern.updated`) or remove (`204`; `409` while a rule detects with it; `dlp.pattern.deleted`) |
+| `POST /api/compliance/dlp/test` `{text, scope?, label?}` | `{label, raised, action, text, rules: [{id, name, action, raiseTo, kinds}], detections: [{kind, span, score, rule}]}`. Nothing is stored or audited |
+
+### Legal holds (B-7602)
+
+`server/src/compliance/holds.ts` (`s.legalHolds`). A hold on a user or a workspace suspends every retention purge of
+their conversations (`chat.retention`), memories (`memory.purge`) and files (`files.purge`) while it is active;
+agent runs have no purge to suspend. Placing one is under dual control: a holder of `compliance:manage` asks and
+names another holder as approver; nothing is suspended until that person approves. The reason is sealed with the
+tenant key. The people concerned are not told.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/holds` | `compliance:manage`. `{holds: [Hold], approvers: [{userId, displayName, username}], scopes}`. A Hold is `{id, scope: user | workspace, scopeId, subject, reason, state: pending | active | rejected | withdrawn | released, requestedBy, approver, decidedBy, decidedAt, releasedBy, releasedAt, note, createdAt, updatedAt}` (people as `{id, displayName, username}`) |
+| `POST /api/compliance/holds` `{scope, scopeId, reason, approverId}` | `201` Hold (pending). `403 step: dual-control` for naming oneself; `422` for an approver who is not another holder of `compliance:manage`; `409` while a hold on the subject is pending or active. Audited `legal_hold.requested`; the approver is notified (`compliance`) |
+| `GET /api/compliance/holds/:id` | One hold |
+| `POST /api/compliance/holds/:id/decide` `{decision: approved | rejected, note?}` | The approver (never the requester: `403 step: dual-control`) decides; `409` once decided. Approved suspends the purges at once. Audited `legal_hold.approved` / `legal_hold.rejected`; the requester is notified |
+| `POST /api/compliance/holds/:id/withdraw` | The requester withdraws a pending request. Audited `legal_hold.withdrawn` |
+| `POST /api/compliance/holds/:id/release` `{note?}` | Any holder of `compliance:manage` ends an active hold; the next purge treats the content as before. Audited `legal_hold.released` |
+
+### Compliance exports (B-7603)
+
+`server/src/compliance/exports.ts` (`s.complianceExports`). An export is the conversations (with their messages,
+content opened; held, withdrawn and hidden ones by their state, their thinking withheld), files (metadata and the
+version list; the bytes stay in the file store), memories (text opened), agent runs (input and output opened) and
+accounts (with roles) of one user and/or one workspace whose `createdAt` is in `[from, to]`, written by the
+`compliance.export` job as JSON Lines (`{kind: export}` first, then `conversation`, `file`, `memory`, `run`, `user`,
+and `{kind: summary, counts, omitted, label}` last), sealed with the tenant key in parts of about 1 MiB under
+`compliance/<tenant>/<export>/`. Rows above the requester's clearance (read when the job runs) are left out and
+counted (`omitted`); the export's label is the highest it carries. More than `COMPLIANCE_EXPORT_MAX_ROWS` objects
+(conversations count their messages) fails the export with the reason.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/compliance/exports` | `compliance:export` (a person, or an API key scoped to it). `{exports: [Export]}`: `{id, params, scope, state: queued | running | ready | failed, label, counts, omitted, createdBy, apiKeyId, error, createdAt, finishedAt, file}` |
+| `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
+| `GET /api/compliance/exports/:id` | One export |
+| `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |

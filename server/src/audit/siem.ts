@@ -27,19 +27,26 @@ export class SiemForwarder {
   private readonly off: () => void;
 
   constructor(
-    audit: AuditLog,
+    audit: Pick<AuditLog, 'onAppend'>,
     private readonly log: Logger,
-    private readonly o: { url?: string; token?: string; batch?: number; maxBuffer?: number; send?: (body: string) => Promise<void> }
+    private readonly o: { url?: string; token?: string; batch?: number; maxBuffer?: number; send?: (body: string) => Promise<void>; external?: boolean }
   ) {
     this.status = { enabled: !!o.url || !!o.send, url: o.url ? new URL(o.url).origin : null, state: o.url || o.send ? 'idle' : 'disabled', delivered: 0, pending: 0, dropped: 0, lastDeliveredAt: null, lastError: null };
-    this.off = this.status.enabled ? audit.onAppend((e) => this.push(e)) : () => undefined;
+    // 1.6.0, Sprint 38a (B-7501): a tenant destination's forwarder is fed by its owner (`external`), not by the chain.
+    this.off = this.status.enabled && !o.external ? audit.onAppend((e) => this.push(e)) : () => undefined;
   }
 
   view(): SiemStatus {
     return { ...this.status, pending: this.buffer.length };
   }
 
-  private push(e: AuditEvent): void {
+  /** Zeroes the delivered and dropped counters after they were persisted (B-7501). */
+  reset(): void {
+    this.status.delivered = 0;
+    this.status.dropped = 0;
+  }
+
+  push(e: AuditEvent): void {
     this.buffer.push(e);
     const max = this.o.maxBuffer ?? 10_000;
     if (this.buffer.length > max) {

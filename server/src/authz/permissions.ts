@@ -46,6 +46,9 @@ export const PERMISSIONS = [
   // 1.4.0 (Sprint 27, B-22): low-code apps. design: apps, entities, forms, triggers, bundles and drafts; records:read
   // and records:write: the records of the apps in one's workspaces, within one's clearance.
   'apps:design', 'records:read', 'records:write',
+  // 1.6.0 (Sprint 38c, B-76): compliance. manage: DLP rules and patterns, legal holds (under dual control);
+  // export: compliance exports of conversations, files, memories, runs and users, as a person or a scoped API key.
+  'compliance:manage', 'compliance:export',
   // 1.4.0 (Sprint 27c, B-25): groups and events in one's workspaces. read: see groups, their content and events;
   // write: create groups, join, post, RSVP and keep calendar feeds (what a member may do in a group is its group role);
   // manage: act as owner of every group in the workspaces one may act in.
@@ -127,7 +130,7 @@ const ADMINS = ['system-admin', 'tenant-admin'] as const;
 
 export const ROLES: readonly RoleDef[] = [
   { id: 'system-admin', name: 'System admin', description: 'Everything, across tenants: zones, platform, baseline guardrails.', permissions: '*', requiresMfa: true, grantableBy: ['system-admin'] },
-  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write', 'pds:manage', 'imports:run'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'tenant-admin', name: 'Tenant admin', description: 'Workspaces, members, quotas and roles inside one tenant.', permissions: ['tenant:manage', 'roles:manage', 'users:manage', 'identity:manage', 'usage:read', 'audit:read', 'models:read', 'compliance:manage', 'webhooks:manage', 'prompts:manage', 'billing:read', 'secrets:read', 'secrets:write', 'secrets:admin', 'pki:manage', 'plugins:manage', 'labels:manage', 'files:read', 'files:write', 'moderation:sanction', 'moderation:manage', 'members:invite', 'apps:design', 'records:read', 'records:write', 'firehose:manage', 'groups:read', 'groups:write', 'groups:manage', 'channels:manage', 'channels:review', 'social:read', 'social:write', 'social:manage', 'messages:read', 'messages:write', 'feed:read', 'feed:write', 'feed:manage', 'calendars:read', 'calendars:write', 'contacts:read', 'contacts:write', 'pds:manage', 'imports:run'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'identity-admin', name: 'Identity admin', description: 'User stores, group mappings, clients, sessions and signing keys.', permissions: ['identity:manage', 'users:manage', 'pki:manage', 'members:invite'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'model-admin', name: 'Model admin', description: 'Model catalogue, approvals, profiles and pool placement.', permissions: ['models:read', 'models:manage', 'pools:manage', 'profiles:manage', 'imports:run', 'imports:repositories'], requiresMfa: true, grantableBy: ADMINS },
   { id: 'guardrail-admin', name: 'Guardrail admin', description: 'Guardrail rule sets, classifiers and promotion to enforce.', permissions: ['guardrails:manage', 'classifiers:manage', 'flags:review', 'labels:manage', 'moderation:check', 'moderation:review', 'moderation:sanction', 'moderation:manage', 'firehose:manage', 'channels:review'], requiresMfa: true, grantableBy: ADMINS },
@@ -140,7 +143,7 @@ export const ROLES: readonly RoleDef[] = [
   { id: 'member', name: 'Member', description: 'Chat, knowledge and tools within their clearance.', permissions: MEMBER, requiresMfa: false, grantableBy: [...ADMINS, 'identity-admin'] },
   // 1.5.0 (Sprint 30, B-3803): licence exceptions for imports. Only a system admin grants it, so a tenant admin who
   // requests an exception cannot also decide it.
-  { id: 'legal-review', name: 'Legal review', description: 'Grants or refuses licence exceptions for imports and keeps the licence allow-list.', permissions: ['imports:review', 'models:read'], requiresMfa: true, grantableBy: ['system-admin'] },
+  { id: 'legal-review', name: 'Legal review', description: 'Grants or refuses licence exceptions for imports, keeps the licence allow-list, and (1.6.0) DLP, legal holds and compliance exports.', permissions: ['imports:review', 'models:read', 'compliance:manage', 'compliance:export'], requiresMfa: true, grantableBy: ['system-admin'] },
   { id: 'auditor', name: 'Auditor', description: 'Reads the audit chain and usage. Nothing else.', permissions: ['audit:read', 'usage:read'], requiresMfa: true, grantableBy: ADMINS }
 ];
 

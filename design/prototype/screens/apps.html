@@ -523,7 +523,7 @@ table.dt .actions{white-space:nowrap}
       { id: 'training', label: 'Training', icon: 'training' }, { id: 'tenants', label: 'Tenants', icon: 'tenants' }, { id: 'roles', label: 'Roles and access', icon: 'roles' }, { id: 'identity', label: 'Identity', icon: 'identity' },
       // 1.5.0 (Sprint 29 boards): the trust screens
       { id: 'certificates', label: 'Certificates', icon: 'certificates' }, { id: 'vault', label: 'Vault', icon: 'vault' }, { id: 'plugins', label: 'Plugins and events', icon: 'plugins' }, { id: 'atproto', label: 'AT-Protocol', icon: 'atproto' },
-      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
+      { id: 'zones', label: 'Zones', icon: 'zones' }, { id: 'usage-audit', label: 'Usage and audit', icon: 'audit' }, { id: 'analytics', label: 'Analytics', icon: 'audit' }, { id: 'platform', label: 'Platform', icon: 'platform' }
     ] }
   ];
 
@@ -650,7 +650,7 @@ table.dt .actions{white-space:nowrap}
       const groups = [
         ['Conversation', ['signin', 'chat', 'compare', 'runs']], ['Knowledge, memory and media', ['knowledge', 'memory', 'media', 'images']],
         ['Models and training', ['models', 'profiles', 'pools', 'training']], ['Build', ['registry', 'mcp-servers', 'workflows', 'scripts', 'connections']],
-        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
+        ['Govern', ['guardrails', 'flags', 'classifiers', 'usage-audit', 'analytics']], ['Platform administration', ['tenants', 'identity', 'zones', 'platform', 'settings', 'components']]
       ];
       const body = groups.map((g) => '<div class="vstack"><div class="eyebrow">' + g[0] + '</div><div class="map-grid">' + g[1].map((id) => { const s = screens[id]; return s ? '<button type="button" class="map-card" data-go="' + id + '"><span class="t">' + esc(s.title) + '</span><span class="s">' + esc(s.summary || '') + ((s.states || []).length ? ' · ' + s.states.length + ' states' : '') + '</span></button>' : ''; }).join('') + '</div></div>').join('');
       App.modal({ cls: 'wide', title: 'Prototype map <span class="pill outline">' + Object.keys(screens).length + ' screens</span>', body: '<p class="fg2" style="margin:0">Every screen from the design boards, wired together. Each screen also carries the states its board listed; apply one from the command palette (Ctrl K) while on that screen. The console shows none of these controls.</p>' + body, onMount(m) { on(m, 'click', '[data-go]', (e, t) => { App.closeOverlay(); App.navigate(t.dataset.go); }); } });
@@ -840,12 +840,17 @@ table.dt .actions{white-space:nowrap}
         { id: 't-2', kind: 'schedule', entity: 'contract', events: [], cron: '0 6 * * 1', workflow: 'contract-renewal-check v2', owner: 'Mara Okafor', enabled: true, nextRunAt: 'Mon 21 Sep 06:00 UTC', lastRunAt: 'Mon 14 Sep 06:00 UTC', lastRunId: 'run-8790', lastResult: 'fired' },
         { id: 't-3', kind: 'record', entity: 'vendor', events: ['created', 'updated'], cron: null, workflow: 'risk-rescore v1', owner: 'Tomasz Weber', enabled: false, nextRunAt: null, lastRunAt: '11 Sep 09:02', lastRunId: null, lastResult: 'skipped: the owner no longer holds agents:run' }
       ],
-      transfers: [{ id: 'tr-77', kind: 'import', state: 'done', dryRun: false, summary: '42 rows, 41 written, 1 problem', createdAt: '2 Sep 10:00', by: 'Lena Hoffmann', download: false }]
+      transfers: [{ id: 'tr-77', kind: 'import', state: 'done', dryRun: false, summary: '42 rows, 41 written, 1 problem', createdAt: '2 Sep 10:00', by: 'Lena Hoffmann', download: false }],
+      // 1.6.0 (B-8101 to B-8103): row and field policies of the app
+      policies: [
+        { name: 'Own country', description: 'Members see the vendors of their country; spend hashed, notes hidden.', enabled: true, entity: 'vendor', subjects: [{ kind: 'role', value: 'member' }], rows: { field: 'country', op: 'eq', value: '$user.attributes.country' }, fields: { annual_spend: { read: true, unmasked: false, create: true, update: false, mask: 'hash' }, notes: { read: false, unmasked: false, create: true, update: false, mask: 'hidden' } }, otherFields: { read: true, unmasked: true, create: true, update: true } },
+        { name: 'Reviewers read all', description: 'The reviewers group reaches every vendor, IBAN masked to the last four.', enabled: true, entity: 'vendor', subjects: [{ kind: 'group', value: 'finance-reviewers' }], rows: null, fields: { iban_masked: { read: true, unmasked: false, create: true, update: true, mask: 'last4' } }, otherFields: { read: true, unmasked: true, create: true, update: true } }
+      ]
     },
     { id: 'asset-register', name: 'asset-register', title: 'Asset register', description: 'Laptops, phones and licences across the tenant.', label: 'internal', workspaceId: null, workspace: 'Tenant-wide', scope: 'tenant', createdBy: 'Jonas Lindqvist', updatedAt: '11 Sep 16:00',
       entities: [{ id: 'asset', name: 'asset', title: 'Asset', label: 'internal', rev: 2, fields: [{ name: 'tag', title: 'Asset tag', type: 'string', required: true, indexed: true, unique: true, maxLength: 20 }, { name: 'kind', title: 'Kind', type: 'enum', indexed: true, options: ['laptop', 'phone', 'licence'] }, { name: 'holder', title: 'Holder', type: 'lookup', source: 'user' }, { name: 'bought_on', title: 'Bought on', type: 'date', indexed: true }, { name: 'age_days', title: 'Age (days)', type: 'formula', expression: 'days_between(bought_on, today())' }], states: { initial: 'in-stock', states: [{ name: 'in-stock' }, { name: 'issued' }, { name: 'retired' }], transitions: [{ name: 'issue', from: ['in-stock'], to: 'issued' }, { name: 'return', from: ['issued'], to: 'in-stock' }, { name: 'retire', from: ['*'], to: 'retired', roles: ['tenant-admin'] }] } }],
       records: { asset: [{ id: 'a-1', state: 'issued', label: 'internal', version: 1, source: 'import', aiState: null, updatedAt: '11 Sep 16:00', updatedBy: 'Jonas Lindqvist', values: { tag: 'NW-LT-0412', kind: 'laptop', holder: 'Mara Okafor', bought_on: '2025-02-10', age_days: 586 } }, { id: 'a-2', state: 'in-stock', label: 'internal', version: 1, source: 'import', aiState: null, updatedAt: '11 Sep 16:00', updatedBy: 'Jonas Lindqvist', values: { tag: 'NW-PH-0090', kind: 'phone', holder: null, bought_on: '2026-08-30', age_days: 20 } }] },
-      forms: [], triggers: [], transfers: [] }
+      forms: [], triggers: [], transfers: [], policies: [] }
   ];
 
   // ---------- helpers ----------
@@ -957,6 +962,9 @@ table.dt .actions{white-space:nowrap}
       { title: 'Stale version', tone: 'warn', text: 'A write carrying an older version is refused with 409. The inspector offers to reload the record.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'records'; st.entity = 'vendor'; st.record = 'r-1041'; st.problem = { kind: 'stale', title: 'Record changed since you opened it', text: 'Your edit carried version 3, but Tomasz Weber wrote version 4 at 19 Sep 14:10. Reload the record and apply your change again.' }; ctx.rerender(); } },
       { title: 'AI fill failed', tone: 'warn', text: 'The record is saved and the ai field is empty, with aiState failed and the reason. The fill job retries on the next write.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'records'; st.entity = 'vendor'; st.record = 'r-1043'; st.problem = null; st.aiNote = true; ctx.rerender(); } },
       { title: 'Import with bad rows', tone: 'info', text: 'The import job writes the good rows and reports the bad ones (row, problem), up to 500.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'records'; st.entity = 'vendor'; st.importReport = { dryRun: false, summary: { rows: 5, written: 3, problems: 2 }, report: [{ row: 3, problem: 'country: Not one of the options (value "ES")' }, { row: 5, problem: 'name: Duplicate value "Fabrikam GmbH" (unique)' }] }; ctx.rerender(); } },
+      { title: 'Reader outside every policy', tone: 'danger', text: 'Once an entity has a policy, a reader no policy names reaches no record and cannot create one (403 step policy). Explain says which subjects the policies name.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'policies'; st.explainUser = 'srivera'; st.explainEntity = 'vendor'; ctx.rerender(); } },
+      { title: 'Masked field', tone: 'info', text: 'A reader with read but not unmasked sees the field through its mask: last4 keeps the last four letters or digits (***-**-1234), hash a short SHA-256, hidden nothing. The full value never leaves the server.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'policies'; st.explainUser = 'pnair'; st.explainEntity = 'vendor'; st.explainRecord = 'r-1041'; st.explainField = 'iban_masked'; ctx.rerender(); } },
+      { title: 'Explain names the policy', tone: 'neutral', text: 'For a reader, a record and a field, explain lists each policy of the entity, whether it names the reader (and why not), whether the record is in their reach and by which policy, and the field grant.', apply(ctx) { const st = ctx.state; st.app = 'vendor-onboarding'; st.tab = 'policies'; st.explainUser = 'mokafor'; st.explainEntity = 'vendor'; st.explainRecord = 'r-1044'; st.explainField = 'annual_spend'; ctx.rerender(); } },
       { title: 'Bundle refused', tone: 'danger', text: 'A bundle changed after signing, signed elsewhere or naming another key is 422. Nothing is created and the refusal is audited.', apply(ctx) { const st = ctx.state; st.bundleProblem = true; ctx.rerender(); } }
     ],
     render(root, ctx) {
@@ -982,11 +990,12 @@ table.dt .actions{white-space:nowrap}
         + '<div class="hstack gap6 wrap" style="margin-top:auto">' + UI.btn('Import bundle', { size: 'sm', icon: 'upload', attrs: 'data-import-bundle' }) + UI.btn('Export', { size: 'sm', icon: 'download', attrs: 'data-export-bundle' }) + '</div></div>';
 
       // ----- page -----
-      const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: recs.length }, { id: 'forms', label: 'Forms', count: app.forms.length }, { id: 'triggers', label: 'Triggers', count: app.triggers.length }], st.tab);
+      const tabs = UI.tabs([{ id: 'entities', label: 'Entities', count: app.entities.length }, { id: 'records', label: 'Records', count: recs.length }, { id: 'forms', label: 'Forms', count: app.forms.length }, { id: 'policies', label: 'Policies', count: (app.policies || []).length }, { id: 'triggers', label: 'Triggers', count: app.triggers.length }], st.tab);
       let body = '', inspector = '';
       if (st.tab === 'entities') body = renderEntities(ctx, app, ent, recs);
       else if (st.tab === 'records') { const r = renderRecords(ctx, app, ent, recs); body = r.body; inspector = r.inspector; }
       else if (st.tab === 'forms') body = renderForms(ctx, app);
+      else if (st.tab === 'policies') body = renderPolicies(ctx, app);
       else body = renderTriggers(ctx, app);
 
       root.innerHTML = '<style>'
@@ -1023,6 +1032,106 @@ table.dt .actions{white-space:nowrap}
       if (st.openDraft) { st.openDraft = false; openDraftModal(ctx, app); }
     }
   });
+
+  // ---------- Policies tab (1.6.0, B-8101 to B-8103) ----------
+  // Readers the explain panel can be asked about: what a policy compares them by.
+  const READERS = [
+    { id: 'mokafor', name: 'Mara Okafor', roles: ['member'], groups: ['finance-ops'], attributes: { country: 'NL' }, designer: false },
+    { id: 'pnair', name: 'Priya Nair', roles: ['member', 'flag-reviewer'], groups: ['finance-ops', 'finance-reviewers'], attributes: { country: 'FR' }, designer: false },
+    { id: 'srivera', name: 'Sam Rivera', roles: ['member'], groups: ['field-sales'], attributes: {}, designer: false },
+    { id: 'fbrandt', name: 'Felix Brandt', roles: ['workflow-admin', 'member'], groups: ['finance-ops'], attributes: { country: 'DE' }, designer: true }
+  ];
+  const PLACEHOLDERS = ['$user.id', '$user.username', '$user.clearance', '$user.roles', '$user.groups', '$user.workspaces', '$user.attributes.country', '$user.attributes.region'];
+  const MASKS = ['last4', 'hash', 'hidden'];
+  const subjectText = (s) => s.kind === 'everyone' ? 'everyone' : s.kind + ' ' + s.value;
+  const rowsText = (p) => p.rows ? p.rows.field + ' ' + p.rows.op + ' ' + (Array.isArray(p.rows.value) ? p.rows.value.join(', ') : p.rows.value) : 'every row';
+  const grantOf = (p, field) => p.fields[field] || Object.assign({ mask: 'hidden' }, p.otherFields);
+  const fieldsText = (p) => { const named = Object.keys(p.fields); return named.length ? named.map((f) => { const g = p.fields[f]; return f + ': ' + (!g.read ? 'hidden' : !g.unmasked ? 'masked ' + g.mask : 'read') + (g.update === false ? ', no update' : '') + (g.create === false ? ', no create' : ''); }).join('; ') : 'every field in full'; };
+  const policyNames = (p, reader) => p.subjects.some((s) => s.kind === 'everyone' || (s.kind === 'role' && reader.roles.includes(s.value)) || (s.kind === 'group' && reader.groups.includes(s.value)) || (s.kind === 'user' && reader.id === s.value) || (s.kind === 'workspace' && s.value === 'finance-ops' && reader.groups.includes('finance-ops')));
+  const resolveRows = (p, reader) => { if (!p.rows) return { ok: true, text: 'every row' }; const v = p.rows.value; if (typeof v === 'string' && v.startsWith('$user.attributes.')) { const k = v.slice('$user.attributes.'.length); if (!reader.attributes[k]) return { ok: false, text: 'needs ' + v + ', not set for this user' }; return { ok: true, text: p.rows.field + ' ' + p.rows.op + ' ' + reader.attributes[k] }; } if (v === '$user.id') return { ok: true, text: p.rows.field + ' ' + p.rows.op + ' ' + reader.id }; return { ok: true, text: rowsText(p) }; };
+  const mask = (v, m) => v == null ? '' : m === 'hidden' ? '' : m === 'hash' ? '9f2e4c1a0b77' : String(v).replace(/[\p{L}\p{N}](?=(?:[^\p{L}\p{N}]*[\p{L}\p{N}]){4})/gu, '*');
+
+  function renderPolicies(ctx, app) {
+    const st = ctx.state;
+    const policies = app.policies || (app.policies = []);
+    const ents = app.entities;
+    st.explainUser = st.explainUser || 'mokafor'; st.explainEntity = st.explainEntity && ents.some((e) => e.id === st.explainEntity) ? st.explainEntity : (ents[0] ? ents[0].id : null);
+    const ent = ents.find((e) => e.id === st.explainEntity) || null;
+    const recs = ent ? (app.records[ent.id] || []) : [];
+    st.explainRecord = st.explainRecord && recs.some((r) => r.id === st.explainRecord) ? st.explainRecord : (recs[0] ? recs[0].id : null);
+    st.explainField = st.explainField && ent && ent.fields.some((f) => f.name === st.explainField) ? st.explainField : (ent && ent.fields[0] ? ent.fields[0].name : null);
+    const rows = policies.map((p, i) => ({ cells: ['<b>' + esc(p.name) + '</b>' + (p.description ? '<div class="muted" style="font-size:12px">' + esc(p.description) + '</div>' : ''), p.entity ? esc(p.entity) : '<span class="muted">every entity</span>', esc(p.subjects.map(subjectText).join(', ')), '<span class="mono" style="font-size:12px">' + esc(rowsText(p)) + '</span>', esc(fieldsText(p)), UI.pill(p.enabled ? 'enabled' : 'off', p.enabled ? 'ok' : ''), UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-editpolicy="' + i + '"' }) + ' ' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-delpolicy="' + i + '"' })], attrs: 'data-row="' + i + '"' }));
+    const table = UI.table(['Policy', 'Entity', 'Subjects', 'Rows', 'Fields', 'State', { label: '', right: true }], rows, { clickable: false, minWidth: '960px', emptyTitle: 'No policies', emptyText: 'Every member of the workspace reads every record within their clearance. Add a policy to narrow rows and fields per role, group, workspace or user.' });
+    const list = UI.panel('Row and field policies', UI.notice('A policy names who it applies to, the rows they reach (a condition on an indexed field, compared with the reader: <span class="mono">$user.attributes.country</span>, <span class="mono">$user.id</span>, <span class="mono">$user.groups</span>…) and what each field shows: read, read unmasked, create, update, with a mask (<span class="mono">last4</span>, <span class="mono">hash</span>, <span class="mono">hidden</span>) for readers without unmasked. Once an entity has a policy, a reader no policy names reaches nothing. Designers are not subject to policies. Labels still apply first.', 'info')
+      + table + '<div class="hstack gap6 wrap">' + UI.btn('New policy', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-newpolicy' }) + '</div>');
+
+    // ----- explain -----
+    const reader = READERS.find((r) => r.id === st.explainUser) || READERS[0];
+    const active = policies.filter((p) => p.enabled && (!p.entity || !ent || p.entity === ent.id));
+    const byPolicy = active.map((p) => { const named = policyNames(p, reader); const rr = named ? resolveRows(p, reader) : null; return { p, named, rr, matchesAll: named && rr.ok }; });
+    const matched = byPolicy.filter((x) => x.matchesAll);
+    const policed = active.length > 0 && !reader.designer;
+    const rec = recs.find((r) => r.id === st.explainRecord);
+    const reach = (x) => { if (!rec) return false; if (!x.p.rows) return true; const v = x.p.rows.value; const want = typeof v === 'string' && v.startsWith('$user.attributes.') ? reader.attributes[v.slice('$user.attributes.'.length)] : v === '$user.id' ? reader.id : v; return String(rec.values[x.p.rows.field]) === String(want); };
+    const reachedBy = matched.find(reach);
+    const recordLine = !rec ? null : !policed ? { ok: true, by: reader.designer ? 'designer (apps:design)' : 'no policies on this entity' } : reachedBy ? { ok: true, by: reachedBy.p.name } : { ok: false, by: matched.length ? 'outside the rows every matching policy allows' : 'no policy names this reader' };
+    const fieldGrant = (() => { if (!st.explainField) return null; if (!policed) return { read: true, unmasked: true, create: true, update: true, mask: 'hidden', by: reader.designer ? 'designer' : 'no policies' }; let g = { read: false, unmasked: false, create: false, update: false, mask: 'hidden', by: null }; for (const x of matched) { const o = grantOf(x.p, st.explainField); if (o.read && !g.read) g.by = x.p.name; g.read = g.read || !!o.read; g.unmasked = g.unmasked || (!!o.read && o.unmasked !== false); g.create = g.create || o.create !== false; g.update = g.update || o.update !== false; if (o.read && o.unmasked === false && g.mask === 'hidden' && o.mask) g.mask = o.mask; } return g; })();
+    const sample = rec && st.explainField ? rec.values[st.explainField] : null;
+    const shown = fieldGrant && sample != null ? (!fieldGrant.read ? '<span class="muted">not shown</span>' : !fieldGrant.unmasked ? '<span class="mono">' + esc(mask(sample, fieldGrant.mask)) + '</span> <span class="muted">(' + fieldGrant.mask + ')</span>' : '<span class="mono">' + esc(String(sample)) + '</span>') : '<span class="muted">–</span>';
+    const explain = UI.panel('Explain: what a reader gets', '<div class="formgrid">'
+      + UI.field('Reader', UI.select(READERS.map((r) => ({ value: r.id, label: r.name + (r.designer ? ' (designer)' : '') })), reader.id, 'data-explainuser aria-label="Reader"'))
+      + UI.field('Entity', UI.select(ents.map((e) => ({ value: e.id, label: e.title })), st.explainEntity || '', 'data-explainentity aria-label="Entity"'))
+      + UI.field('Record', UI.select(recs.map((r) => ({ value: r.id, label: (r.values.name || r.values.title || r.values.tag || r.id) + ' (' + r.id + ')' })), st.explainRecord || '', 'data-explainrecord aria-label="Record"'))
+      + UI.field('Field', UI.select(ent ? ent.fields.map((f) => ({ value: f.name, label: f.name })) : [], st.explainField || '', 'data-explainfield aria-label="Field"'))
+      + '</div>'
+      + UI.kv([['Compared by', 'roles ' + esc(reader.roles.join(', ')) + '; groups ' + esc(reader.groups.join(', ')) + '; attributes ' + esc(Object.keys(reader.attributes).length ? JSON.stringify(reader.attributes) : 'none')], ['Policies on ' + esc(ent ? ent.title : 'the app'), policed ? matched.length + ' of ' + active.length + ' name this reader' : reader.designer ? 'a designer is not subject to policies' : 'none: every record within their clearance'],
+        ['Record ' + esc(st.explainRecord || ''), recordLine ? (recordLine.ok ? UI.pill('reachable', 'ok') + ' by ' + esc(recordLine.by) : UI.pill('not reachable', 'danger') + ' ' + esc(recordLine.by)) : '<span class="muted">pick a record</span>'],
+        ['Field ' + esc(st.explainField || ''), fieldGrant ? [fieldGrant.read ? 'read' : 'no read', fieldGrant.unmasked ? 'unmasked' : 'masked ' + fieldGrant.mask, fieldGrant.create ? 'create' : 'no create', fieldGrant.update ? 'update' : 'no update'].map((t) => UI.pill(t, /^no /.test(t) ? 'warn' : /masked/.test(t) ? 'info' : 'ok')).join(' ') + (fieldGrant.by ? ' by ' + esc(fieldGrant.by) : '') : '–'], ['Shown as', shown]], 1)
+      + (byPolicy.length ? UI.table(['Policy', 'Names the reader', 'Rows'], byPolicy.map((x) => [esc(x.p.name), x.named ? UI.pill('yes', 'ok') : UI.pill('no', ''), x.named ? (x.rr.ok ? esc(x.rr.text) : UI.pill('grants nothing', 'warn') + ' ' + esc(x.rr.text)) : '<span class="muted">' + esc(x.p.subjects.map(subjectText).join(', ')) + '</span>']), { clickable: false, cls: 'bare', minWidth: '0' }) : ''));
+
+    ctx.on('change', '[data-explainuser]', (e, t) => { st.explainUser = t.value; ctx.rerender(); });
+    ctx.on('change', '[data-explainentity]', (e, t) => { st.explainEntity = t.value; st.explainRecord = null; st.explainField = null; ctx.rerender(); });
+    ctx.on('change', '[data-explainrecord]', (e, t) => { st.explainRecord = t.value; ctx.rerender(); });
+    ctx.on('change', '[data-explainfield]', (e, t) => { st.explainField = t.value; ctx.rerender(); });
+    ctx.on('click', '[data-newpolicy]', () => openPolicyModal(ctx, app, null));
+    ctx.on('click', '[data-editpolicy]', (e, t) => openPolicyModal(ctx, app, +t.dataset.editpolicy));
+    ctx.on('click', '[data-delpolicy]', async (e, t) => { const p = policies[+t.dataset.delpolicy]; const ok = await ctx.confirm({ title: 'Remove ' + esc(p.name), tone: 'danger', body: '<p class="fg2" style="margin:0">Readers it named lose what it granted at once. Audited app.policy.deleted.</p>', ok: 'Remove' }); if (!ok) return; policies.splice(+t.dataset.delpolicy, 1); ctx.rerender(); ctx.toast('Policy ' + esc(p.name) + ' removed.', 'ok'); });
+    return list + explain;
+  }
+
+  function openPolicyModal(ctx, app, index) {
+    const policies = app.policies;
+    const p = index == null ? { name: '', description: '', enabled: true, entity: app.entities[0] ? app.entities[0].id : null, subjects: [{ kind: 'role', value: 'member' }], rows: null, fields: {}, otherFields: { read: true, unmasked: true, create: true, update: true } } : JSON.parse(JSON.stringify(policies[index]));
+    const ent = app.entities.find((e) => e.id === p.entity) || app.entities[0];
+    const indexed = ent ? ent.fields.filter((f) => f.indexed || f.unique) : [];
+    const grantRow = (f) => { const g = p.fields[f.name] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; return '<tr><td class="mono">' + esc(f.name) + (f.indexed || f.unique ? '' : ' <span class="muted">(not indexed)</span>') + '</td>' + ['read', 'unmasked', 'create', 'update'].map((k) => '<td style="text-align:center"><input type="checkbox" data-grant="' + esc(f.name) + ':' + k + '"' + (g[k] !== false ? ' checked' : '') + ' aria-label="' + esc(f.name + ' ' + k) + '"></td>').join('') + '<td>' + UI.select(MASKS, g.mask || 'hidden', 'data-grant="' + esc(f.name) + ':mask" aria-label="' + esc(f.name) + ' mask"') + '</td></tr>'; };
+    ctx.modal({
+      title: index == null ? 'New policy' : 'Edit ' + esc(p.name),
+      cls: 'wide',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input(p.name, { attrs: 'data-pname aria-label="Policy name"' })) + UI.field('Entity', UI.select([{ value: '', label: 'Every entity of the app' }].concat(app.entities.map((e) => ({ value: e.id, label: e.title }))), p.entity || '', 'data-pentity'), 'An app-wide policy may only use fields every entity has.')
+        + UI.field('Applies to', '<div class="hstack gap6">' + UI.select(['everyone', 'role', 'group', 'workspace', 'user'], p.subjects[0].kind, 'data-pskind aria-label="Subject kind"') + UI.input(p.subjects[0].value || '', { placeholder: 'member, finance-reviewers, finance-ops, mokafor', attrs: 'data-psvalue aria-label="Subject"' }) + '</div>', 'A role, a directory or tenant group, the members of a workspace, or one user. More subjects can be added once saved.')
+        + UI.field('Rows', '<div class="hstack gap6 wrap">' + UI.select([{ value: '', label: 'Every row' }].concat(indexed.map((f) => ({ value: f.name, label: f.name })))
+          , p.rows ? p.rows.field : '', 'data-prfield aria-label="Row field"') + UI.select(['eq', 'ne', 'in', 'gt', 'gte', 'lt', 'lte', 'startsWith', 'contains'], p.rows ? p.rows.op : 'eq', 'data-prop aria-label="Operator"') + UI.input(p.rows ? String(p.rows.value) : '$user.attributes.country', { attrs: 'data-prvalue aria-label="Value" list="pl-' + esc(app.id) + '"' }) + '<datalist id="pl-' + esc(app.id) + '">' + PLACEHOLDERS.map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist></div>', 'Only indexed or unique fields. A value starting with $user. is the reader\'s fact; the list placeholders ($user.roles, $user.groups, $user.workspaces) go with in.')
+        + UI.field('Enabled', UI.toggle('In force', p.enabled, 'data-penabled'))
+        + '</div><div class="eyebrow" style="margin-top:10px">Fields of ' + esc(ent ? ent.title : 'the entity') + '</div><div class="tablewrap"><table class="table bare" style="min-width:0"><thead><tr><th>Field</th><th>Read</th><th>Unmasked</th><th>Create</th><th>Update</th><th>Mask</th></tr></thead><tbody>' + (ent ? ent.fields.map(grantRow).join('') : '') + '</tbody></table></div><div class="muted" style="font-size:12px;margin-top:6px">A field left in full stays in full. Masks apply to readers with read but not unmasked: last4 keeps the last four letters or digits (***-**-1234), hash shows a short SHA-256, hidden shows nothing.</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(index == null ? 'Create policy' : 'Save', { kind: 'primary', attrs: 'data-psave' }),
+      onMount(m) {
+        m.querySelector('[data-psave]').addEventListener('click', () => {
+          const name = m.querySelector('[data-pname]').value.trim(); if (!name) { ctx.toast('A policy needs a name.', 'warn'); return; }
+          const field = m.querySelector('[data-prfield]').value; const op = m.querySelector('[data-prop]').value; const value = m.querySelector('[data-prvalue]').value.trim();
+          if (value.startsWith('$user.') && !PLACEHOLDERS.includes(value) && !/^\$user\.attributes\.[a-z][a-z0-9_]*$/.test(value)) { ctx.toast('Unknown placeholder ' + esc(value) + '. Use $user.id, $user.username, $user.clearance, $user.roles, $user.groups, $user.workspaces or $user.attributes.<name>.', 'danger', 6000); return; }
+          if (['$user.roles', '$user.groups', '$user.workspaces'].includes(value) && op !== 'in') { ctx.toast(esc(value) + ' is a list: compare it with in.', 'danger'); return; }
+          const fields = {};
+          m.querySelectorAll('[data-grant]').forEach((el) => { const [f, k] = el.dataset.grant.split(':'); fields[f] = fields[f] || { read: true, unmasked: true, create: true, update: true, mask: 'hidden' }; fields[f][k] = k === 'mask' ? el.value : el.checked; });
+          Object.keys(fields).forEach((f) => { const g = fields[f]; if (g.read && g.unmasked && g.create && g.update) delete fields[f]; });
+          const next = { name, description: p.description, enabled: m.querySelector('[data-penabled]').classList.contains('on'), entity: m.querySelector('[data-pentity]').value || null, subjects: [{ kind: m.querySelector('[data-pskind]').value, value: m.querySelector('[data-psvalue]').value.trim() || undefined }], rows: field ? { field, op, value: op === 'in' && !value.startsWith('$user.') ? value.split(',').map((x) => x.trim()) : value } : null, fields, otherFields: p.otherFields };
+          if (index == null) policies.push(next); else policies[index] = next;
+          App.closeOverlay(); ctx.rerender(); ctx.toast('Policy ' + esc(name) + (index == null ? ' created' : ' saved') + '. Audited app.policy.' + (index == null ? 'created' : 'updated') + '.', 'ok');
+        });
+        const tg = m.querySelector('[data-penabled]'); if (tg) tg.addEventListener('click', () => tg.classList.toggle('on'));
+      }
+    });
+  }
 
   // ---------- Entities tab ----------
   function renderEntities(ctx, app, ent, recs) {

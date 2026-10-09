@@ -18,10 +18,14 @@ import { auditAdminRoutes } from '../routes/admin/audit.js';
 import { tenantAdminRoutes } from '../routes/admin/tenants.js';
 import { socialAdminRoutes } from '../routes/admin/social.js';
 import { usageAdminRoutes } from '../routes/admin/usage.js';
+import { analyticsAdminRoutes } from '../routes/admin/analytics.js';
+import { inventoryAdminRoutes } from '../routes/admin/inventory.js';
 import { gatewayAdminRoutes } from '../routes/admin/gateway.js';
 import { chatRoutes } from '../routes/chat.js';
 import { guardrailRoutes } from '../routes/guardrails.js';
 import { registryAdminRoutes } from '../routes/admin/registry.js';
+import { redTeamRoutes } from '../routes/admin/redteam.js';
+import { agentIdentityRoutes } from '../routes/admin/agent-identities.js';
 import { mcpAdminRoutes } from '../routes/admin/mcp.js';
 import { agentRoutes } from '../routes/agents.js';
 import { chainRoutes } from '../routes/chains.js';
@@ -51,6 +55,7 @@ import { promptRoutes } from '../routes/prompts.js';
 import { integrationAdminRoutes } from '../routes/admin/integrations.js';
 import { billingAdminRoutes } from '../routes/admin/billing.js';
 import { vaultRoutes } from '../routes/vault.js';
+import { complianceRoutes } from '../routes/compliance.js';
 import { vaultLeaseRoutes } from '../routes/vault-leases.js';
 import { pkiRoutes } from '../routes/pki.js';
 import { pkiPublicRoutes } from '../routes/pki-public.js';
@@ -234,10 +239,15 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', auditAdminRoutes(s));
   api.use('/admin', tenantAdminRoutes(s));
   api.use('/admin', usageAdminRoutes(s));
+  api.use('/admin', analyticsAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7401, B-7402)
+  api.use('/admin', inventoryAdminRoutes(s)); // 1.6.0, Sprint 38a (B-7301, B-7302)
   api.use('/admin', gatewayAdminRoutes(s));
   api.use(chatRoutes(s));
   api.use(guardrailRoutes(s));
   api.use('/admin', registryAdminRoutes(s));
+  // 1.6.0 Sprint 38b: red-team suites (B-7001) and agent identities (B-7701).
+  api.use('/admin', redTeamRoutes(s));
+  api.use('/admin', agentIdentityRoutes(s));
   api.use('/admin', mcpAdminRoutes(s));
   api.use(mcpAccessRoutes(s)); // 1.6.0, Sprint 37b (B-7101 to B-7103): MCP server admin, held calls, client OAuth
   api.use(agentRoutes(s));
@@ -266,6 +276,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use('/admin', zoneClusterRoutes(s));
   // Sprint 24 (B-1701 to B-1703): the secrets vault.
   api.use(vaultRoutes(s));
+  api.use(complianceRoutes(s)); // 1.6.0, Sprint 38c (B-7601 to B-7603): DLP, legal holds, compliance exports
   // Sprint 24 (B-1601 to B-1603): the certificate authority.
   api.use(pkiRoutes(s));
   // 1.4.0, Sprint 24c: the event catalogue (B-2001) and plugins (B-2002).

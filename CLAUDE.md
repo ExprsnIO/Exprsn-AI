@@ -42,8 +42,8 @@ server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1
 custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
 connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
 context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
-33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprint 35 is done and Sprints 36 to 39 are
-planned in `Backlog-1.6.0.md` (B-5001, capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 38 are done and Sprint 39 is
+next in `Backlog-1.6.0.md` (B-5001, capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
 `Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 44 to 50 in `Backlog-2.0.0.md`.
 Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
 `design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
@@ -276,6 +276,32 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   and `routes/scim.ts` (`/scim/v2`, outside `/api`, and the token routes under Identity, B-7201, B-7202);
   `vault/shares.ts` (`s.vaultShares`, B-4801: a KV secret shared as a policy grant); the MongoDB lease engine in
   `vault/db-engines.ts` (B-4802); quotes and visibility in `feed/service.ts` (B-4901).
+- 1.6.0 Sprint 38a: `governance/inventory.ts` (`s.inventory`, B-7301, B-7302: the AI system inventory over the
+  objects' own tables plus `inventory_systems`, the owner publish gate the registry asks through `publishGate`, the
+  register as CSV or JSON); `tenancy/analytics.ts` (`s.analytics`, B-7401, B-7402: sums over `usage_records` by
+  dimension and per day, prices per model or pool, the chargeback); `audit/export-verify.ts` (B-7501: the JSONL
+  export's shape and its offline verifier, also `exprsn-ai audit:verify-export`) with `runAuditJsonl` in
+  `audit/exports.ts` and `AuditCheckpoints.createAt`; `audit/siem-destinations.ts` (`s.siemDestinations`, B-7501:
+  per-tenant HTTPS and syslog-over-TLS destinations under dual control, one `SiemForwarder` per active destination fed
+  through the chain's listener). The tracer allows the `gen_ai.usage.*` attributes the gateway clients set (B-7403).
+
+- 1.6.0 Sprint 38b: `redteam/` (`attacks.ts` the built-in attack catalogue and the deterministic judge; `service.ts`
+  `s.redteam`, B-7001, B-7002: suites per target, runs as the job `redteam.run`, agent and workflow attacks as child
+  runs with `caller_kind: redteam-run`, a flag per successful attack, the gate `gateProfile` beside the evaluation
+  gate and `gateAgent` on approval) behind `routes/admin/redteam.ts`; `agents/identity.ts` (`s.agentIdentities`,
+  B-7701: an agent's roles, ceiling and keys, `narrow` the principal a run acts as, `Principal.agent` and
+  `actor.agent`, keys with `api_keys.agent_id` resolved in `authenticate`) behind `routes/admin/agent-identities.ts`;
+  handoffs in `agents/service.ts` (B-7801: `handoffs` offered through `resolveCallees`, the run ends with the
+  handed-to run's answer, `agent_runs.handed_to`). `leakingReply` in `server/test/fake-ollama.ts`.
+
+- 1.6.0 Sprint 38c: `apps/policies.ts` (`s.apps.policies`, B-8101 to B-8103: row and field policies, the reader's
+  grant that `apps/service.ts` applies in queries, reads, writes and views through `grantFor`, masks, explain; user
+  attributes on `users.attributes`); `compliance/dlp.ts` (`s.dlp`, B-7601: rules and tenant RE2 patterns, `inspect`
+  called by chat's `guardOutput`, the OpenAI-compatible API, agent `finish`, attachment and file scans; the feature
+  side imports only `compliance/dlp-types.ts`, which keeps `guardrails/detectors.ts` out of an import cycle);
+  `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
+  read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
+  parts) behind `routes/compliance.ts`.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic
