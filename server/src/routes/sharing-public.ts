@@ -28,6 +28,23 @@ export function publicSharingRoutes(s: Services): Router {
     res.json({ ...(await s.sharing.openAnonymous(token, ip(req), req.traceId)), readOnly: true });
   });
 
+  /**
+   * 1.6.0 (B-8001): one artifact version rendered for a sandboxed iframe. The URL is a short-lived capability minted
+   * with the artifact list; no session is read. The response's own CSP sandboxes the document: it may run its scripts
+   * and styles, but cannot reach the console's origin, cookies, API or storage, nor navigate the page that frames it.
+   */
+  r.get('/artifacts/:vid/raw', async (req, res) => {
+    const token = String(req.query.t ?? '');
+    const got = token.length <= 200 ? await s.chatArtifacts.raw(token) : null;
+    if (!got) throw notFound('Artifact');
+    const html = got.artifact.kind === 'html';
+    res.setHeader('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Type', html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="${got.artifact.key.replace(/[^\w.-]/g, '_')}"`);
+    res.send(got.content);
+  });
+
   r.use(() => {
     throw notFound('API route');
   });

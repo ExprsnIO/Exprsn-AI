@@ -3,11 +3,16 @@ import { z } from 'zod';
 import { clears, LABELS } from '../authz/labels.js';
 import { effectivePermissions, type Principal } from '../authz/policy.js';
 import { ip, noStore, parseBody, principalOf, requireAnyPermission, requireAuth, requirePermission } from '../http/middleware.js';
-import { badRequest, notFound } from '../http/problem.js';
+import { badRequest, forbidden, notFound } from '../http/problem.js';
 import { draft, draftSchema } from '../apps/drafts.js';
+import { fillView } from '../apps/ai-fills.js';
+import { modelApplySchema, modelDraftSchema } from '../apps/model-drafts.js';
+import { sourceInputSchema } from '../apps/sources.js';
 import { formDefinitionSchema, formView } from '../apps/forms.js';
 import { aggregateSchema, filterSchema, sortSchema, type Filter, type Sort } from '../apps/query.js';
 import { entityDefinitionSchema, nameSchema } from '../apps/schema.js';
+import { PACKAGE_FORMAT, packageView } from '../apps/packages.js';
+import { appScopeGuard } from '../apps/key-scope.js';
 import { AppPolicies, policyInputSchema, policyView } from '../apps/policies.js';
 import { appView, entityView, type Actor } from '../apps/service.js';
 import type { Services } from '../services.js';
@@ -60,7 +65,8 @@ function filterParam(raw: unknown): Filter | undefined {
  */
 export function appRoutes(s: Services): Router {
   const r = Router();
-  r.use('/apps', noStore, requireAuth());
+  // 1.6.0 (B-8601, B-8702): a credential limited to one app or entity is refused beyond it, here as on the entity API.
+  r.use('/apps', noStore, requireAuth(), appScopeGuard(s));
   const read = requirePermission(s, 'records:read');
   const write = requirePermission(s, 'records:write');
   const design = requirePermission(s, 'apps:design');
@@ -88,6 +94,75 @@ export function appRoutes(s: Services): Router {
     res.json(await a.forms.held.decide(principalOf(req), parseBody(id26, req.params.id), body.decision, body.reason || null, { ip: ip(req), traceId: req.traceId ?? null }));
   });
 
+  // ---------- packages, pipelines and deployments (1.6.0, B-8201 to B-8204) ----------
+  // Before `/apps/:app`: the routes that name no app, or name one under a fixed first segment.
+
+  const gitBody = z.object({ url: z.string().url().max(500), ref: z.string().trim().min(1).max(120).nullable().default(null), path: z.string().trim().min(1).max(200), credential: z.string().trim().max(300).nullable().default(null), username: z.string().trim().min(1).max(100).default('x-access-token') });
+
+  r.post('/apps/packages/import', design, async (req, res) => {
+    const body = parseBody(z.object({ package: z.unknown(), name: nameSchema.optional(), workspaceId: id26.nullable().optional() }).strict(), req.body);
+    const pkg = await a.packages.verify(actor(req), body.package);
+    const out = await a.packages.importNew(actor(req), pkg, { ...(body.name ? { name: body.name } : {}), ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}) });
+    res.status(201).json({ ...appView(out.app), report: out.report, package: packageView(out.row) });
+  });
+
+  r.post('/apps/packages/git-import', design, async (req, res) => {
+    const body = parseBody(gitBody.extend({ name: nameSchema.optional(), workspaceId: id26.nullable().optional() }).strict(), req.body);
+    const { raw, commit } = await a.packages.gitRead(actor(req), { url: body.url, ref: body.ref, path: body.path, credential: body.credential, username: body.username });
+    const pkg = await a.packages.verify(actor(req), raw);
+    const out = await a.packages.importNew(actor(req), pkg, { ...(body.name ? { name: body.name } : {}), ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}), source: 'git' });
+    res.status(201).json({ ...appView(out.app), report: out.report, package: packageView(out.row), commit });
+  });
+
+  const pipelineInput = z.object({ name: z.string().trim().min(1).max(100), development: ref, test: ref, production: ref, approvalWorkflow: z.string().trim().min(1).max(120).nullable().optional() }).strict();
+
+  r.get('/apps/pipelines', design, async (req, res) => {
+    const p = principalOf(req);
+    const rows = await a.pipelines.list(p);
+    res.json({ pipelines: await Promise.all(rows.map((row) => a.pipelines.view(p, row))) });
+  });
+
+  r.post('/apps/pipelines', design, async (req, res) => {
+    const body = parseBody(pipelineInput, req.body);
+    const row = await a.pipelines.create(actor(req), body);
+    res.status(201).json(await a.pipelines.view(principalOf(req), row));
+  });
+
+  r.get('/apps/pipelines/:id', design, async (req, res) => {
+    const p = principalOf(req);
+    res.json(await a.pipelines.view(p, await a.pipelines.get(p, parseBody(id26, req.params.id))));
+  });
+
+  r.patch('/apps/pipelines/:id', design, async (req, res) => {
+    const body = parseBody(pipelineInput.partial(), req.body);
+    const row = await a.pipelines.update(actor(req), parseBody(id26, req.params.id), body);
+    res.json(await a.pipelines.view(principalOf(req), row));
+  });
+
+  r.delete('/apps/pipelines/:id', design, async (req, res) => {
+    await a.pipelines.remove(actor(req), parseBody(id26, req.params.id));
+    res.status(204).end();
+  });
+
+  r.get('/apps/pipelines/:id/deployments', design, async (req, res) => {
+    const q = parseBody(z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }).strict(), req.query);
+    res.json({ deployments: await a.pipelines.history(principalOf(req), parseBody(id26, req.params.id), q.limit) });
+  });
+
+  r.post('/apps/pipelines/:id/promote', design, async (req, res) => {
+    const body = parseBody(z.object({ to: z.enum(['test', 'production']), note: z.string().trim().max(500).nullable().optional() }).strict(), req.body);
+    res.status(202).json(await a.pipelines.promote(actor(req), parseBody(id26, req.params.id), { to: body.to, note: body.note ?? null }));
+  });
+
+  r.get('/apps/deployments/:id', design, async (req, res) => {
+    res.json(await a.pipelines.deploymentFor(principalOf(req), parseBody(id26, req.params.id)));
+  });
+
+  r.post('/apps/deployments/:id/rollback', design, async (req, res) => {
+    const body = parseBody(z.object({ note: z.string().trim().max(500).nullable().optional() }).strict(), req.body ?? {});
+    res.status(202).json(await a.pipelines.rollback(actor(req), parseBody(id26, req.params.id), body.note ?? null));
+  });
+
   // ---------- apps ----------
 
   r.get('/apps', read, async (req, res) => {
@@ -101,6 +176,13 @@ export function appRoutes(s: Services): Router {
 
   r.post('/apps/import', design, async (req, res) => {
     const body = parseBody(z.object({ bundle: z.unknown(), name: nameSchema.optional(), workspaceId: id26.nullable().optional() }).strict(), req.body);
+    if (body.bundle && typeof body.bundle === 'object' && (body.bundle as { format?: unknown }).format === PACKAGE_FORMAT) {
+      // 1.6.0 (B-8201): a package (the bundle's successor) imports through the same door.
+      const pkg = await a.packages.verify(actor(req), body.bundle);
+      const out = await a.packages.importNew(actor(req), pkg, { ...(body.name ? { name: body.name } : {}), ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}) });
+      res.status(201).json({ ...appView(out.app), report: out.report, package: packageView(out.row) });
+      return;
+    }
     const app = await a.bundles.import(actor(req), body.bundle, { ...(body.name ? { name: body.name } : {}), ...(body.workspaceId !== undefined ? { workspaceId: body.workspaceId } : {}) });
     res.status(201).json(appView(app));
   });
@@ -129,7 +211,9 @@ export function appRoutes(s: Services): Router {
     const app = await a.app(p, param(req, 'app'));
     const entities = await a.entities(app);
     const forms = await a.forms.list(app);
-    res.json({ ...appView(app), entities: entities.map(entityView), forms: forms.map((f) => formView(f.form, f.entity)), ...(effectivePermissions(p).has('apps:design') ? { triggers: await a.triggers.list(app) } : {}) });
+    const designer = effectivePermissions(p).has('apps:design');
+    const sources = designer ? await Promise.all((await a.sources.list(app)).map((x) => a.sources.view(x, entities.find((e) => e.id === x.entity_id)?.name ?? ''))) : [];
+    res.json({ ...appView(app), entities: entities.map(entityView), forms: forms.map((f) => formView(f.form, f.entity)), ...(designer ? { triggers: await a.triggers.list(app), sources } : {}) });
   });
 
   r.patch('/apps/:app', design, async (req, res) => {
@@ -142,10 +226,54 @@ export function appRoutes(s: Services): Router {
     res.status(204).end();
   });
 
+  r.get('/apps/:app/packages', design, async (req, res) => {
+    const app = await a.app(principalOf(req), param(req, 'app'));
+    const stage = await a.pipelines.stageOf(app.tenant_id, app.id);
+    res.json({ packages: (await a.packages.list(app)).map(packageView), stage });
+  });
+
+  r.post('/apps/:app/packages', design, async (req, res) => {
+    const body = parseBody(z.object({ withData: z.boolean().default(false), note: z.string().trim().max(500).nullable().optional() }).strict(), req.body ?? {});
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    const { row, pkg } = await a.packages.create(actor(req), app, { withData: body.withData, note: body.note ?? null });
+    res.status(201).json({ ...packageView(row), package: pkg });
+  });
+
+  r.get('/apps/:app/packages/:id', design, async (req, res) => {
+    const app = await a.app(principalOf(req), param(req, 'app'));
+    const { row, pkg } = await a.packages.open(app.tenant_id, parseBody(id26, req.params.id));
+    if (row.app_id !== app.id) throw notFound('Package');
+    res.json({ ...packageView(row), package: pkg });
+  });
+
+  r.post('/apps/:app/packages/:id/git', design, async (req, res) => {
+    const body = parseBody(gitBody.extend({ message: z.string().trim().max(500).nullable().default(null) }).strict(), req.body);
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    const { row, pkg } = await a.packages.open(app.tenant_id, parseBody(id26, req.params.id));
+    if (row.app_id !== app.id) throw notFound('Package');
+    res.json(await a.packages.gitPush(actor(req), app, pkg, { url: body.url, ref: body.ref, path: body.path, message: body.message, credential: body.credential, username: body.username }));
+  });
+
   r.get('/apps/:app/export', design, async (req, res) => {
     const bundle = await a.bundles.export(actor(req), param(req, 'app'));
     res.setHeader('Content-Disposition', `attachment; filename="${bundle.app.name}.app.json"`);
     res.json(bundle);
+  });
+
+  // ---------- data model drafts (1.6.0, B-8301) ----------
+  // A description becomes a draft of the app's whole data model, shown as a diff; accepting it applies the diff.
+
+  r.post('/apps/:app/model/draft', design, async (req, res) => {
+    const body = parseBody(modelDraftSchema.extend({ label: label.default('internal') }), req.body);
+    const p = principalOf(req);
+    if (!clears(p.clearance, body.label)) throw badRequest(`Your clearance is ${p.clearance}; a ${body.label} draft is above it.`);
+    const app = await a.designable(p, param(req, 'app'));
+    res.json(await a.modelDrafts.draft(actor(req), app, { prompt: body.prompt, profile: body.profile }, body.label));
+  });
+
+  r.post('/apps/:app/model/apply', design, async (req, res) => {
+    const app = await a.designable(principalOf(req), param(req, 'app'));
+    res.json(await a.modelDrafts.apply(actor(req), app, parseBody(modelApplySchema, req.body)));
   });
 
   // ---------- entities ----------
@@ -176,6 +304,70 @@ export function appRoutes(s: Services): Router {
   r.get('/apps/:app/entities/:entity/fields/:field/options', read, async (req, res) => {
     const q = parseBody(z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(100).default(20) }), req.query);
     res.json({ options: await a.options(principalOf(req), param(req, 'app'), param(req, 'entity'), param(req, 'field'), q.q ?? null, q.limit) });
+  });
+
+  // ---------- AI fills over every row (1.6.0, B-8402) ----------
+
+  const fillBody = z.object({ field: nameSchema, scope: z.enum(['empty', 'all']).default('empty') }).strict();
+
+  r.post('/apps/:app/entities/:entity/ai/estimate', design, async (req, res) => {
+    const body = parseBody(fillBody, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(await a.aiFills.estimate(principalOf(req), app, entity, body.field, body.scope));
+  });
+
+  r.get('/apps/:app/entities/:entity/ai/fills', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json({ fills: (await a.aiFills.list(entity)).map(fillView) });
+  });
+
+  r.post('/apps/:app/entities/:entity/ai/fills', design, async (req, res) => {
+    const body = parseBody(fillBody, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.status(202).json(fillView(await a.aiFills.start(actor(req), app, entity, body.field, body.scope)));
+  });
+
+  r.get('/apps/:app/entities/:entity/ai/fills/:id', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(fillView(await a.aiFills.get(entity, parseBody(id26, req.params.id))));
+  });
+
+  r.post('/apps/:app/entities/:entity/ai/fills/:id/cancel', design, async (req, res) => {
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(fillView(await a.aiFills.cancel(actor(req), app, entity, parseBody(id26, req.params.id))));
+  });
+
+  // ---------- outside tables (1.6.0, B-8501) ----------
+  // Attaching a table reads it unmasked through its connection, so the designer must also manage connections.
+
+  const attach = (req: Request) => {
+    if (!effectivePermissions(principalOf(req)).has('connections:manage')) throw forbidden('Attaching an outside table needs connections:manage as well as apps:design.', { step: 'permission' });
+  };
+
+  r.get('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    const { entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    const src = await a.sources.of(entity);
+    if (!src) throw notFound('Source');
+    res.json(await a.sources.view(src, entity.name));
+  });
+
+  r.put('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    attach(req);
+    const body = parseBody(sourceInputSchema, req.body);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.json(await a.sources.view(await a.sources.set(actor(req), app, entity, body), entity.name));
+  });
+
+  r.delete('/apps/:app/entities/:entity/source', design, async (req, res) => {
+    attach(req);
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    await a.sources.remove(actor(req), app, entity);
+    res.status(204).end();
+  });
+
+  r.post('/apps/:app/entities/:entity/source/pull', design, async (req, res) => {
+    const { app, entity } = await a.resolve(principalOf(req), param(req, 'app'), param(req, 'entity'));
+    res.status(202).json(await a.sources.pullNow(actor(req), app, entity));
   });
 
   // ---------- records ----------

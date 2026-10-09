@@ -42,8 +42,12 @@ server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1
 custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
 connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
 context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
-33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 38 are done and Sprint 39 is
-next in `Backlog-1.6.0.md` (B-5001, capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 39 (`Backlog-1.6.0.md`: model
+servers beyond Ollama, platform administration screens, groups depth, blob deduplication, image classification, the HTTP
+tool kind, prompt-injection defence, SCIM, the MCP server, the AI inventory, analytics, audit export, red-team suites,
+agent identities, handoffs, policies, DLP, legal hold, content credentials, chat artifacts, app packages and promotion,
+data model drafts, AI field fills, outside tables, entity APIs and app embedding) made version `1.6.0` (B-5001,
+capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
 `Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 44 to 50 in `Backlog-2.0.0.md`.
 Every console screen is live, plus the Person page opened from people's names. New screens start as boards in
 `design/prototype/` and go live in `web/` when every control is backed by the server. Check `Sprints.md` and the known
@@ -302,6 +306,43 @@ Run `node build.mjs` before smoke/shot. In cloud sessions set `CHROME=/opt/pw-br
   `compliance/holds.ts` (`s.legalHolds`, B-7602: dual-controlled holds whose `held()` the chat, memory and file purges
   read); `compliance/exports.ts` (`s.complianceExports`, B-7603: the `compliance.export` job writing sealed JSON Lines
   parts) behind `routes/compliance.ts`.
+- 1.6.0 Sprint 39a: `images/c2pa.ts` (B-7901: CBOR, JUMBF boxes, the manifest store with its assertions and claim, the
+  COSE_Sign1 signature, PNG `caBX` embedding and `verifyPng`, also `exprsn-ai c2pa:verify`), `images/content-credentials.ts`
+  (`s.contentCredentials`: signs in the image job through `PkiService.contentSigner`, the tenant's content-credentials
+  certificate with its key in custody, `pki_content_signers`, and verifies against `contentAnchors`); `chat/artifacts.ts`
+  (`s.chatArtifacts`, B-8001: `extractArtifacts` from fenced blocks on `chat.answerListeners`, `chat_artifacts` and sealed
+  `chat_artifact_versions`, the share reader's view through `sharing.readable`, `forTranscript` for shares and links,
+  `rawToken` and the public render route in `routes/sharing-public.ts`).
+
+- 1.6.0 Sprint 39b: `apps/packages.ts` (`s.apps.packages`, B-8201, B-8204: `exprsn-app/2` packages built, signed,
+  stored sealed in `app_packages`, verified before they are read, imported as a new app or applied to one in place by
+  name, laid out as files for git and read back; git through `withRepo` with the knowledge source's URL checks) and
+  `apps/pipelines.ts` (`s.apps.pipelines`, B-8202, B-8203: pipelines of three app slots, promotion with the production
+  approval as a workflow run with `caller_kind: app-deployment` routed back through `onCallerDone`, the job
+  `apps.deploy` with the backup first, history and rollback). `server/test/sprint39b-helpers.ts` builds the CRM app and
+  the approval workflow the three suites share.
+
+- 1.6.0 Sprint 39c: `apps/model-drafts.ts` (`s.apps.modelDrafts`, B-8301: a whole data model drafted through
+  `apps/ai.ts`, diffed against the app with `diffEntity` and `mergeDefinition`, applied in dependency order);
+  `aiPromptRefs`, `aiFieldsAffected` and `renderAiPrompt` in `apps/schema.ts` with `queueAiFill` in `apps/service.ts`
+  (B-8401: formula placeholders, `app_records.ai_pending`, one `apps.ai-fill` job per record and quiet window);
+  `apps/ai-fills.ts` (`s.apps.aiFills`, B-8402: the `apps.ai-fill-all` job, estimates priced through
+  `s.analytics.prices`, `writeAiField` on the service); `apps/sources.ts` (`s.apps.sources`, B-8501: `app_entity_sources`,
+  the `apps.source-pull` job and `apps.source-schedules` tick, `push` before every record write in `apps/service.ts`,
+  `upsertFromSource` and `deleteFromSource`) over `readRowsForApp` and `mutateRow` in `connections/service.ts` and the
+  drivers' `mutate` (`RowMutation`, `checkMutation`). `server/test/sprint39c-helpers.ts` has `SqliteTableDriver`, the
+  outside table the unit tests and the e2e server use.
+
+- 1.6.0 Sprint 39d: `apps/key-scope.ts` (B-8601: `appScopeGuard` on both apps routers and `underApps` in
+  `authenticate`, for API keys with `app_scope` and embedded sessions); `routes/apps-entity-api.ts` (the entity API at
+  `/apps/:app/:entity`, mounted after `routes/apps.ts`, plus the schema, OpenAPI, client and embed admin routes);
+  `apps/schema-api.ts` (`s.apps.schema`, B-8602, B-8603: `record` called by `createEntity`, `updateEntity`,
+  `removeEntity` and the forms service for every design change with `describeEntityChange`, the schema API's own
+  changes, `openapi` and `client` computed from the design); `apps/embeds.ts` (`s.apps.embeds`, B-8701, B-8702:
+  settings, keys, pages, the host-token `exchange` with `verifyWith` per algorithm and the tenant CA's `x5c`,
+  `resolveSession` for `exe_` bearers) behind `routes/apps-embed-public.ts` (`/embed/...` pages with their own CSP
+  and `/api/public/embeds/*`, outside `/api`); `web/js/embed.js` is the pages' script. `server/test/sprint39d-helpers.ts`
+  mints host tokens and builds a tenant CA without the signer.
 - **`repos/`**: tenant-scoped data access (tenants and workspaces, users, providers).
 - **`db/`**: Knex for `pg`, `mysql`, `sqlite`. Migrations are **imported** in `db/migrations/index.ts`, not discovered
   on disk: a new migration needs a file `00N_name.ts` and an entry in that map. Keep the schema dialect-agnostic

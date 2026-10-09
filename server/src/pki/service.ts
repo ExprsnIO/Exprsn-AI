@@ -12,6 +12,7 @@ import { AcmeServer } from './acme.js';
 import { fromPem, pem } from './asn1.js';
 import { buildPkcs12 } from './pkcs12.js';
 import { CUSTODY_MESSAGE, PkiKeys, type KeyRef } from './keys.js';
+import { derToRaw } from '../images/c2pa.js';
 import { MAX_OCSP_REQUESTS, OCSP_STATUS, ocspError, ocspResponse, OcspRequestError, parseOcspRequest, tbsResponseData, type SingleResponse, type SingleStatus } from './ocsp.js';
 import { buildCertificate, certificateParts, classify, CSR_KEY_TYPES, distinguishedName, KU, newSerial, OIDS, parseCsr, REASONS, reasonName, signed, spkiKeyBits, spkiOf, tbsCrl, type CsrKeyType, type IssuerKeyType, type San } from './x509.js';
 
@@ -170,6 +171,26 @@ const derOf = (certPem: string): Buffer => fromPem(certPem, 'CERTIFICATE');
 const spkiFromPem = (publicPem: string): Buffer => spkiOf(createPublicKey(publicPem));
 
 /** An error the routes turn into a problem with this status. */
+/** 1.6.0 (B-7901): the tenant's content-credentials signing certificate and its key in custody. */
+export interface ContentSignerRow {
+  id: string;
+  tenant_id: string;
+  issuer_id: string;
+  certificate_id: string;
+  custody: 'signer' | 'openbao';
+  key_name: string;
+  key_wrapped: string | null;
+  key_type: IssuerKeyType;
+  public_key_pem: string;
+  certificate_pem: string;
+  fingerprint: string;
+  not_after: number;
+  state: 'active' | 'retired';
+  created_at: number;
+}
+const OID_DOCUMENT_SIGNING = '1.3.6.1.5.5.7.3.36';
+const OID_EMAIL_PROTECTION = '1.3.6.1.5.5.7.3.4';
+
 export class PkiError extends Error {
   constructor(
     readonly status: number,
@@ -916,6 +937,113 @@ export class PkiService {
   }
 
   /** The notice thresholds in days, largest first (PKI_EXPIRY_NOTICE_DAYS). */
+  // ---------- content credentials (1.6.0, B-7901) ----------
+
+  /**
+   * The tenant's content-credentials certificate: an end-entity certificate under the tenant's active intermediate
+   * (digitalSignature; id-kp-documentSigning and id-kp-emailProtection, which C2PA validators accept) whose key is
+   * in custody like every CA key. Made on first use, listed in `pki_certificates` (so it shows on the Certificates
+   * screen and can be revoked there) and replaced when it is revoked, within a week of expiry, or when the
+   * intermediate it came from is no longer the active one. Null when the tenant has no active intermediate or no
+   * custody is configured: images are then not C2PA-signed, and `reason` says why.
+   */
+  async contentSigner(tenantId: string): Promise<{ signer: ContentSignerRow; chain: string[] } | { signer: null; reason: string }> {
+    const issuer = await this.activeIntermediate(tenantId);
+    if (!issuer) return { signer: null, reason: 'The tenant has no active issuing CA; create one on the Certificates screen.' };
+    if (!this.keys.custody()) return { signer: null, reason: CUSTODY_MESSAGE };
+    const now = Date.now();
+    const current = (await this.db('pki_content_signers').where({ tenant_id: tenantId, state: 'active' }).orderBy('created_at', 'desc').first()) as ContentSignerRow | undefined;
+    if (current) {
+      const cert = (await this.db('pki_certificates').where({ id: current.certificate_id }).first('state')) as { state: string } | undefined;
+      const fresh = cert?.state === 'valid' && current.issuer_id === issuer.id && Number(current.not_after) > now + 7 * DAY;
+      if (fresh) return { signer: { ...current, not_after: Number(current.not_after), created_at: Number(current.created_at) }, chain: (await this.chain(issuer)).map((i) => i.certificate_pem) };
+      await this.db('pki_content_signers').where({ id: current.id }).update({ state: 'retired' });
+    }
+    const id = ulid();
+    const { ref, publicKey } = await this.keys.create(`c2pa-${id}`, 'ecdsa-p256');
+    const spki = spkiOf(publicKey);
+    const notBefore = now - BACKDATE_MS;
+    const notAfter = Math.min(notBefore + BACKDATE_MS + 398 * DAY, issuer.not_after);
+    const serial = newSerial();
+    const commonName = 'Exprsn-AI content credentials';
+    const der = await buildCertificate(
+      {
+        serial,
+        issuerName: Buffer.from(issuer.subject_der, 'base64'),
+        subjectName: distinguishedName(commonName, issuer.organization),
+        spki,
+        issuerSpki: spkiFromPem(issuer.public_key_pem),
+        notBefore,
+        notAfter,
+        keyType: issuer.key_type,
+        keyUsage: KU.digitalSignature,
+        extKeyUsage: [OID_DOCUMENT_SIGNING, OID_EMAIL_PROTECTION],
+        sans: [],
+        crlUrl: this.crlUrl(issuer.id),
+        ocspUrl: this.ocspUrl(),
+        caIssuersUrl: this.caUrl(issuer.id)
+      },
+      (tbs) => this.keys.sign(refOf(issuer), tbs)
+    );
+    if (!new X509Certificate(der).verify(createPublicKey(issuer.public_key_pem))) throw new PkiError(502, 'The key store returned a signature that does not verify.');
+    const certId = ulid();
+    const fingerprint = createHash('sha256').update(der).digest('hex');
+    await this.db('pki_certificates').insert({
+      id: certId,
+      tenant_id: tenantId,
+      issuer_id: issuer.id,
+      profile_id: null,
+      serial: serial.toString('hex'),
+      common_name: commonName,
+      sans: '[]',
+      key_type: 'ec-p256',
+      not_before: notBefore,
+      not_after: notAfter,
+      certificate_pem: pem(der, 'CERTIFICATE'),
+      fingerprint,
+      state: 'valid',
+      revoked_at: null,
+      revocation_reason: null,
+      invalidity_date: null,
+      revoked_by: null,
+      requested_by: null,
+      created_at: now
+    });
+    const row: ContentSignerRow = {
+      id,
+      tenant_id: tenantId,
+      issuer_id: issuer.id,
+      certificate_id: certId,
+      custody: ref.custody,
+      key_name: ref.keyName,
+      key_wrapped: ref.wrapped,
+      key_type: ref.keyType,
+      public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }) as string,
+      certificate_pem: pem(der, 'CERTIFICATE'),
+      fingerprint,
+      not_after: notAfter,
+      state: 'active',
+      created_at: now
+    };
+    await this.db('pki_content_signers').insert(row);
+    await this.s().audit.append({ tenantId, action: 'pki.content_signer.created', kind: 'system', actor: { service: 'images' }, target: { certificate: certId, issuer: issuer.id }, detail: { serial: row.id, fingerprint, notAfter, custody: ref.custody, replaced: current?.id ?? null } });
+    this.s().log.info({ tenant: tenantId, certificate: certId }, 'content-credentials certificate issued');
+    return { signer: row, chain: (await this.chain(issuer)).map((i) => i.certificate_pem) };
+  }
+
+  /** Signs C2PA claim bytes with the tenant's content-credentials key: raw ES256 (r || s). */
+  async signContent(signer: ContentSignerRow, data: Buffer): Promise<Buffer> {
+    const der = await this.keys.sign({ custody: signer.custody, keyName: signer.key_name, wrapped: signer.key_wrapped, keyType: signer.key_type }, data);
+    return derToRaw(der);
+  }
+
+  /** The certificates a verifier may trust for this tenant's content credentials: its intermediates and the root. */
+  async contentAnchors(tenantId: string): Promise<string[]> {
+    const issuers = await this.issuers(tenantId, true);
+    const root = await this.activeRoot();
+    return [...issuers.map((i) => i.certificate_pem), ...(root ? [root.certificate_pem] : [])];
+  }
+
   noticeDays(): number[] {
     return [...new Set(this.cfg.PKI_EXPIRY_NOTICE_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x > 0))].sort((a, b) => b - a);
   }

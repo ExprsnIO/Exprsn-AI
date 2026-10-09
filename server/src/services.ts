@@ -64,6 +64,7 @@ import { WorkflowTriggers } from './workflows/triggers.js';
 import { MediaService } from './media/service.js';
 import { FfmpegRunner, type MediaRunner } from './media/runner.js';
 import { ImageService } from './images/service.js';
+import { ContentCredentials } from './images/content-credentials.js';
 import { createBackends, type ImageBackend } from './images/backends.js';
 import { HttpSafety, noSafety, type ImageSafety } from './images/safety.js';
 import { createVectorStore, LazyVectorStore, type VectorStore } from './platform/vectors.js';
@@ -85,6 +86,7 @@ import { TenantIntegrations } from './integrations/hosts.js';
 import { WebhookService } from './webhooks/service.js';
 import { PromptService } from './prompts/service.js';
 import { ConversationSharing } from './chat/sharing.js';
+import { ChatArtifacts } from './chat/artifacts.js';
 import { BillingService } from './billing/service.js';
 import { StripeProvider, type BillingProvider } from './billing/stripe.js';
 import { OpenAiService } from './openai/service.js';
@@ -213,6 +215,10 @@ export interface Services {
   media: MediaService;
   /** Image generation on ComfyUI or diffusers workers (Sprint 8). */
   images: ImageService;
+  /** 1.6.0 (B-7901): C2PA content credentials for generated images. */
+  contentCredentials: ContentCredentials;
+  /** 1.6.0 (B-8001): versioned artifacts of chat answers. */
+  chatArtifacts: ChatArtifacts;
   /** The image-safety classifier for generated images and sampled video frames. */
   imageSafety: ImageSafety;
   /** Vectors for retrieval: pgvector on PostgreSQL with the extension, else a table scan (`platform/vectors.ts`). */
@@ -376,6 +382,8 @@ export interface ServiceOverrides {
   /** OpenBao database-engine credentials for data connections (tests point it at a fake). */
   dynamicCredentials?: DynamicCredentials | null;
   git?: GitFetcher;
+  /** 1.6.0 (B-8204): git options for app packages (tests allow file:// repositories). */
+  appGit?: { allowFile: boolean; timeoutMs: number };
   trainer?: TrainerBackend;
   acme?: AcmeClient;
   kerberos?: KerberosVerifier;
@@ -484,7 +492,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     return p;
   }, log);
   // Sprint 8 services read the guardrails and the safety classifier through `s`, so a later replacement is used.
-  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
+  const workflows = new WorkflowService({ db, keys, gateway, quotas, audit, bus, jobs, notifications, calc, registry, tools, log, guardrails: () => s.guardrails, principalFor: (t, u) => loadPrincipal(s, t, u, {}), http: { hosts: cfg.WORKFLOW_HTTP_HOSTS.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean), allowLoopback: cfg.WORKFLOW_HTTP_ALLOW_LOOPBACK }, tenantHosts: (t) => s.integrations.allowList(t), onCallerDone: async (t, kind, id) => void (kind === 'agent-run' ? await agents.resumeAwaiting(t, id) : kind === 'app-deployment' ? await s.apps.pipelines.approvalDone(t, id) : undefined), vault: { check: (p, refs) => s.vault.assertRefsReadable(p, refs), read: (p, ref, via) => s.vault.readAs(p, ref, { via }) }, chains, agents: () => agents, refs: chainRefs });
   tools.useWorkflows(workflows);
   // Sprint 34 (B-4102): agents delegate to agents through the dispatcher.
   tools.useAgents(agents);
@@ -506,7 +514,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     ...(cfg.MEDIA_WORK_DIR ? { workDir: cfg.MEDIA_WORK_DIR } : {}),
     ...(cfg.MEDIA_WHISPER_BIN && cfg.MEDIA_WHISPER_MODEL ? { whisper: { bin: cfg.MEDIA_WHISPER_BIN, model: cfg.MEDIA_WHISPER_MODEL } } : {})
   });
-  const images = new ImageService({ db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
+  const images = new ImageService({ get c2pa() { return s.contentCredentials; }, db, keys, blobs, jobs, bus, kms, audit, quotas, notifications, log, backends: overrides.imageBackends ?? createBackends(cfg.IMAGE_BACKENDS, servicePolicy(cfg)), safety: () => s.imageSafety, safetyThreshold: cfg.IMAGE_SAFETY_THRESHOLD, safetyRequired: cfg.IMAGE_SAFETY_REQUIRED, guardrails: () => s.guardrails, provenanceKey: `${cfg.OPENBAO_KEY_PREFIX}image-provenance` });
   // Checkpoints go through whatever `s.guardrails` is when they run.
   const checkpoint: Guardrails = { check: (input) => s.guardrails.check(input) };
   const vectors = overrides.vectors ?? new LazyVectorStore(() => createVectorStore(db, cfg.DB_CLIENT, log));
@@ -535,6 +543,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
   agents.memoryExtract = (e) => memory.onRun(e);
   memory.runTexts = (t, id) => agents.runTexts(t, id);
   chat.answerListeners.push((e) => memory.onAnswer(e));
+  // 1.6.0 (B-8001): fenced blocks in a finished answer become artifacts (or versions of them).
+  chat.answerListeners.push((e) => void s.chatArtifacts.onAnswer(e).catch((err: Error) => log.warn({ err: err.message, message: e.messageId }, 'artifact extraction failed')));
   const s: Services = {
     cfg,
     db,
@@ -604,6 +614,8 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     webhooks: new WebhookService(() => s, { allowedHosts: cfg.WEBHOOK_ALLOWED_HOSTS, timeoutMs: cfg.WEBHOOK_TIMEOUT_MS, maxAttempts: cfg.WEBHOOK_MAX_ATTEMPTS, retryBaseMs: cfg.WEBHOOK_RETRY_BASE_MS, breakerThreshold: cfg.WEBHOOK_BREAKER_THRESHOLD, breakerCooldownMs: cfg.WEBHOOK_BREAKER_COOLDOWN_MS, endpointConcurrency: Math.max(1, Math.floor(cfg.JOB_CONCURRENCY / 2)) }),
     prompts: new PromptService(() => s),
     sharing: new ConversationSharing(() => s),
+    chatArtifacts: new ChatArtifacts(() => s),
+    contentCredentials: new ContentCredentials(() => s),
     billing: new BillingService(
       () => s,
       overrides.billingProvider !== undefined ? overrides.billingProvider : cfg.BILLING_PROVIDER === 'stripe' && cfg.STRIPE_SECRET_KEY ? new StripeProvider({ secretKey: cfg.STRIPE_SECRET_KEY, apiUrl: cfg.STRIPE_API_URL, timeoutMs: 30_000, daysUntilDue: cfg.STRIPE_DAYS_UNTIL_DUE }) : null
@@ -658,7 +670,7 @@ export function createServices(cfg: Config, db: Db, log: Logger, metrics = new M
     feedGenerators: new FeedGenerators(() => s, { maxPerTenant: cfg.FEEDS_MAX_PER_TENANT, itemsMax: cfg.FEED_ITEMS_MAX }),
     // 1.5.0, Sprint 31: the PDS.
     pds: new PdsService(() => s),
-    apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH }),
+    apps: new AppService(() => s, { maxImportBytes: cfg.APPS_IMPORT_MAX_BYTES, maxImportRows: cfg.APPS_IMPORT_MAX_ROWS, maxExportRows: cfg.APPS_EXPORT_MAX_ROWS, maxBulk: cfg.APPS_BULK_MAX, triggerMaxDepth: cfg.APPS_TRIGGER_MAX_DEPTH, git: overrides.appGit ?? { allowFile: cfg.APPS_GIT_ALLOW_FILE, timeoutMs: cfg.APPS_GIT_TIMEOUT_MS } }),
     // 1.4.0, Sprint 27c: groups and events.
     groups: new GroupService(() => s, { inviteDays: cfg.GROUP_INVITE_DAYS, requestDays: cfg.GROUP_REQUEST_DAYS }),
     calendar: new CalendarService(() => s, { feedMaxLabel: cfg.CALENDAR_FEED_MAX_LABEL }),
@@ -908,6 +920,7 @@ export function startSchedules(s: Services): void {
   s.pds.schedule(); // 1.5.0, Sprint 31 (B-2904): events past the backfill window and unused blobs
   s.firehose.start(); // Sprint 27 (B-1908): firehose consumers, one instance per subscription through a lease
   s.apps.triggers.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // Sprint 27 (B-2206): schedule triggers
+  s.apps.sources.schedule(s.scheduler, s.cfg.APPS_SCHEDULE_TICK_SECONDS * 1000); // 1.6.0, Sprint 39c (B-8501): pulls from outside tables
   s.workflowTriggers.schedule(s.scheduler); // 1.5.0, Sprint 32b (B-3903): workflow schedule triggers
   s.channels.schedule(); // Sprint 28a (B-2303, B-2304): IMAP polls and retention purges
   s.feed.digests.schedule(s.scheduler, activeTenants); // Sprint 28c (B-2705): trending hashtags and weekly digests

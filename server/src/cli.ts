@@ -48,6 +48,7 @@ Commands:
                                single-use enrolment link is printed (PASSWORD_INVITE_HOURS)
   audit:verify [--tenant slug] Recompute the audit hash chain and check its signed checkpoints
   audit:verify-export <file.jsonl> Verify a JSONL audit export offline against its chain proof (1.6.0, B-7501)
+  c2pa:verify <file.png> [anchor.pem…] Verify a generated image's C2PA content credentials offline (1.6.0, B-7901)
   kms:rotate [--tenant slug]   Start a new version of the tenant's data key (old values stay readable)
   kms:rewrap                   Re-wrap every data key (and re-sign checkpoints, backup manifests, image provenance and
                                training model cards) from the previous key-encryption key to the current one, then
@@ -351,6 +352,18 @@ async function main(): Promise<void> {
       case 'tenant:create':
         await tenantCreate(s, rest);
         break;
+      case 'c2pa:verify': {
+        const file = rest[0];
+        if (!file) throw new Error('Usage: c2pa:verify <file.png> [anchor.pem…]');
+        const { readFileSync } = await import('node:fs');
+        const { verifyPng } = await import('./images/c2pa.js');
+        const { fromPem } = await import('./pki/asn1.js');
+        const anchors = rest.slice(1).map((f) => fromPem(readFileSync(f, 'utf8'), 'CERTIFICATE'));
+        const r = verifyPng(readFileSync(file), anchors.length ? { anchors } : {});
+        process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+        if (!r.verified) process.exitCode = 2;
+        break;
+      }
       case 'audit:verify-export': {
         const file = rest[0];
         if (!file) throw new Error('Usage: audit:verify-export <file.jsonl>');

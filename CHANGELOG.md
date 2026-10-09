@@ -1,6 +1,32 @@
 # Changelog
 
-## 1.6.0 (in progress)
+## 1.6.0
+
+### Image provenance and chat artifacts (Sprint 39a, B-7901, B-8001)
+
+- Migration `041_provenance_artifacts`: `image_jobs.c2pa`, `pki_content_signers`, `chat_artifacts`,
+  `chat_artifact_versions`.
+- Content credentials (B-7901): a generated PNG carries a C2PA manifest store in a `caBX` chunk (`c2pa.actions`,
+  `c2pa.hash.data` over every byte outside the chunk, `io.exprsn.generation`), signed as a COSE_Sign1 (ES256) by the
+  tenant's content-credentials certificate, which the tenant's issuing CA makes on first use with its key in custody
+  and lists among the tenant's certificates (revoke it there and the next image signs with a new one). The manifest
+  travels with the bytes through the blob store, downloads and attachments; `GET /api/images/:id/content-credentials`
+  and `exprsn-ai c2pa:verify <file.png> [anchor.pem…]` read it back and check the claim hashes, the data hash, the
+  signature, the chain and its trust. The HMAC manifest of Sprint 20 stays and still verifies. Without an issuing CA
+  or key custody the image keeps the HMAC manifest and says why. Setting `IMAGE_C2PA`. Built from the
+  specification's parts (CBOR, JUMBF, COSE) in `server/src/images/c2pa.ts`; the deviations a conformance validator
+  may flag are in `docs/security.md`.
+- Versioned artifacts (B-8001): the fenced blocks of a finished answer become artifacts of the conversation, named
+  from the fence or `<language>-<n>`; a later turn that changes one adds a version and the earlier ones stay
+  readable, the same content adds none. `GET /api/conversations/:id/artifacts` and `.../versions/:n` for owners and
+  share readers; transcripts of shares and links carry the artifacts of the shown messages. HTML renders in a
+  sandboxed iframe on `GET /api/public/artifacts/:vid/raw`, a short-lived capability URL with its own CSP (an opaque
+  origin with no access to the console, its cookies or the API). Settings `CHAT_ARTIFACT_MIN_CHARS`,
+  `CHAT_ARTIFACT_MAX_BYTES`, `CHAT_ARTIFACT_RAW_TTL_SECONDS`.
+- Console: the Images inspector and download dialog show the content credentials beside the HMAC manifest, with a
+  details dialog of every check; the Chat inspector (and the shared and public link views) has an Artifacts panel with
+  chips under each answer, a version switcher, the sandboxed render and text views. Prototype boards first;
+  `e2e/tests/chat.spec.ts` and `images.spec.ts` extended with axe-core.
 
 ### AI inventory, analytics and audit export (Sprint 38a, B-7301 to B-7302, B-7401 to B-7403, B-7501)
 
@@ -210,6 +236,105 @@
 - Console: the Apps screen's Policies tab (designers) and the Usage and audit screen's Compliance tab (DLP rules and
   patterns with a test box, legal holds, compliance exports). `e2e/tests/apps-policies.spec.ts`,
   `e2e/tests/compliance.spec.ts`.
+
+
+### App packages, environments and promotion (Sprint 39b, B-8201 to B-8204)
+
+- Migration `041b_app_packages`: `app_packages`, `app_pipelines`, `app_deployments`. Settings `APPS_PACKAGE_MAX_BYTES`,
+  `APPS_DEPLOYMENT_HISTORY_DAYS`, `APPS_GIT_TIMEOUT_MS`, `APPS_GIT_ALLOW_FILE`. Job `apps.deploy`.
+- App packages (B-8201): `exprsn-app/2`, the whole of an app's design (entities with their fields, formulas and state
+  machines, forms, record and schedule triggers naming their workflows, the row and field policies, and the published
+  workflows the triggers name as signed workflow bundles), with the records when asked for, signed with the KMS key
+  over its canonical JSON, numbered per app and kept sealed. Import verifies the signature over exactly what arrived
+  before anything is read (`422 Package refused`, audited `app.import.refused`); the old bundle door takes a package
+  too. A package imports as a new app or applies to an app in place with entities, forms, triggers and policies
+  reconciled by name (an entity still holding records is kept and reported). `server/src/apps/packages.ts`.
+- Environments and promotion (B-8202): a pipeline names three apps as development, test and production and the
+  workflow whose approval step guards production. A promotion to test packages the development app now; a promotion
+  to production lands the exact package the last successful promotion to test landed (a stage cannot be skipped),
+  once a run of the approval workflow, started with the deployment as its input and caller, succeeds; a rejected,
+  failed or expired run rejects the deployment and tells the requester. `WorkflowService.start` takes a `caller`.
+  Audited `app.package.promotion.requested`, `app.package.promotion.approved`, `app.package.promotion.rejected`,
+  `app.package.promoted`. `server/src/apps/pipelines.ts`.
+- Backups, history and rollback (B-8203): every deployment first packages the target (`source: backup`); the history
+  keeps source, target, version, who, state and the report for `APPS_DEPLOYMENT_HISTORY_DAYS`; a rollback deploys the
+  backup onto the same stage as a deployment of its own, audited `app.package.rolled_back`; a failure is audited
+  `app.package.deployment.failed` and notified.
+- Git export and import (B-8204): a package pushed to a repository as one readable JSON file per object
+  (`package.json` with the signature, `app.json`, `entities/`, `forms/`, `triggers/`, `policies/`, `workflows/`,
+  `records/`) and read back from one, reassembled in signing order and verified like a pasted package; https only
+  (`file://` when `APPS_GIT_ALLOW_FILE`), a vault-held token answered to git through a credential helper. Audited
+  `app.package.pushed`.
+- Console (B-8201 to B-8204): the Apps screen's Deployments tab for designers: packages (make, download, push to git,
+  import, import from git), the pipeline's stages with promote, edit and delete, and the deployment history with
+  rollback; the page refreshes while a deployment is going. Prototype board first; `e2e/tests/apps-deployments.spec.ts`
+  with axe-core.
+
+### Data model generation, AI fields and outside database sync (Sprint 39c, B-8301, B-8401, B-8402, B-8501)
+
+- Migration `041c_model_gen_sync`: `app_ai_fills`, `app_entity_sources`, `app_records.ai_pending` and
+  `app_records.external_key`. Settings `APPS_AI_DEBOUNCE_MS`, `APPS_AI_FILL_MAX_ROWS`, `APPS_SOURCE_PULL_MAX_ROWS`.
+  Jobs `apps.ai-fill-all`, `apps.source-pull`, `apps.source-schedules`.
+- Data model drafts (B-8301): a description of an app becomes a draft of its whole data model from a local model
+  through a published profile (entities, typed fields, relations, formulas, state machines, record triggers naming
+  existing workflows), validated like a saved entity and shown as a diff per entity (new, changed, fields added,
+  changed, omitted but kept, states); accepting it creates the new entities in dependency order, extends existing ones
+  without removing anything and creates the triggers whose workflow exists, in one request. `POST
+  /api/apps/{app}/model/draft` and `/model/apply`; audited `app.model.drafted` / `app.model.applied`.
+- AI field prompts (B-8401) take field names and formulas over fields as placeholders (`{{upper(name)}}`), checked when
+  the entity is saved; an edit regenerates only the AI fields that read a changed field, once per quiet window.
+- AI fills over every row (B-8402): fill the empty values or refresh every record of one AI field as a job with an
+  estimate first (records, tokens, the cost at the tenant's model price), progress and token totals on the fill, and a
+  cancel between records; `/api/apps/{app}/entities/{entity}/ai/estimate|fills`; audited `app.ai.fill.started` /
+  `cancelled` / `finished`.
+- Outside tables as entities (B-8501): an entity backed by a table of a PostgreSQL or MySQL data connection: a pull (on
+  demand or every N minutes) brings its rows in as records keyed by the key column, typed by the fields, with the
+  state from a mapped column and rows gone removed; with writes on, a record created, changed, moved or deleted in
+  the app reaches the table first (insert, update, delete through the drivers' new row mutation) so a refused outside
+  write changes nothing here; attaching needs `apps:design` and `connections:manage` and an entity label covering the
+  connection's. `/api/apps/{app}/entities/{entity}/source` and `/source/pull`; audited
+  `app.entity.source.set` / `updated` / `removed` / `pulled` / `pull_failed`.
+- Console (Apps screen): the draft dialog with its diff and editable JSON, an "AI fills over every row" panel and an
+  "Outside table" panel on the Entities tab; prototype boards first; `e2e/tests/apps-model.spec.ts` with axe-core.
+- Unit tests on SQLite (the outside table as a SQLite stand-in behind the real connection flow) and an integration
+  test through the real PostgreSQL and MySQL drivers.
+
+### Entity APIs and app embedding (Sprint 39d, B-8601 to B-8603, B-8701, B-8702)
+
+- Migration `041d_entity_api_embeds`: `api_keys.app_scope`, `app_schema_versions`, `app_embeds`, `app_embed_keys`,
+  `app_embed_pages`, `app_embed_sessions`. New settings `APP_EMBED_MAX_TTL_SECONDS` (3600) and
+  `APP_EMBED_SESSION_PER_MINUTE` (30).
+- The entity API (B-8601): every entity of an app is a REST resource at `/api/apps/:app/:entity`: list with a JSON
+  `filter`, `where=field:op:value` conditions, `sort`, `q`, `limit`, `offset` or `cursor`, and `include=related` for the
+  records the reference and lookup fields point at; read, create, update with `version`, transition and delete. The
+  same service as the records routes, so policies, masks, labels, workspaces and audit apply unchanged. API keys may
+  be limited to one app or one entity (`POST /api/me/api-keys {app: {app, entity?}}`, `records:read` and
+  `records:write` only): accepted under `/api/apps` alone and refused on another app or entity.
+- Schema versions and the schema API (B-8602): every design change, whichever route makes it, records a version
+  with a hash of the whole design (`app_schema_versions`, audited `app.schema.versioned`); `/api/apps/:app/schema`
+  reads the design and its versions, and creates, replaces or deletes entities, fields, state machines and forms.
+- OpenAPI and a client per app (B-8603): `GET /api/apps/:app/openapi.json`, an OpenAPI 3.1 document typed from the
+  entity definitions with the schema version and hash (its `ETag`), and `client.ts` or `client.js`, a generated
+  client that creates a record against a fresh app with no hand-written code.
+- Public embeds (B-8701): a public form published as an embed page under a random id (`/embed/:id`), served with
+  `frame-ancestors` naming the app's allowed host sites and no `X-Frame-Options`; opened and submitted by that id
+  through `/api/public/embeds`, on the public submission path, with the form's link token never on the page.
+- Signed embeds (B-8702): keys registered per app (ES256, RS256, EdDSA public keys, an HS256 secret shown once, or
+  the tenant CA verifying the token's `x5c`); a host token with the app as audience, `exp`, `jti` (once per key) and
+  the claim that names the person is exchanged at `/api/public/embeds/session` for an embedded session, a bearer of
+  its own apart from console sessions, inside the app's entities, read-only unless the app allows writes, capped by
+  the app's limit and the server's; revoking a key ends its sessions; every exchange is audited.
+- Console: the Apps screen's API tab (routes per entity, a curl, the schema version and hash, the downloads, the
+  versions table) and Embed tab (settings, keys, pages with their iframe snippet, sessions); the embed pages
+  (`web/js/embed.js`); Settings lets a key be limited to an app and an entity.
+- Prototype boards for the two tabs and the key option; `e2e/tests/apps-api.spec.ts` with axe-core on the tabs and
+  the embed page; unit tests `sprint39d-entity-api`, `sprint39d-schema-api` (the generated client runs against the
+  test server), `sprint39d-embeds` (every key kind, a tenant CA built in the test); an integration test for
+  PostgreSQL and MySQL.
+- Known gaps in `docs/security.md`: an entity named like one of the app's own route segments is reached only through
+  the records routes; a schema version holds the whole definition, not a diff, and nothing restores one; an
+  app-limited key is refused on `/v1` and the MCP server outright; the tenant CA path checks one intermediate and
+  no OCSP; the session's `host` is the token's `iss`; a reload of an embed page needs a new host token.
 
 ### Image classification in Knowledge (Sprint 36c, B-8801 to B-8805)
 

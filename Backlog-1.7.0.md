@@ -30,7 +30,7 @@ B-29 PDS, and on 1.6.0's HTTP tool kind (B-89), per-post visibility (B-4901), gr
 
 | Sprint | Theme | Items | Points | Status |
 | --- | --- | --- | --- | --- |
-| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | Planned |
+| 40 | Agents, tools and skills in chat; dataset import, knowledge sets and the Import screen (Sprint 38 until 2026-10-07) | B-4001–B-4009, B-3804–B-3807 | 72 | Next |
 | 41 | Redis for multi-process installs; workflows calling listed public hosts; the vault's system scope, boot order, hot path, leases and transit HMAC; dynamic API-key leases; held messages; evidence retention and legal hold; the guardrail rule builder | B-9001–B-9002, B-9101–B-9102, B-9201–B-9205, B-9301–B-9302, B-9401–B-9404, B-9501–B-9504, B-9601–B-9602 | 74 | Planned |
 | 42 | Sessions, API keys, signing keys and third-party credentials in the vault; groups: bans, invite links, profile fields, search, custom roles, group moderation, event extras, notifications, linked conversations | B-9206–B-9209, B-9701–B-9709 | 72 | Planned |
 | 43 | Groups as access subjects; response cache; plugin UI surfaces; `did:exprsn`; cross-posting to the hosted PDS; release | B-9801–B-9805, B-9901–B-9903, B-11201–B-11203, B-11301–B-11302, B-11401–B-11403, B-5901 | 65 | Planned |

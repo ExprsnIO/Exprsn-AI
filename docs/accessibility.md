@@ -161,6 +161,29 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   request in a toast that names the valid placeholders. Explain is a labelled form (reader, entity, record, field) whose
   answer is a key-value list and a table: reachable or not, and each grant, is a pill with its word, with the policy
   named in text. `e2e/tests/apps-policies.spec.ts` runs axe-core on the tab with an explain answer.
+- **Apps: Deployments tab** (B-8201 to B-8204, Sprint 39b): a tab for designers with three panels. Environments shows
+  the pipeline's three stages as cards (stage name as an eyebrow, the app, its workspace, the deployed version as a
+  pill with its number) joined by decorative arrows (`aria-hidden`), the approval workflow in a key-value list, a
+  notice while a deployment is going, and text buttons to promote (disabled while one is going), edit or delete the
+  pipeline; without a pipeline, an empty state and a Create button. Packages is a table (version, source as a pill with
+  its word, hash with the full value as a title, contents, size, note, made) with text buttons to download or push each
+  one, and buttons to make, import or import from git. The history table shows each deployment's stages as text, its
+  state as a pill with its word (and the error as text), who, when, the report as a sentence and a Roll back button.
+  Every dialog is a labelled form (package contents and note; repository, branch, path, credential and message; the
+  pipeline's name, approval workflow and three app selects; the pasted package) with the server's problem shown inside
+  it; promotion and rollback go through a confirm dialog that says what will happen. A refused package is a problem
+  panel on the page. `e2e/tests/apps-deployments.spec.ts` runs axe-core on the tab with a pipeline and with a refused
+  package.
+
+- **Apps: the data model draft, AI fills and the outside table** (B-8301, B-8402, B-8501, Sprint 39c): the draft
+  dialog is a labelled form (profile, label, description) whose answer is a table (entity, change as a pill with its
+  word, fields added, changed and omitted as pills, states, problems) with the triggers as a list and the draft JSON in
+  a native `details` element the designer can edit; the live region announces the model's progress. The AI fills
+  panel lists each field with text buttons (Estimate, Fill empty, Refresh all), the estimate as a notice, and the fills
+  as a table whose running row carries a `meter` with its text beside it and a Cancel button; a confirm dialog states
+  the estimate before a fill starts. The outside table panel is a key-value list and text buttons; the attach dialog
+  is a labelled form (connection, table, key column, key field, state column, pull interval, column mapping, two
+  checkboxes). `e2e/tests/apps-model.spec.ts` runs axe-core on the draft dialog, the fills panel and the source panel.
 - **Usage and audit: Compliance tab** (B-7601 to B-7603, Sprint 38c): three panels (DLP, Legal holds, Compliance
   exports), each opened by a sentence of what it does. Rules, holds and exports are tables whose state, action and
   label are pills or labels with their word; the DLP test shows what fired as a notice whose kind (info, warning,
@@ -168,6 +191,28 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   labelled forms (detectors and scopes as labelled checkboxes, the approver a labelled select of named people); every
   refusal (a pattern in use, dual control, an export above one's clearance) is a problem block with its trace id.
   `e2e/tests/compliance.spec.ts` runs axe-core on the tab.
+- **Apps: API tab** (B-8601 to B-8603, Sprint 39d): a tab for designers with three panels. The entity API is a table
+  (method as a pill with its word, path, the permission, what it does) and a `pre` with a curl to try; the OpenAPI
+  document and the client are links with `download` and buttons that say which file they fetch, with the schema
+  version and hash in a key-value list; the schema versions are a table whose change and source are pills with their
+  words. `e2e/tests/apps-api.spec.ts` runs axe-core on the tab.
+- **Apps: Embed tab** (B-8701, B-8702, Sprint 39d): a labelled form (the host sites as a labelled textarea, Public
+  pages, Signed embeds and Writes as switches with `role="switch"` and `aria-checked`, the claim as a labelled input
+  and select, the longest session as a labelled select, the entities as a labelled input) with a sentence of hint
+  each; the audience, page address and `frame-ancestors` in a key-value list. Keys, pages and sessions are tables whose
+  state is a pill with its word, with text buttons (Revoke, Snippet, Remove) labelled by the key or form. The key
+  dialog is a labelled form; an HS256 secret is a warning notice shown once with a Copy button. The snippet dialog is
+  a `pre`. Refusals are problem blocks with the trace id. axe-core runs on the tab in `apps-api.spec.ts`.
+- **The embed pages** (B-8701, B-8702, Sprint 39d): `/embed/<id>` and `/embed/app/<tenant>/<app>` reuse the console
+  stylesheet (its colours, focus outlines and dark theme) with `lang`, a viewport, one `h1` (the form or app title) and
+  a `main` with `aria-live="polite"` for loading and refusals. A public form is a labelled form (each field a `label`
+  bound to its control, hints as text, required fields marked for the browser, fields hidden by a visibility rule
+  with `hidden`), a status line read by assistive technology, and the thank-you as a notice. A signed embed shows the
+  entities as a tablist, a labelled search, a records table with headers, Next page and First page buttons, and a
+  labelled New record form when writes are allowed. axe-core runs on a submitted embed page in `apps-api.spec.ts`.
+- **Settings: a key limited to an app** (B-8601, Sprint 39d): the Create API key dialog gains a labelled select (Limit
+  to an app) and a labelled input (Entity) with a sentence of hint each; a key so limited is marked in the list with a
+  pill saying so. A scope the limit refuses is a toast naming the scopes allowed.
 - **Models: model servers and server-held models** (B-4307, Sprint 35a): Model servers is a drawer of one panel per
   Chat Completions server, its health a pill with its word (healthy, unreachable), never colour alone, and an
   unreachable server says so in a notice; Probe again is disabled with a reason (`title`) while the server does not
@@ -337,6 +382,16 @@ Each joins the Playwright suite like the others: axe-core and the in-page checke
   field. Run and gate changes close the modal and confirm in a toast.
 - **Runs: handoffs** (B-7801, Sprint 38b): a run that handed off says who answered in its page head and in the list
   entry (an arrow to the specialist's name), and a notice explains the handoff with a button to the specialist's run.
+
+- **Chat artifacts and image content credentials (Sprint 39a, B-8001, B-7901).** The chips under an answer are
+  buttons named "Open <file> version n", pressed for the open version; the Artifacts panel has a labelled version
+  select ("Version of <file>") between Earlier and Later buttons (disabled at the ends), and every list entry is a
+  button. An HTML artifact is an `iframe` titled "<file> version n", sandboxed; code and documents are `pre` text that
+  wraps, so nothing scrolls sideways at 320 px. Copy announces its result as a toast. The public link page renders the
+  same controls without a session. On Images, the content-credentials row names its state in words (signed by the
+  tenant CA, or not signed and why) with a "details" link to a dialog of every check as ok/failed/not checked pills
+  with their names; the dialog closes with Close and Escape and returns focus. Checked by `chat.spec.ts` and
+  `images.spec.ts` with axe-core (Standard, light) on the panel and the dialog.
 
 ## Screens made live in 1.6.0 (Sprint 35, B-4207)
 

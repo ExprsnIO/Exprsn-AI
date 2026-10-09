@@ -19,6 +19,15 @@ export interface ApiKeyRow {
   signature_key: string | null;
   /** 1.6.0 (B-7701): the agent identity the key was minted for; requests with it act as the agent on the owner's behalf. */
   agent_id: string | null;
+  /** 1.6.0 (B-8601): a key limited to one app (and, with `entity`, one entity's records); accepted nowhere else. */
+  app_scope: AppKeyScope | null;
+}
+
+export interface AppKeyScope {
+  app: string;
+  entity: string | null;
+  /** 1.6.0 (B-8702): the entity names an embedded session reaches (its app's settings); absent or null: every entity. */
+  entities?: string[] | null;
 }
 
 const KEY_RE = /^exai_k1_([0-9a-f]{12})_([A-Za-z0-9_-]{43})$/;
@@ -35,7 +44,8 @@ const toRow = (r: Record<string, unknown>): ApiKeyRow => ({
   revoked_at: r.revoked_at == null ? null : Number(r.revoked_at),
   created_at: Number(r.created_at),
   signature_key: r.signature_key == null ? null : String(r.signature_key),
-  agent_id: r.agent_id == null ? null : String(r.agent_id)
+  agent_id: r.agent_id == null ? null : String(r.agent_id),
+  app_scope: r.app_scope == null ? null : json<AppKeyScope | null>(r.app_scope, null)
 });
 
 export const apiKeyState = (k: ApiKeyRow): 'active' | 'expired' | 'revoked' =>
@@ -56,7 +66,7 @@ export class ApiKeyService {
     return hmac(this.secret, 'apikey:' + key);
   }
 
-  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number; signatureKey?: string | null; agentId?: string | null }): Promise<{ key: string; row: ApiKeyRow }> {
+  async create(input: { tenantId: string; userId: string; name: string; scopes: Permission[]; ttlDays: number; signatureKey?: string | null; agentId?: string | null; appScope?: AppKeyScope | null }): Promise<{ key: string; row: ApiKeyRow }> {
     const prefix = randomBytes(6).toString('hex');
     const key = `exai_k1_${prefix}_${randomToken(32)}`;
     const t = Date.now();
@@ -73,7 +83,8 @@ export class ApiKeyService {
       revoked_at: null,
       created_at: t,
       signature_key: input.signatureKey ?? null,
-      agent_id: input.agentId ?? null
+      agent_id: input.agentId ?? null,
+      app_scope: input.appScope ? JSON.stringify(input.appScope) : null
     };
     await this.db('api_keys').insert(row);
     return { key, row: toRow(row) };

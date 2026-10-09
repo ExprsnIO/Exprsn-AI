@@ -56,17 +56,19 @@
         return 'days=' + (st.period === 'today' ? 1 : st.period);
       };
       const q = () => 'by=' + st.by + '&' + range() + (st.workspace ? '&workspace=' + encodeURIComponent(st.workspace) : '');
+      // Each load carries a generation: a reload while one is in flight (a price saved before the model rows arrived)
+      // starts a new one, and the older answer is dropped instead of landing as the current rows.
       const load = () => {
-        if (st.loading) return;
+        const gen = (st.gen = (st.gen || 0) + 1);
         st.loading = true;
         const key = q();
         Promise.all([App.get('/api/admin/analytics/summary?' + key), App.get('/api/admin/analytics/daily?' + range() + (st.workspace ? '&workspace=' + encodeURIComponent(st.workspace) : '')), App.get('/api/admin/analytics/prices'), App.can('tenant:manage') ? App.get('/api/admin/quotas').catch(() => null) : null])
-          .then(([summary, daily, prices, quotas]) => { Object.assign(st, { summary, daily, prices: prices.prices, quotas, loaded: key, loadError: null }); })
-          .catch((err) => { st.loadError = err; })
-          .finally(() => { st.loading = false; refresh(); });
+          .then(([summary, daily, prices, quotas]) => { if (gen === st.gen) Object.assign(st, { summary, daily, prices: prices.prices, quotas, loaded: key, loadError: null }); })
+          .catch((err) => { if (gen === st.gen) st.loadError = err; })
+          .finally(() => { if (gen === st.gen) { st.loading = false; refresh(); } });
       };
       if (st.loaded !== q() && !st.loadError && !st.loading) load();
-      const reload = () => { st.loaded = null; st.loadError = null; ctx.rerender(); };
+      const reload = () => { st.loaded = null; st.loadError = null; st.loading = false; ctx.rerender(); };
 
       const summary = st.summary || { rows: [], total: {}, currency: null };
       const rows = summary.rows || [];

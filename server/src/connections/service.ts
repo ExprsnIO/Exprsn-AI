@@ -13,7 +13,7 @@ import { allowedIndex, allowedMysql, allowedSql, classifyMysql, classifyOpenSear
 import type { DynamicCredentials } from './dynamic.js';
 import { allowedCollection, classifyMongo } from './mongo.js';
 import { isVaultRef } from '../vault/policy.js';
-import type { ConnectionSpec, DriverFactory, QueryResult, RoleCheck, SchemaObject } from './drivers.js';
+import type { RowMutation, ConnectionSpec, DriverFactory, QueryResult, RoleCheck, SchemaObject } from './drivers.js';
 import type { ReplicationOptions, RowChange } from './replication.js';
 
 /** A replicated change after masking; `raw` is the unmasked value of the requested column (the access column). */
@@ -518,6 +518,34 @@ export class ConnectionService {
     const raw = at >= 0 ? r.rows.map((row) => row[at]) : undefined;
     const m = this.mask(c, [object], r);
     return { columns: r.columns, rows: m.rows, capped: r.capped, label: c.label, name: c.name, ...(raw ? { raw } : {}) };
+  }
+
+  /**
+   * Rows of an allow-listed table for an app entity backed by it (1.6.0, B-8501), unmasked: the entity's records seal
+   * them under a label at least the connection's, and the pull is audited by the app service. PostgreSQL and MySQL
+   * only.
+   */
+  async readRowsForApp(tenantId: string, id: string, object: string, opts: { limit: number; fields?: string[] | null }): Promise<{ columns: string[]; rows: unknown[][]; capped: boolean; connection: ConnectionRow }> {
+    const c = await this.get(tenantId, id);
+    if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only a PostgreSQL or MySQL table can back an app entity.');
+    if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
+    const r = await (await this.driver(c)).rows(object, { watermarkColumn: null, after: null, limit: opts.limit, timeoutMs: c.timeout_s * 1000, ...(opts.fields ? { fields: opts.fields } : {}) });
+    return { columns: r.columns, rows: r.rows.map((row) => row.map((v) => (v instanceof Date ? v.toISOString() : v))), capped: r.capped, connection: c };
+  }
+
+  /** One row written to an allow-listed table for an app entity backed by it (1.6.0, B-8501); the caller audits. */
+  async mutateRow(tenantId: string, id: string, object: string, op: RowMutation): Promise<{ affected: number }> {
+    const c = await this.get(tenantId, id);
+    if (c.engine !== 'postgres' && c.engine !== 'mysql') throw conflict('Only a PostgreSQL or MySQL table can back an app entity.');
+    if (!allowed(c, object)) throw conflict(`${object} is not on the schema allow-list for ${c.name}.`);
+    const d = await this.driver(c);
+    if (!d.mutate) throw conflict(`The ${c.engine} driver cannot write rows.`);
+    try {
+      return await d.mutate(object, op, c.timeout_s * 1000);
+    } catch (err) {
+      if (err instanceof HttpProblem) throw err;
+      throw new HttpProblem(502, 'Write failed', `${c.name}: ${this.scrub(c, err)}`.slice(0, 500), { extensions: { kind: 'failed' } });
+    }
   }
 
   /** How PostgreSQL would read an allow-listed object as each mapped role (B-1503). */

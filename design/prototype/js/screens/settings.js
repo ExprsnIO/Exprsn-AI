@@ -8,7 +8,8 @@
   ];
   const KEYS0 = [
     { id: 'k1', name: 'notebook-laptop', scopes: 'inference:invoke', models: 'analyst, fast', expires: '18 Dec 2026', last: '1 h ago', state: 'active', prefix: 'exai_k1_7f3a' },
-    { id: 'k2', name: 'close-scripts', scopes: 'chat:write context:read', models: 'any allowed', expires: 'expired 1 Sep', last: '20 d ago', state: 'expired', prefix: 'exai_k2_0c91', gone: '1 Oct' }
+    { id: 'k2', name: 'close-scripts', scopes: 'chat:write context:read', models: 'any allowed', expires: 'expired 1 Sep', last: '20 d ago', state: 'expired', prefix: 'exai_k2_0c91', gone: '1 Oct' },
+    { id: 'k4', name: 'vendor-sync', scopes: 'records:read records:write', models: 'none', expires: '4 Dec 2026', last: '3 min ago', state: 'active', prefix: 'exai_k1_a91c', app: 'vendor-onboarding', entity: 'vendor' }
   ];
   const SESSIONS0 = [
     { id: 's1', client: 'This browser', how: 'Kerberos SSO', zone: 'office', started: 'today 08:52', last: 'now', current: true },
@@ -16,6 +17,9 @@
     { id: 's3', client: 'Firefox on laptop-mo', how: 'LDAP password and passkey', zone: 'vpn', started: 'Mon 19:10', last: 'Mon 21:44' }
   ];
   const OWN_SCOPES = ['chat:read', 'chat:write', 'inference:invoke', 'context:read', 'context:write', 'images:generate', 'tools:invoke', 'agents:run', 'models:read'];
+  // 1.6.0 (B-8601): a key may be limited to one app, or one entity of it; it then holds records:read and records:write only.
+  const APP_SCOPES = ['records:read', 'records:write'];
+  const APPS = [{ id: 'vendor-onboarding', title: 'Vendor onboarding', entities: ['vendor', 'contract', 'review'] }, { id: 'asset-register', title: 'Asset register', entities: ['asset'] }];
   // 1.4.0 identity gaps (B-1802, B-1803, B-1806, B-1807): the account's own verification, trusted devices, factors and DID
   const DEVICES0 = [{ id: 'd1', browser: 'Firefox on laptop-mo', createdAt: '2 Sep 2026', expiresAt: '2 Oct 2026', current: true }, { id: 'd2', browser: 'Safari on iPhone', createdAt: '11 Sep 2026', expiresAt: '11 Oct 2026' }];
   const FACTORS0 = [{ id: 'totp', kind: 'Authenticator app (TOTP)', label: 'Phone', added: '3 Feb 2026', last: 'today 08:52' }, { id: 'pk1', kind: 'Passkey', label: 'laptop-mo Touch ID', added: '14 Jun 2026', last: 'Mon 19:10' }];
@@ -50,6 +54,7 @@
     id: 'settings', title: 'Settings', summary: 'Profile, public profile and status, appearance, notifications, security (email, factors, trusted devices), app passwords for DAV clients, MCP access (server URLs, held calls), connected accounts, API keys, sessions, AT-Protocol account', crumb: ['Settings'],
     commands: [{ label: 'Create an API key', sub: 'Settings', run(app) { app.stateFor('settings').openCreate = true; app.render(); } }],
     states: [
+      { title: 'Key limited to one entity', tone: 'info', text: 'A key made for one app and one entity holds records:read (and records:write when picked) and nothing else: accepted under /api/apps only, refused with 403 step scope on another entity, another app or the rest of the API. The list shows the app and entity beside its scopes.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); st.keyNote = 'app'; ctx.rerender(); } },
       { title: 'Key revealed once', tone: 'warn', text: 'The new key is shown once with a copy action. Afterwards only its name, scopes and dates remain.', apply(ctx) { const st = ctx.state; st.keys = st.keys || KEYS0.map((k) => Object.assign({}, k)); if (!st.keys.some((k) => k.id === 'k3')) st.keys.unshift({ id: 'k3', name: 'notebook-desk', scopes: 'inference:invoke chat:read', models: 'analyst', expires: '19 Mar 2027', last: 'never', state: 'active', prefix: 'exai_k3_4d2e' }); st.revealed = { name: 'notebook-desk', key: 'exai_k3_4d2e9b1f7c0a5e83d6f2b4a19c7e0d5f' }; ctx.rerender(); } },
       // 1.6.0 (B-7101, B-7103): MCP access.
       { title: 'MCP call held for approval', tone: 'warn', text: 'An MCP client asked to create a record in Finance Ops. Nothing runs until you approve here; the client then calls again with the same arguments within 15 minutes, once.', apply(ctx) { ctx.state.holds = HOLDS0.map((h) => Object.assign({}, h)); ctx.state.holdNote = true; ctx.rerender(); } },
@@ -141,10 +146,11 @@
       const keyRows = st.keys.map((k) => {
         const expired = k.state === 'expired'; const revoked = k.state === 'revoked';
         const action = expired ? UI.pill('expired', 'warn') : revoked ? UI.pill('revoked', 'danger') : UI.btn('Revoke', { kind: 'ghost', size: 'sm', attrs: 'data-revoke="' + k.id + '"' });
-        return { cells: [esc(k.name), '<span class="mono">' + esc(k.scopes) + '</span>', esc(k.models), expired ? '<span style="color:var(--warn-fg)">' + esc(k.expires) + '</span>' : esc(k.expires), esc(k.last), '<span class="hstack" style="justify-content:flex-end">' + action + '</span>'], attrs: 'data-key="' + k.id + '"', selected: !!(st.expiredNote && expired) };
+        return { cells: [esc(k.name) + (k.app ? ' ' + UI.pill('app ' + k.app + (k.entity ? ' / ' + k.entity : ''), 'outline') : ''), '<span class="mono">' + esc(k.scopes) + '</span>', esc(k.models), expired ? '<span style="color:var(--warn-fg)">' + esc(k.expires) + '</span>' : esc(k.expires), esc(k.last), '<span class="hstack" style="justify-content:flex-end">' + action + '</span>'], attrs: 'data-key="' + k.id + '"', selected: !!(st.expiredNote && expired) };
       });
       const keys = UI.panel('API keys', '<div>' + UI.btn('Create key', { kind: 'primary', size: 'sm', icon: 'key', attrs: 'data-create' }) + '</div>'
         + (st.revealed ? UI.notice('<b>Key <span class="mono">' + esc(st.revealed.name) + '</span> created. Copy it now; it is shown once.</b><div class="mono" style="margin-top:4px;overflow-wrap:anywhere">' + esc(st.revealed.key) + '</div>', 'warn', UI.btn('Copy', { size: 'sm', attrs: 'data-copy="' + esc(st.revealed.key) + '"' }) + UI.btn('Done', { kind: 'ghost', size: 'sm', attrs: 'data-revealdone' })) : '')
+        + (st.keyNote === 'app' ? UI.notice('<b>vendor-sync is limited to the app vendor-onboarding, entity vendor.</b> It holds records:read and records:write only; it lists and writes vendor records (within the owner\'s policies and clearance) and is 403 step scope on contract, on any other app and on everything outside /api/apps. The audit event apikey.created carries the app and entity.', 'info', UI.btn('Dismiss', { size: 'xs', kind: 'ghost', attrs: 'data-keynote' })) : '')
         + (st.expiredNote ? UI.notice('<b>close-scripts expired on 1 Sep.</b> Expired keys stay listed for 30 days for audit, then disappear. This one leaves the list on 1 Oct. Calls made with it get <span class="mono">401 invalid_token</span>.', 'info') : '')
         + UI.table(['Name', 'Scopes', 'Models', 'Expires', 'Last used', { label: '', right: true }], keyRows, { minWidth: '0', cls: 'bare' })
         + '<span class="muted" style="font-size:12px">Keys work as the bearer token for OpenAI-compatible SDKs and the CLI. Each key carries a subset of your own scopes.</span>');
@@ -226,24 +232,28 @@
       });
       const openCreate = () => {
         ctx.modal({ title: 'Create API key', body: UI.field('Name', UI.input('', { placeholder: 'for example notebook-desk', attrs: 'data-name' }), 'Shown in the audit log next to every call made with the key.')
-          + '<div class="field"><span class="fl">Scopes, a subset of your own</span><div class="hstack wrap gap6" style="row-gap:6px">' + OWN_SCOPES.map((s) => UI.check(s, s === 'inference:invoke' || s === 'chat:read', 'data-scope="' + s + '"')).join('') + '</div></div>'
+          + '<div class="field"><span class="fl">Scopes, a subset of your own</span><div class="hstack wrap gap6" style="row-gap:6px">' + OWN_SCOPES.concat(APP_SCOPES).map((s) => UI.check(s, s === 'inference:invoke' || s === 'chat:read', 'data-scope="' + s + '"')).join('') + '</div></div>'
+          + '<div class="formgrid">' + UI.field('Limit to an app', UI.select([{ value: '', label: 'No: every scope above' }].concat(APPS.map((a) => ({ value: a.id, label: a.title }))), '', 'data-keyapp'), 'A key for one app holds records:read and records:write only (B-8601).') + UI.field('Entity (optional)', UI.input('', { placeholder: 'vendor', attrs: 'data-keyentity' }), 'With an entity, the key reaches that entity\'s records and nothing else of the app.') + '</div>'
           + '<div class="formgrid">' + UI.field('Models', UI.select(['any allowed', 'analyst', 'chat-default', 'fast', 'coder', 'analyst, fast'], 'analyst', 'data-models')) + UI.field('Expires', UI.select(['30 days', '90 days', '180 days', '1 year'], '180 days', 'data-exp')) + '</div>'
           + UI.notice('The key is shown once after creation. It inherits your clearance ceiling of ' + UI.label(u.clearance, { sm: true }) + ' and is rejected in zones that do not allow it.', 'info'),
           actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Create key', { kind: 'primary', attrs: 'data-go' }),
           onMount(m) {
             const nameEl = m.querySelector('[data-name]'); nameEl.focus();
             m.querySelector('[data-go]').addEventListener('click', () => {
-              const name = nameEl.value.trim() || 'notebook-desk'; const scopes = Array.prototype.slice.call(m.querySelectorAll('[data-scope]:checked')).map((c) => c.dataset.scope);
+              const name = nameEl.value.trim() || 'notebook-desk'; let scopes = Array.prototype.slice.call(m.querySelectorAll('[data-scope]:checked')).map((c) => c.dataset.scope);
+              const keyApp = m.querySelector('[data-keyapp]').value; const keyEntity = m.querySelector('[data-keyentity]').value.trim();
+              if (keyApp) { const beyond = scopes.filter((x) => APP_SCOPES.indexOf(x) < 0); if (beyond.length) { ctx.toast('A key limited to an app holds records:read and records:write only, not ' + esc(beyond.join(', ')) + ' (400).', 'danger', 5000); return; } if (!scopes.length) scopes = ['records:read']; const a = APPS.find((x) => x.id === keyApp); if (keyEntity && a.entities.indexOf(keyEntity) < 0) { ctx.toast('The app ' + esc(a.title) + ' has no entity ' + esc(keyEntity) + ' (404).', 'danger'); return; } }
               if (!scopes.length) { ctx.toast('Pick at least one scope.', 'warn'); return; }
               const exp = m.querySelector('[data-exp]').value; const expires = { '30 days': '20 Oct 2026', '90 days': '19 Dec 2026', '180 days': '19 Mar 2027', '1 year': '20 Sep 2027' }[exp];
               const id = 'k' + (st.keys.length + 1); const hex = Array.from({ length: 32 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
-              st.keys.unshift({ id, name, scopes: scopes.join(' '), models: m.querySelector('[data-models]').value, expires, last: 'never', state: 'active', prefix: 'exai_' + id + '_' + hex.slice(0, 4) });
+              st.keys.unshift(Object.assign({ id, name, scopes: scopes.join(' '), models: keyApp ? 'none' : m.querySelector('[data-models]').value, expires, last: 'never', state: 'active', prefix: 'exai_' + id + '_' + hex.slice(0, 4) }, keyApp ? { app: keyApp, entity: keyEntity || null } : {}));
               st.revealed = { name, key: 'exai_' + id + '_' + hex }; App.closeOverlay(); ctx.rerender(); ctx.toast('Key created. Copy it now; it will not be shown again.', 'warn', 5000);
             });
           } });
       };
       ctx.on('click', '[data-create]', openCreate);
       ctx.on('click', '[data-revealdone]', () => { st.revealed = null; ctx.rerender(); });
+      ctx.on('click', '[data-keynote]', () => { st.keyNote = null; ctx.rerender(); });
       ctx.on('click', '[data-key]', (e, t) => { if (e.target.closest('button')) return; const k = st.keys.find((x) => x.id === t.dataset.key); ctx.drawer({ title: 'Key ' + esc(k.name) + ' ' + UI.pill(k.state), body: UI.kv([['Prefix', '<span class="mono">' + esc(k.prefix) + '…</span>'], ['Scopes', '<span class="mono">' + esc(k.scopes) + '</span>'], ['Models', esc(k.models)], ['Expires', esc(k.expires)], ['Last used', esc(k.last)], ['Clearance ceiling', UI.label(u.clearance, { sm: true })]], 2) + '<div class="eyebrow">Recent calls</div>' + UI.table(['When', 'Endpoint', 'Result'], k.state === 'expired' ? [['20 d ago', '<span class="mono">/v1/chat/completions</span>', UI.pill('401 invalid_token', 'danger')]] : [['1 h ago', '<span class="mono">/v1/chat/completions</span>', UI.pill('200', 'ok')], ['1 h ago', '<span class="mono">/v1/embeddings</span>', UI.pill('200', 'ok')], ['yesterday', '<span class="mono">/v1/chat/completions</span>', UI.pill('429 over quota', 'warn')]], { clickable: false, minWidth: '0', cls: 'bare' }), actions: UI.btn('Open in Usage and audit', { attrs: 'data-close data-goaudit' }) + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }), onMount(d) { d.querySelector('[data-goaudit]').addEventListener('click', () => ctx.navigate('usage-audit', { key: k.name })); } }); });
       ctx.on('click', '[data-account]', (e, t) => { if (e.target.closest('button')) return; const a = st.accounts.find((x) => x.id === t.dataset.account); ctx.drawer({ title: esc(a.system) + ' ' + UI.pill(a.state), body: UI.kv([['Scopes', '<span class="mono">' + esc(a.scopes) + '</span>'], ['Vault path', '<span class="mono">' + esc(a.vault) + '</span>'], ['Tools', '<span class="mono">' + esc(a.tools) + '</span>'], ['Last used', esc(a.last || 'never')]], 1) + UI.notice('Tools receive a short-lived token minted from this grant per call. The model never sees it.', 'info'), actions: UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }) }); });
       ctx.on('click', '[data-endsession]', async (e, t) => { const s = st.sessions.find((x) => x.id === t.dataset.endsession); const ok = await ctx.confirm({ title: 'Sign out ' + s.client + '?', tag: 'revokes refresh token', tone: 'danger', kv: [['Signed in with', esc(s.how)], ['Zone', esc(s.zone)], ['Last activity', esc(s.last)]], ok: 'Sign out that session' }); if (!ok) return; st.sessions = st.sessions.filter((x) => x.id !== s.id); ctx.rerender(); ctx.toast('Session ended. Its refresh token was revoked at the identity service.', 'ok'); });

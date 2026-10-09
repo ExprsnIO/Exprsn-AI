@@ -2,7 +2,7 @@
 
 Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
 
-**Status:** version `1.5.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
+**Status:** version `1.6.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
 and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
 the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
 rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
@@ -39,7 +39,13 @@ model-based memory management and MongoDB connections; an AT-Protocol personal d
 import repositories and model import; Workflows 2 (sub-workflow, agent, map and loop steps, event and schedule
 triggers, failure edges and dead letters, signed bundles, domain built-in tools) on one chain context, with agents
 delegating to agents, skills composing, checks at publish and a chain view; and profiles and presence
-([Backlog-1.5.0.md](Backlog-1.5.0.md)). See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
+([Backlog-1.5.0.md](Backlog-1.5.0.md)). Sprints 35 to 39 make up 1.6.0: model servers beyond Ollama (Apple Foundation
+Models, MLX, llama.cpp) and the platform administration screens; groups depth, blob deduplication and image
+classification in Knowledge; the HTTP tool kind, prompt-injection defence, SCIM and the MCP server; the AI inventory,
+analytics, audit export, red-team suites, agent identities and handoffs, row and field policies, DLP and legal hold;
+C2PA content credentials, versioned chat artifacts, app packages with environments and promotion, data model drafts,
+AI field fills, outside tables, entity APIs and app embedding ([Backlog-1.6.0.md](Backlog-1.6.0.md)). See
+[Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## What's in the repository
 

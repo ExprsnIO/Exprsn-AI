@@ -87,6 +87,8 @@ import { pluginBrokerRoutes } from '../routes/plugin-broker.js';
 import { fileRoutes, publicFileRoutes } from '../routes/files.js';
 import { appRoutes } from '../routes/apps.js';
 import { publicAppRoutes } from '../routes/apps-public.js';
+import { appEntityApiRoutes } from '../routes/apps-entity-api.js';
+import { appEmbedPublicRoutes } from '../routes/apps-embed-public.js';
 import { channelRoutes } from '../routes/channels.js';
 import { publicChannelRoutes } from '../routes/channels-public.js';
 import { authzRoutes } from '../routes/authz.js';
@@ -296,6 +298,7 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   api.use(moderationRoutes(s));
   // 1.4.0, Sprint 27: low-code apps (B-2201 to B-2208)
   api.use(appRoutes(s));
+  api.use(appEntityApiRoutes(s)); // 1.6.0, Sprint 39d (B-8601 to B-8603, B-8701, B-8702): after the app's own routes
   // Sprint 26a (B-1801 to B-1803, B-1805): invitations, trusted devices, signup and MFA policies, CSV imports.
   api.use(identityPolicyRoutes(s));
   // Sprint 27 (B-1908): AT-Protocol firehose subscriptions.
@@ -329,6 +332,8 @@ export function createApp(s: Services, state: AppState = { shuttingDown: false }
   app.use('/api/public', publicChannelRoutes(s));
   app.use('/api/public', publicFileRoutes(s));
   app.use('/api/public', publicAppRoutes(s));
+  // 1.6.0, Sprint 39d (B-8701, B-8702): embed pages and their public endpoints (/embed/..., /api/public/embeds/...).
+  app.use(appEmbedPublicRoutes(s));
   app.use('/api/public', publicSharingRoutes(s));
   app.use('/api', api);
 

@@ -67,6 +67,10 @@ import * as m039c from './039c_scim_vault_posts.js';
 import * as m040 from './040_inventory_analytics.js';
 import * as m040b from './040b_redteam_agents.js';
 import * as m040c from './040c_policies_dlp.js';
+import * as m041 from './041_provenance_artifacts.js';
+import * as m041b from './041b_app_packages.js';
+import * as m041c from './041c_model_gen_sync.js';
+import * as m041d from './041d_entity_api_embeds.js';
 
 interface Migration {
   up(knex: Knex): Promise<void>;
@@ -142,7 +146,11 @@ const MIGRATIONS: Record<string, Migration> = {
   '039c_scim_vault_posts': m039c,
   '040_inventory_analytics': m040,
   '040b_redteam_agents': m040b,
-  '040c_policies_dlp': m040c
+  '040c_policies_dlp': m040c,
+  '041_provenance_artifacts': m041,
+  '041b_app_packages': m041b,
+  '041c_model_gen_sync': m041c,
+  '041d_entity_api_embeds': m041d
 };
 
 export const migrationSource: Knex.MigrationSource<string> = {

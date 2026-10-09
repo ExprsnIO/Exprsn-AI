@@ -285,6 +285,135 @@ drops its cached copies at once, so the tenant's sealed data is unreadable befor
   a download streams them part by part and is audited with the counts. An API key scoped to `compliance:export` (the
   eDiscovery token) can do no more than its owner and is named in the audit events and the export row.
 
+## Content credentials and chat artifacts (1.6.0, Sprint 39a)
+
+- **Two manifests, two keys (B-7901).** The HMAC manifest of Sprint 20 proves to this server that it made the image;
+  it proves nothing to anyone else. The C2PA manifest is signed by a certificate the tenant's own issuing CA made, so
+  a verifier outside the server (or `exprsn-ai c2pa:verify` on a downloaded file) can check the claim's signature,
+  chain it to the tenant CA and bind it to the bytes without trusting the server. The certificate's key is in custody
+  (signer process or OpenBao) like every CA key; the app signs claim bytes through the same path it signs
+  certificates and never holds the key. Revoking the certificate on the Certificates screen retires it: the next
+  image signs with a new one, and the old manifests still verify against the chain but a validator that checks
+  revocation (CRL, OCSP, both published by the CA) will say so.
+- **The manifest is part of the file.** It covers every byte outside its own chunk, so a changed pixel fails
+  `dataHash`; a changed claim fails `signature`; a stripped chunk is `present: false`. It is added last, over the
+  HMAC chunk, and the HMAC manifest is verified over the bytes without either chunk, so both verify on one file.
+  Nothing in the manifest is secret: the prompt is a hash, the user an id and username, and the label is stated.
+- **What a conformance validator may dispute.** The implementation is the specification's parts written here (CBOR,
+  JUMBF, COSE_Sign1), not a reference library: there is no RFC 3161 time stamp (the signing time is the action's
+  `when`, and validity is judged at verification time), no `c2pa.ingredient` chain for a variation of another image,
+  and the hashed-URI hash is the SHA-256 of the assertion's content box with its header. `verify` checks what it
+  writes; a third-party validator that reads the structure will see a manifest whose signature verifies but may flag
+  those points.
+- **Artifacts are the answer's own text (B-8001).** An artifact is a sealed copy of a fenced block of an answer, with
+  the answer's label and message id; a share reader sees only versions from the messages on the shared path, never
+  from another branch or a withheld or held answer, and nothing above their clearance. Nothing in an artifact is
+  checked again by the guardrails: it was screened as part of the answer.
+- **Rendering untrusted HTML.** A model's HTML runs in an `<iframe sandbox="allow-scripts">` whose document comes from
+  `/api/public/artifacts/:vid/raw` with its own CSP: `default-src 'none'`, `connect-src 'none'`, `form-action 'none'`,
+  `frame-ancestors 'self'`, and the `sandbox` directive without `allow-same-origin`. The document is an opaque origin:
+  it cannot read the console's cookies, storage or DOM, cannot call the API with the reader's session, cannot
+  navigate the page that frames it, and cannot submit a form or open a connection. The URL is a capability (the
+  version id, an expiry and an HMAC by the KMS) valid for `CHAT_ARTIFACT_RAW_TTL_SECONDS`, minted only when a reader
+  who may see the artifact lists it; the route reads no session, so a stolen link shows that one version for a few
+  minutes and nothing else.
+
+## App packages, environments and promotion (1.6.0, Sprint 39b)
+
+- **A package is verified before it is read (B-8201).** As with bundles, the signature (the KMS HMAC key the server
+  holds) is checked over the canonical JSON of exactly what arrived, before the shape or any object in it is looked
+  at; a package changed in any byte, signed elsewhere, naming another key or unsigned is refused with `422` and the
+  refusal audited, and nothing is created. A package pasted in, read from a repository or deployed from the store is
+  verified the same way, and a stored package is checked against its hash when opened. Records in a package are the
+  values the packager was cleared for, without computed fields (recomputed on import); a package is sealed with the
+  tenant key at rest and capped at `APPS_PACKAGE_MAX_BYTES`.
+- **Applying a package reconciles, it does not replace (B-8201, B-8203).** Entities, forms, triggers and policies are
+  matched by name, so a deployment keeps record ids and the entity revisions move forward; the same type and unique
+  checks apply as to a designer's edit (a type change on an entity that holds records fails the deployment, and the
+  target keeps what it had, with the backup beside it). An entity the package no longer has is dropped only when it
+  holds no record; otherwise it stays and the report says so. Triggers are recreated against the workflows of the
+  target's workspace by name, so a trigger whose workflow is missing or unpublished there is skipped and reported,
+  never pointed at another workspace's workflow.
+- **Production waits on the Workflows approval step (B-8202).** A promotion to production lands only the package the
+  last successful promotion to test landed (its id and hash are on both deployments), never a fresh package of the
+  test or development app, and only after a run of the pipeline's approval workflow succeeds. That run starts as the
+  requester, with the deployment as its input and caller, so the approver sees who asked, what package and which
+  hash; a rejection, a failure, a cancellation or an expiry rejects the deployment. Nothing else moves on a pipeline
+  while a deployment is going. Deployments run as the requester (their roles and clearance at run time, in the
+  target's workspace), so an app the requester may no longer design is not deployed.
+- **Backups and rollback (B-8203).** Every deployment first packages the target as it is; a rollback is a deployment
+  of that backup, with its own backup, so it is audited and reversible like any other. The history (who, what,
+  which package, the report) is kept `APPS_DEPLOYMENT_HISTORY_DAYS`.
+- **Git stays behind the same guards (B-8204).** Repositories are `https://` only (`file://` for same-host mirrors
+  when `APPS_GIT_ALLOW_FILE` is on), never with credentials in the URL, never at a link-local, multicast or
+  unspecified address (checked after DNS); git runs with no system or global configuration, no hooks, no prompts and
+  only the https (and allowed file) protocol. A token is given as a vault reference, resolved as the caller at use
+  and answered to git through a credential helper from the environment, so it is not on a command line or in a
+  remote URL. The push writes the package's files, nothing else, under the path given, and a path that leaves the
+  tree is refused.
+
+## Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c)
+
+- **A draft is a proposal (B-8301).** The description passes the `user-input` checkpoint and the model's answer the
+  `model-output` one, as any app draft does; the draft is validated with the same schema and checks as a saved
+  entity, against the app's entities and each other, and nothing is written until a designer accepts it. Accepting
+  never removes a field or a state: fields the draft omits are listed and kept, so a model cannot drop data; a type
+  change on an entity with records is refused by the entity update as always. Triggers are created only for workflows
+  the designer may already see, and only `record` triggers: a draft cannot name a schedule.
+- **AI prompts read fields through the formula engine (B-8401).** A placeholder is a field name or a formula over the
+  entity's plain fields and the formula functions, compiled by the same parser that refuses everything but fields and
+  listed functions, so a prompt can no more reach a global than a formula field can; an unreadable placeholder is
+  refused when the entity is saved and renders empty if one slips through. Only the fields whose prompts read a changed
+  value regenerate, and a burst of edits asks the model once per field (`APPS_AI_DEBOUNCE_MS`), which bounds what one
+  editor can spend; the fill still runs as the record's last editor, within their clearance and the profile's.
+- **A fill over every row is one metered, cancellable job (B-8402).** It needs `apps:design`, shows its estimate first
+  (and the money when the tenant priced the model), runs one record at a time through the profile's guardrails and the
+  tenant's quota (the quota refuses the next record when it runs out), and stops between records when cancelled; one
+  fill per field at a time. Its token totals are on the fill and in the audit events; the answers themselves are
+  sealed in the records like any value.
+- **An outside table is read unmasked, by designers who also manage connections (B-8501).** The connection's PII
+  masking is for ad-hoc queries and knowledge; records of a sourced entity carry the rows as they are, so attaching
+  one needs `connections:manage` beside `apps:design`, the table must be on the connection's allow-list, and the
+  entity's label must cover the connection's: the rows land sealed under at least the label the connection carries,
+  policed, labelled and audited like any record. Pulls are audited with their counts, never their values. Writes
+  through to the table run only when the designer turned them on, through parameterised statements on plain column
+  names (quoted identifiers, values as parameters) in their own transaction, before anything changes locally: a
+  refused write leaves the app as it was. The connection's own account decides what the writes may do; a read-only
+  account makes writes fail with `502` and the app untouched.
+
+## Entity APIs and app embedding (1.6.0, Sprint 39d)
+
+- **The entity API is the records API with another shape (B-8601).** `/api/apps/:app/:entity` calls the same service
+  as the records routes: the reader's policies narrow the rows and mask the fields, labels and workspaces apply, every
+  write is audited as before, and `include=related` fetches each related record through the same read path, so a
+  record the reader may not read comes back as null. A key limited to one app or one entity (`api_keys.app_scope`)
+  holds at most `records:read` and `records:write`, is accepted under `/api/apps` alone (never `/v1`, the MCP server or
+  the rest of the API), and is refused by every apps router on another app or entity before any handler runs; the
+  owner's own app-limited key leaves `apps:design` out, so it reads masked like a member. The scope is checked on
+  ids, whatever the path names.
+- **Every design change leaves a version (B-8602).** The Apps screen, the schema API and a package import all end in
+  `AppService.createEntity`, `updateEntity`, `removeEntity` or the forms service, which record a row of
+  `app_schema_versions` with the SHA-256 of the whole design afterwards, under the audit event `app.schema.versioned`;
+  the version numbers are unique per app on the database. The OpenAPI document and the client are computed from the
+  design on each read and carry that version and hash (the `ETag`), so a stale document cannot be served and a client
+  knows the design it was built on.
+- **Embed pages are framed only where the designers said (B-8701).** A public form becomes an embed page under a
+  random 26-character id; the page is served with `frame-ancestors 'self' <allowed hosts>` and no `X-Frame-Options`,
+  so a browser frames it on those origins and refuses it elsewhere, and `noindex`. The page opens and submits the form
+  by the embed id through `/api/public/embeds`, on the public submission path (per-address and per-form limits, the
+  `user-input` checkpoint, held values queued), so the form's link token never reaches a host site; turning public
+  pages off, unpublishing the form or removing the page gives `404` at once.
+- **A signed embed is a credential the host site vouches for (B-8702).** The host signs a short JWT with a key the
+  app's designers registered: a public key (ES256, RS256, EdDSA), a shared secret (HS256, sealed with the tenant key,
+  shown once), or a certificate the tenant CA issued, carried as `x5c` and verified against the tenant's active
+  intermediate and its revocations. The `kid` picks the key and the `alg` must match it (no algorithm confusion); the
+  audience must be the app; `exp` is required and capped by the app's and the server's limit; `jti` is required and
+  accepted once per key, so a token cannot be replayed; the person is an active user named by a claim the designers
+  chose. The exchange is rate-limited per address and audited either way with the kid and the reason, never the token.
+  The embedded session is a bearer of its own, apart from console sessions: no cookie, so nothing cross-site and no
+  CSRF surface; `/api/apps/<the app>` only, the entities the settings list, read-only unless the app allows writes;
+  it ends with its key, with the app's settings turned off, or when the designers end it.
+
 ## Deployment hardening
 
 ## Red-team suites, agent identities and handoffs (1.6.0, Sprint 38b)
@@ -1398,3 +1527,47 @@ filter, private `/tmp`, only the state directory writable.
   runs have no retention purge to suspend. A compliance export matches by `createdAt`, not by activity in the range;
   file bytes are not in it; conversations hold at most 10 000 messages each; nothing is signed, so an export's
   integrity rests on the audit events around it.
+- Content credentials and artifacts (1.6.0, Sprint 39a). Content credentials are built from the specification's parts,
+  not a reference library: no time stamp, no ingredient chain for variations, and an assertion hash over the content
+  box; a third-party validator may flag those (see above). JPEG images from a ComfyUI worker carry neither manifest
+  chunk. Verification judges certificate validity at the time of the check, so an image signed with a since-expired
+  certificate reports `certificateValid: false` though it was valid when made. Artifacts are taken from fenced blocks
+  only (a model that writes code without a fence makes none), names come from the fence's info string (two blocks the
+  model names the same in one answer keep the first), and a conversation holds at most 200 artifacts. A render link
+  is a bearer capability for its lifetime; anyone holding it can show that version until it expires.
+
+- App packages, environments and promotion (1.6.0, Sprint 39b). A package carries the workflows its triggers name
+  as drafts; the importer publishes them, and until then the triggers are skipped. A deployment applies entity changes
+  through the designer's rules, so a field type change on an entity holding records fails the deployment (the backup
+  stays beside it) rather than migrating values. A rollback restores the design, not the records written since; an
+  entity that still holds records survives a rollback that would drop it. The approval workflow's trigger must accept
+  the deployment input (or declare no schema). A pipeline's stages must be apps of one tenant; promotion across
+  instances goes through git export and import, which is not two-way (a change in the repository is imported as a new
+  app, not merged). Git pushes dial out through the address checks but not through the tenant's allowed-host list.
+  Deployment history is pruned on read, not by a job.
+
+- Data model drafts, AI fills and outside tables (1.6.0, Sprint 39c). A draft is only as good as the model: it may
+  name fields that validate but mean little, and the diff shows what changes, not whether it is sensible. Debounced
+  AI regeneration keys its window on the clock, so two edits either side of a window boundary ask twice; a fill's
+  estimate samples prompts and assumes `maxLength` or 600 characters of output, and the cost uses the tenant's price
+  at the time (B-7402's known gap applies). A pull reads at most `APPS_SOURCE_PULL_MAX_ROWS` rows and then stops
+  deleting (a capped pull never removes records); pulls are full reads, not change streams; a write through to the
+  table that succeeds but whose local write then fails leaves the row outside ahead of the app until the next pull;
+  CSV imports into a sourced entity write through row by row (slow, and partial on a refusal); records above the
+  connection's label that the designer created locally are pushed to a table that carries no labels.
+
+- Entity APIs and app embedding (1.6.0, Sprint 39d). An entity named like one of the app's own route segments
+  (`entities`, `forms`, `policies`, `triggers`, `export`, `schema`, `embed`, `transfers`, `drafts`, `import`, `held`)
+  is reached only through `/entities/:entity/records`, not the entity API; `where` conditions are typed by their
+  text (a string that looks like a number is a number); `include=related` fetches each related record separately
+  (at most one call per distinct reference). A schema version holds the whole definition of a changed entity, not a
+  diff, and nothing restores an earlier version. The generated TypeScript client types values loosely (`json` as
+  `unknown`, formulas as `string | number | boolean`). An app-limited key is refused on `/v1` and the MCP server
+  outright rather than narrowed to its app's tools. The embed page's `frame-ancestors` names whole origins, not
+  paths; a public embed page is reachable by anyone who learns its random id (as a public form link is), and a
+  submission is `source: form`, by no one. A signed embed names the person by a claim the host asserts: the host site
+  is trusted for who is behind the browser, within what that person may do; the `host` recorded on a session is the
+  token's `iss`, not the framing page; HS256 secrets are shared with the host site; the tenant CA path checks the
+  leaf against the active intermediate only (no chain of several intermediates, no OCSP); ended sessions are purged
+  by the next exchange's bookkeeping, not a schedule; the embed page lists at most six fields per record and keeps the
+  session token in memory, so a reload needs a new host token.

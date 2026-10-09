@@ -29,6 +29,8 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
     WEB_ROOT: '/nonexistent',
     BLOB_DIR: mkdtempSync(path.join(tmpdir(), 'exprsn-blobs-')),
     JOB_QUEUE: 'db',
+    // 1.6.0 (B-8401): AI fills run at once in tests; the debounce has its own test.
+    APPS_AI_DEBOUNCE_MS: '0',
     // The variables the tests' user stores and upstream IdPs reference.
     SECRET_REF_ENV: 'LDAP_*,HR_*,SYNC_HR_*,UPSTREAM_SECRET_*,NOT_SET_ANYWHERE',
     ...overrides

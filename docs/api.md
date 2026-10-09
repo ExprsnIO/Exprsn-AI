@@ -5169,3 +5169,273 @@ counted (`omitted`); the export's label is the highest it carries. More than `CO
 | `POST /api/compliance/exports` `{userId?, workspaceId?, from, to, kinds?}` | One of `userId` and `workspaceId` at least; `kinds` defaults to all five. `202` Export; `400` past `COMPLIANCE_EXPORT_MAX_DAYS`; `404` for an unknown user or workspace. Audited `compliance.export.requested`; the job audits `compliance.exported` (or `compliance.export.failed`) |
 | `GET /api/compliance/exports/:id` | One export |
 | `GET /api/compliance/exports/:id/download` | `application/x-ndjson`, streamed part by part. `409` until ready; `403 step: clearance` below the export's label. Audited `compliance.export.downloaded` |
+
+
+## Sprint 39a (1.6.0): content credentials and versioned artifacts (B-7901, B-8001)
+
+Migration `041_provenance_artifacts`. Settings `IMAGE_C2PA`, `CHAT_ARTIFACT_MIN_CHARS`, `CHAT_ARTIFACT_MAX_BYTES`,
+`CHAT_ARTIFACT_RAW_TTL_SECONDS`. CLI `exprsn-ai c2pa:verify <file.png> [anchor.pem…]`.
+
+### Content credentials (B-7901; `images:generate`)
+
+A generated PNG carries, after the HMAC provenance chunk of Sprint 20, a C2PA manifest store in a `caBX` chunk: the
+assertions `c2pa.actions` (one `c2pa.created` action by a trained algorithmic source, with the job and model),
+`c2pa.hash.data` (the SHA-256 of every byte of the file outside the chunk) and `io.exprsn.generation` (job, tenant,
+workspace, user, model, profile, backend, seed, steps, size, prompt hash, label, time); the claim (hashed references
+to them, the generator, the format); and a COSE_Sign1 signature (ES256) over the claim with the certificate chain in
+its protected header. The signer is the tenant's **content-credentials certificate**: an end-entity certificate the
+tenant's active issuing CA makes on first use, key in custody like every CA key, listed under the tenant's
+certificates (common name `Exprsn-AI content credentials`, no profile) where it can be revoked; a revoked, expiring
+(within 7 days) or re-parented certificate is replaced on the next image, audited `pki.content_signer.created`. The
+manifest travels with the bytes: downloads, attachments and the blob store keep it. A tenant with no issuing CA, or a
+server with no key custody, gets images with the HMAC manifest only and a reason; `IMAGE_C2PA=off` turns signing off.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/images/:id` and `GET /api/images` | Each image carries `contentCredentials: {signed, label, instanceId, signedAt, certificate, fingerprint, issuer}` or `{signed: false, reason}` |
+| `GET /api/images/:id/content-credentials` | Reads the manifest back from the stored bytes and verifies it: `{present, verified, checks: {claimHashes, dataHash, signature, chain, anchor, certificateValid}, problems, manifest: {label, generator, instanceId, created, action, model, profile, tenant, tenantName, job}, signer: {subject, issuer, fingerprint, notBefore, notAfter}, summary}`. `anchor` is checked against the tenant's issuing CAs and the platform root |
+
+`exprsn-ai c2pa:verify <file.png> [anchor.pem…]` runs the same checks offline on a downloaded file (exit code 2 when
+it does not verify); without anchors the chain is checked internally and `anchor` is `null`. The HMAC manifest
+(`GET /api/images/:id/provenance`) is verified over the bytes without either chunk, so both verify on one file.
+
+### Versioned artifacts (B-8001; `chat:read`)
+
+When an answer finishes (`complete` or `stopped`), every fenced block in it of at least `CHAT_ARTIFACT_MIN_CHARS`
+characters and at most `CHAT_ARTIFACT_MAX_BYTES` bytes becomes an artifact of the conversation, named from the fence
+(` ```html index.html`, ` ```ts title="app.ts"`) or, unnamed, `<language>-<n>` (the n-th unnamed block of that language
+in the answer); the kind is `html` (html, svg), `document` (markdown, text) or `code`. An answer that produces the same
+name with different content adds a version; the same content adds none. Versions are sealed with the tenant key
+and carry their message id; a conversation holds at most 200 artifacts. The artifact's label is the high-water mark
+of the answers that produced it.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/conversations/:id/artifacts` | For the owner or a share reader: `{artifacts: [{id, key, kind, language, title, label, versions: [{id, version, messageId, bytes, sha256, createdAt, rawUrl}], createdAt, updatedAt}]}`, oldest first, above the caller's clearance left out |
+| `GET /api/conversations/:id/artifacts/:aid/versions/:n` | One version with its `content`; `404` for a version that does not exist, `403 step: clearance` above the reader's |
+| `GET /api/shared-conversations/:id`, `POST /api/shared-links/open`, `POST /api/public/shared-links/open` | Transcripts carry `artifacts` the same way, limited to the versions of the messages shown |
+| `GET /api/public/artifacts/:vid/raw?t=` | No session: the version's bytes for a sandboxed iframe, under the token minted with the list (`rawUrl`, valid `CHAT_ARTIFACT_RAW_TTL_SECONDS`, an HMAC by the KMS). `text/html` for html artifacts, `text/plain` otherwise, with its own CSP (`sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; frame-ancestors 'self'`). `404` for a wrong, stale or missing token |
+
+The console renders html artifacts in `<iframe sandbox="allow-scripts">` on that URL (an opaque origin: no cookies,
+storage or API of the console), code and documents as text.
+
+## Sprint 39b (1.6.0): app packages, environments, promotion, deployment history, git export (B-8201 to B-8204)
+
+Migration `041b_app_packages` (`app_packages`, `app_pipelines`, `app_deployments`). New settings: `APPS_PACKAGE_MAX_BYTES`
+(8 MB), `APPS_DEPLOYMENT_HISTORY_DAYS` (365), `APPS_GIT_TIMEOUT_MS` (5 min) and `APPS_GIT_ALLOW_FILE` (false). Job:
+`apps.deploy`. Every route below needs `apps:design`; the routes that name an app also need the app to be designable
+by the caller (its workspace, its label).
+
+### Packages (B-8201)
+
+A package (`format: exprsn-app/2`) is the whole of an app's design: `app` (name, title, description, label),
+`entities` (fields, formulas, state machines), `forms`, `triggers` (each naming its workflow by name), `policies`
+(B-81) and `workflows` (the published workflows the triggers name, each as a signed `exprsn-workflow/1` bundle), plus
+`records` when asked for (values without computed fields, label and state). It is signed with the same KMS HMAC key as
+`exprsn-app/1` bundles (`key`, `signature` over the canonical JSON of everything else) and numbered per app
+(`version`). The old `POST /api/apps/import` door takes a package as well as a bundle.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/packages` | `{packages: [{id, appId, appName, version, format, source: export \| promotion \| backup \| git \| rollback, hash, withData, size, note, createdBy, createdAt}], stage}`, newest first; `stage` is `{pipeline, name, stage}` when a pipeline names the app |
+| `POST /api/apps/:app/packages` `{withData?, note?}` | Builds, signs and stores the next version: `201` with the row and `package` (the signed document). `413` above `APPS_PACKAGE_MAX_BYTES`. Audited `app.package.created` |
+| `GET /api/apps/:app/packages/:id` | The row and the signed package, opened from its sealed copy and checked against its hash |
+| `POST /api/apps/packages/import` `{package, name?, workspaceId?}` | Verifies the signature over exactly what arrived (a package changed after signing, signed elsewhere, naming another key or unsigned is `422 Package refused`, audited `app.import.refused`), then creates the app and fills it: `201` with the app, `report` and `package`. Audited `app.imported` |
+
+The report an import or a deployment returns: `{entities: {created, updated, removed, kept}, forms: {created, updated,
+removed}, triggers: {created, removed, skipped: [{entity, workflow, reason}]}, policies: {created, removed}, workflows:
+{imported, existing, failed: [{name, reason}]}, records: {created, skipped: [{entity, reason}]}}`. Entities, forms,
+triggers and policies are reconciled by name; a workflow a trigger names is imported as a draft when none of that name
+exists in the scope (the trigger is then skipped until it is published); records go only into an entity that has none,
+with reference values re-pointed to the new ids; an entity the package no longer has is removed when empty and kept
+(and listed under `kept`) when it still holds records.
+
+### Pipelines and promotion (B-8202)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/pipelines` | `{pipelines: [{id, name, stages: {development, test, production: {id, name, title, label, workspaceId, scope}}, approvalWorkflow: {id, name} \| null, last: {test, production: deployment \| null}, activeDeployment, createdBy, createdAt, updatedAt}]}`; only pipelines whose three apps the caller can see |
+| `POST /api/apps/pipelines` `{name, development, test, production, approvalWorkflow?}` | Three different apps the caller may design (by id or name); `approvalWorkflow` is a published workflow with an approval step (`409` otherwise). `201`. Audited `app.pipeline.created` |
+| `GET /api/apps/pipelines/:id`, `PATCH` (any of the fields), `DELETE` | One pipeline; a delete takes its history and is `409` while a deployment is going. Audited `app.pipeline.updated`, `app.pipeline.deleted` |
+| `POST /api/apps/pipelines/:id/promote` `{to: test \| production, note?}` | `202` with the deployment. To test: the development app is packaged now (`source: promotion`, a new version) and deployed onto the test app by the job `apps.deploy`. To production: the exact package the last successful promotion to test landed (`409 Nothing has passed test yet` before one did; a stage cannot be skipped), after the approval workflow's run succeeds: the run starts with `{kind: app-deployment, deployment, pipeline, from, to, app, package: {id, version, hash}, note, requestedBy}` as input and the deployment as its caller (`caller_kind: app-deployment`), the deployment waits in `awaiting-approval`, and a failed, rejected, cancelled or expired run rejects it (the requester is notified). `409` while another deployment of the pipeline is going, or when no approval workflow is named. Audited `app.package.promotion.requested`, then `app.package.promotion.approved` or `app.package.promotion.rejected` |
+
+### Deployment history and rollback (B-8203)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/pipelines/:id/deployments?limit=` | `{deployments: [{id, pipelineId, kind: promotion \| rollback, from, to, packageId, version, sourceAppId, targetAppId, backupPackageId, state: awaiting-approval \| queued \| running \| succeeded \| failed \| rejected, approvalRunId, rollbackOf, report, error, createdBy, createdByName, createdAt, startedAt, finishedAt}]}`, newest first; rows older than `APPS_DEPLOYMENT_HISTORY_DAYS` are dropped on read |
+| `GET /api/apps/deployments/:id` | One deployment |
+| `POST /api/apps/deployments/:id/rollback` `{note?}` | Deploys the backup taken before a succeeded deployment onto the same stage, as a deployment of kind `rollback` (with its own backup). `202`. `409` when the deployment did not succeed, kept no backup, or another deployment is going. Audited `app.package.rollback.requested`, then `app.package.rolled_back` |
+
+Before a package is applied, the job packages the target app as it is (`source: backup`, a version of the target) and
+records it on the deployment; the deployment ends `succeeded` with its report, or `failed` with the reason (audited
+`app.package.deployment.failed`, the requester notified).
+
+### Git export and import (B-8204)
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/packages/:id/git` `{url, ref?, path, message?, credential?, username?}` | Clones the repository (https; `file://` only with `APPS_GIT_ALLOW_FILE`; never a URL with credentials or a host at a link-local address), writes the package under `path` as one file per object (`package.json` with the format, version, key, signature and hash; `app.json`; `entities/<name>.json`; `forms/<name>.json`; `triggers/<n>-<entity>-<kind>.json`; `policies/<n>-<name>.json`; `workflows/<name>.json`; `records/<entity>.json` when the package carries data), pretty-printed with sorted keys, commits as Exprsn-AI and pushes to `ref` (started from the default branch when it does not exist yet): `{commit, files, path}`; no commit when nothing changed. `credential` is a `vault:path#key` reference resolved as the caller and handed to git through a credential helper, with `username` (default `x-access-token`). Audited `app.package.pushed` |
+| `POST /api/apps/packages/git-import` `{url, ref?, path, credential?, username?, name?, workspaceId?}` | Reads the files under `path`, reassembles the package in the order it was signed in, verifies it like a pasted package (`422 Package refused` for a changed file) and creates the app: `201` with the app, `report`, `package` (`source: git`) and `commit` |
+
+## Sprint 39c (1.6.0): data model generation, AI field upgrades, outside database sync (B-8301, B-8401, B-8402, B-8501)
+
+Migration `041c_model_gen_sync` (`app_ai_fills`, `app_entity_sources`, `app_records.ai_pending` and `external_key`).
+New settings: `APPS_AI_DEBOUNCE_MS` (2000), `APPS_AI_FILL_MAX_ROWS` (10 000), `APPS_SOURCE_PULL_MAX_ROWS` (10 000).
+Jobs: `apps.ai-fill-all`, `apps.source-pull`, `apps.source-schedules`. Every route below needs `apps:design`.
+
+### Data model drafts (B-8301)
+
+`server/src/apps/model-drafts.ts` (`s.apps.modelDrafts`). A description of the app goes to a local model through the
+gateway and a published profile (the description passes the `user-input` checkpoint first, the answer the
+`model-output` one). The model answers with entities (typed fields, `reference` fields as relations, `formula` fields,
+a state machine) and record triggers naming workflows; the draft is validated with the entity schema and
+`checkDefinition` against the app's entities and each other, compared with the saved entities, and returned. Nothing
+is saved until the draft is accepted.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/model/draft` `{prompt, profile, label?}` | `{draft: {entities: [{name, title?, definition}], triggers: [{entity, events, workflow}]}, diff: [{entity, change: new \| changed \| same, addedFields, changedFields, removedFields, states: added \| changed \| same \| null, problems}], triggers: [{entity, events, workflow, ok, problem}], valid, problems}`. `removedFields` are the saved fields the draft omits: listed, never removed. A trigger whose workflow does not exist is reported on the trigger and skipped at apply; it does not make the draft invalid. `422` when the model's answer is unusable (what parses on its own is still returned for editing) or the description is refused; `503` when the model is unavailable. Audited `app.model.drafted` |
+| `POST /api/apps/:app/model/apply` `{entities, triggers?}` | Accepts a draft, edited or as returned: new entities are created in dependency order (a cycle of references is created without the references first, then completed), existing ones gain the drafted fields (by name, replacing a field of the same name) and the drafted state machine, nothing is removed, and triggers whose workflow exists are created. `{created, updated, unchanged, triggers: [{entity, workflow, created, reason}]}`. `422 {problems}` when the draft is not valid; the usual `409`s of entity updates (a type change on an entity with records) apply. Audited `app.model.applied` on top of each entity's own events |
+
+### AI field prompts and regeneration (B-8401)
+
+An AI field's prompt holds placeholders that are a plain field name or a formula over the plain fields and the formula
+functions: `Summarise {{name}} worth {{round(amount * 1.2, 2)}} ({{upper(name)}})`. They are checked when the entity
+is saved (an unreadable placeholder is a `400` problem naming it) and rendered with the formula engine when the fill
+runs. An update regenerates only the AI fields whose prompts read a changed field (`app_records.ai_pending` holds the
+list; a new record regenerates every AI field); edits within `APPS_AI_DEBOUNCE_MS` of each other share one
+`apps.ai-fill` job (a dedupe key per record and quiet window) that runs when the window ends, so a burst of edits asks
+the model once per field. Metering, the `model-output` checkpoint and the audit events are as before
+(`app.record.ai.filled`, `app.record.ai.failed`).
+
+### AI fills over every row (B-8402)
+
+`server/src/apps/ai-fills.ts` (`s.apps.aiFills`). One AI field of an entity is filled (where empty) or refreshed (every
+record) as the job `apps.ai-fill-all`, one record at a time through the profile's guardrails, the tenant's quota and
+metering, with the fill's token totals kept on the fill.
+
+| Method and path | What it does |
+| --- | --- |
+| `POST /api/apps/:app/entities/:entity/ai/estimate` `{field, scope: empty \| all}` | `{records, capped, promptTokens, outputTokens, model, currency, cost}`: the records the fill would cover (at most `APPS_AI_FILL_MAX_ROWS`; `capped` when more exist), tokens from a sample of up to 50 rendered prompts and the field's `maxLength`, and the cost when the tenant has a price for the profile's model (`usage_prices`, B-7402); `cost` is null otherwise. `400` when the field is not an AI field |
+| `GET /api/apps/:app/entities/:entity/ai/fills` | The last 20 fills, newest first: `{fills: [Fill]}`, a Fill being `{id, field, scope, state: queued \| running \| succeeded \| failed \| cancelled, total, done, failed, skipped, promptTokens, outputTokens, estimate, jobId, startedBy, error, createdAt, startedAt, finishedAt}` |
+| `POST /api/apps/:app/entities/:entity/ai/fills` `{field, scope}` | Estimates, then starts the job: `202` Fill. `409` while a fill of that field is queued or running. Audited `app.ai.fill.started` with the estimate |
+| `GET /api/apps/:app/entities/:entity/ai/fills/:id` | One fill with its counters; `done`, `failed`, `skipped` and the token totals advance as it runs, and the job carries progress |
+| `POST /api/apps/:app/entities/:entity/ai/fills/:id/cancel` | Stops a queued or running fill: the job's signal is aborted and the fill is marked cancelled, so it stops after the record it is on; filled values stay. `409` once finished. Audited `app.ai.fill.cancelled`; the job's end is audited `app.ai.fill.finished` with the state and counts |
+
+### Outside tables as entities (B-8501)
+
+`server/src/apps/sources.ts` (`s.apps.sources`). An entity can be backed by a table (or view) of a PostgreSQL or
+MySQL data connection. A **pull** (`apps.source-pull`: on demand, or every `pullMinutes` from the `apps.source-schedules`
+tick, which runs with the trigger schedules every `APPS_SCHEDULE_TICK_SECONDS`) reads the allow-listed table unmasked
+(`ConnectionService.readRowsForApp`, at most `APPS_SOURCE_PULL_MAX_ROWS` rows) and writes the rows as records keyed by
+the key column (`app_records.external_key`): values typed by the fields (numbers, booleans, dates to the field's
+precision, JSON parsed), a column mapping where a field's column has another name, the state from `stateColumn`, rows
+gone from the table removing their records when `deleteMissing` is on; a row a field refuses is counted and reported
+(up to 20 problems) and the rest are written. With **writes** on, a record created, changed, moved through its state
+machine or deleted in the app (the API, a form, a workflow step, a bulk write) reaches the table first through the
+driver's row mutation (`mutate` on the PostgreSQL and MySQL drivers: a parameterised insert, update or delete in its
+own transaction; `ConnectionService.mutateRow`), so a refused outside write fails the request (`502 Write failed`, or
+`409 Row missing outside`) and nothing changes locally; with writes off, record writes are refused with `409`. The key
+of a new record is the key field's value, or the record id when no key field is mapped (the column must take text).
+Pulled records are written as source `import` without a person, fire the entity's triggers and queue AI fills like an
+import. Attaching needs `apps:design` and `connections:manage`, and the entity's label must cover the connection's.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/entities/:entity/source` | `{entity, connectionId, connection, engine, object, keyColumn, keyField, columns, stateColumn, writes, deleteMissing, pullMinutes, enabled, nextPullAt, lastPullAt, lastPull: {rows, created, updated, deleted, unchanged, failed, capped, ms, error?, problems?}, updatedAt}`; `404` when the entity has none. `GET /api/apps/:app` also lists `sources` for designers |
+| `PUT /api/apps/:app/entities/:entity/source` `{connectionId, object, keyColumn, keyField?, columns?, stateColumn?, writes, deleteMissing, pullMinutes?, enabled}` | Attaches or changes the source. `403 step: permission` without `connections:manage`; `400` when the key field is not a string or number field, a mapped field is computed or missing, or a state column is given without a state machine; `409` for an engine other than PostgreSQL or MySQL, an object outside the connection's allow-list, or a connection labelled above the entity. Audited `app.entity.source.set` / `updated` |
+| `DELETE /api/apps/:app/entities/:entity/source` | Detaches; the records stay as ordinary records. Audited `app.entity.source.removed` |
+| `POST /api/apps/:app/entities/:entity/source/pull` | Queues a pull now: `202 {jobId}`. The result lands on the source; audited `app.entity.source.pulled` (or `pull_failed`) with the counts |
+
+## Sprint 39d (1.6.0): entity APIs, the schema API, OpenAPI and the client per app, app embedding (B-8601 to B-8603, B-8701, B-8702)
+
+Migration `041d_entity_api_embeds` (`api_keys.app_scope`, `app_schema_versions`, `app_embeds`, `app_embed_keys`,
+`app_embed_pages`, `app_embed_sessions`). New settings: `APP_EMBED_MAX_TTL_SECONDS` (3600) and
+`APP_EMBED_SESSION_PER_MINUTE` (30). No new permissions: the entity API is `records:read` and `records:write`, the
+schema API and the embed settings `apps:design` (the backlog's `apps:manage` is this catalogue's `apps:design`).
+
+### The entity API (B-8601)
+
+`server/src/routes/apps-entity-api.ts`, mounted after the app's own routes: `/api/apps/:app/<segment>` reaches an
+entity only when the segment is none of the app's own (`entities`, `forms`, `policies`, `triggers`, `export`,
+`schema`, `embed`, `openapi.json`, `client.ts`, `client.js`, `transfers`, `drafts`, `import`, `held`); an entity with
+one of those names is reached through `/entities/:entity/records` as before. Every call is the same service as the
+records routes, so the Sprint 38c policies and masks, labels, workspaces and audit apply unchanged; `app` and `entity`
+may be ids or names.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/:entity?filter&where&sort&q&limit&offset&cursor&include` | `records:read`. A page: `{total, limit, offset, nextCursor, records}`. `filter` is a record filter as JSON; `where` (repeatable) is `field:op:value` with the ops `eq, ne, gt, gte, lt, lte, in, contains, startsWith, exists` (`in` takes a comma-separated list; numbers and booleans are typed), every `where` and the `filter` combined with and; `sort` is `field:asc,field:desc` (at most three); `limit` 1 to 200 (50); `offset` or `cursor` (keyset paging); `include=related` adds `related: {<field>: Record | null}` for the reference and entity-lookup fields, each the record as the reader may read it (null when they may not) |
+| `POST /api/apps/:app/:entity` `{values, label?}` | `records:write`. `201` the record. `400` on a value that fails its field, `403 step: policy` outside the reader's policies |
+| `GET /api/apps/:app/:entity/:id?include=related` | `records:read`. The record (`404` outside the reader's reach) |
+| `PATCH /api/apps/:app/:entity/:id` `{values, version?}` | `records:write`. The record; `409` when `version` is behind |
+| `DELETE /api/apps/:app/:entity/:id` | `records:write`. `204` |
+| `POST /api/apps/:app/:entity/:id/transition` `{to, version?, note?}` | `records:write`. The record in its new state; `409` on an illegal transition |
+
+**Keys limited to one app or entity.** `POST /api/me/api-keys` takes `app: {app, entity?}` (the app the owner can see,
+by id or name, and optionally one of its entities): the key's scopes must then be within `records:read` and
+`records:write` (`400` otherwise), and the key is stored with `appScope: {app, entity}` (ids), listed by `GET
+/api/me/api-keys` and audited in `apikey.created`. Such a key is accepted under `/api/apps` only (`403 step: scope`
+elsewhere, `/v1` and the MCP server included), refused on another app, and with an entity refused on anything but
+that entity's records (`/api/apps/:app/:entity…` and `/api/apps/:app/entities/:entity/records…`), the app's
+documents included. Holders of `apps:design` are not subject to policies on the screen, but a key leaves
+`apps:design` out, so the owner's own app-limited key reads masked like a member.
+
+### The schema API and schema versions (B-8602)
+
+`server/src/apps/schema-api.ts` (`s.apps.schema`). Every change to an app's design, whichever route makes it (the
+Apps screen, these routes, a package import), is one row of `app_schema_versions`: the next version number, what
+changed (`entity.created | entity.updated | entity.deleted | field.added | field.updated | field.removed | states.set
+| form.created | form.updated | form.deleted`), its target, a summary, the change as JSON, the SHA-256 of the whole
+design afterwards (entities with their definitions and forms, by name) and the source (`api`, `schema-api`,
+`package`), audited `app.schema.versioned`. `AppSchema.current(app)` gives `{version, hash, changedAt}` for the app
+package to carry. All `apps:design`, on an app within the caller's clearance.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/schema` | `{app, version, hash, changedAt, entities: [Entity], forms: [Form]}` |
+| `GET /api/apps/:app/schema/versions?limit` | `{versions: [{version, kind, target, summary, change, hash, source, createdBy, createdAt}]}`, newest first (100) |
+| `GET /api/apps/:app/schema/versions/:version` | One version |
+| `PUT /api/apps/:app/schema/entities/:entity` `{title?, label?, definition}` | Creates the entity (`201`) or replaces its definition (`200`); the answer carries `schema: {version, hash}` |
+| `DELETE /api/apps/:app/schema/entities/:entity` | `204`; `409` while another entity refers to it |
+| `POST /api/apps/:app/schema/entities/:entity/fields` `{field, rev?}` | Adds a field (`201`); `409` when the name is taken or `rev` is behind; `400` for a reserved name or an invalid field |
+| `PATCH /api/apps/:app/schema/entities/:entity/fields/:field` `{patch, rev?}` | Changes a field's settings (the name and type stay); the whole field is checked again |
+| `DELETE /api/apps/:app/schema/entities/:entity/fields/:field` | Removes the field (records keep their stored values; the index drops it on reindex) |
+| `PUT /api/apps/:app/schema/entities/:entity/states` `{states \| null, rev?}` | Sets or removes the state machine |
+| `PUT /api/apps/:app/schema/forms/:form` `{title?, entity, definition, ratePerMinute?}` | Creates (`201`) or replaces (`200`) a form |
+| `DELETE /api/apps/:app/schema/forms/:form` | `204` |
+
+### OpenAPI and the client per app (B-8603)
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/openapi.json` | `records:read`. An OpenAPI 3.1 document of the app's entity API, typed from the entity definitions (`<Entity>Values`, `<Entity>Input`, `<Entity>`, `<Entity>Page`, the transition states as an enum), `info.version` the schema version and `x-exprsn-schema-hash` the hash, computed on each read; `ETag` is the hash and `If-None-Match` answers `304` |
+| `GET /api/apps/:app/client.ts`, `GET /api/apps/:app/client.js` | `records:read`. A client generated from the same design: `createClient({baseUrl, token, workspace?, fetch?})` with `<entity>.list(q) / get(id, include) / create(values, label) / update(id, values, version) / delete(id) / transition(id, to, version, note)`, `schemaVersion` and `schemaHash`; typed in the TypeScript file (`<Entity>Values`, `<Entity>Input`, `<Entity>Record`, `Page`, `ApiError`), the same code without types in the JavaScript one. A refusal is thrown as `ApiError {status, problem}` |
+
+### App embedding (B-8701, B-8702)
+
+`server/src/apps/embeds.ts` (`s.apps.embeds`) and `routes/apps-embed-public.ts`. Settings and keys are `apps:design`
+on an app within the caller's clearance; the pages and the exchange are public.
+
+| Method and path | What it does |
+| --- | --- |
+| `GET /api/apps/:app/embed` | The settings `{publicEnabled, allowedHosts, signedEnabled, claimName, claimMatch (username \| email \| id), maxTtlSeconds, write, entities (null: every entity), audience, signedUrl, frameAncestors}` with `keys: [{id, kid, alg, publicKey, state, createdBy, createdAt, revokedAt}]`, `pages: [{id, form, formId, formTitle, entity, enabled, public, url, createdBy, createdAt}]` and the last 50 `sessions: [{id, user, username, key, host, expiresAt, createdAt, lastSeenAt, revokedAt}]` |
+| `PUT /api/apps/:app/embed` `{publicEnabled?, allowedHosts?, signedEnabled?, claimName?, claimMatch?, maxTtlSeconds?, write?, entities?}` | Changes the settings. `allowedHosts` are origins (`https://host[:port]`, at most 50); `entities` names entities of the app (`400` otherwise). Audited `app.embed.updated` |
+| `POST /api/apps/:app/embed/keys` `{kid, alg: ES256 \| RS256 \| EdDSA \| HS256 \| x5c, publicKey?, secret?}` | `201` the key. ES256 (P-256), RS256 (2048 bits or more) and EdDSA take the public key (PEM, SPKI); HS256 takes a base64url secret of at least 32 bytes or generates one, answered once as `secret`; `x5c` needs no material but an active tenant CA (`409` without). `409` when the `kid` exists on the app. Audited `app.embed.key.created` |
+| `DELETE /api/apps/:app/embed/keys/:id` | Revokes the key and every session it opened. Audited `app.embed.key.revoked` |
+| `POST /api/apps/:app/embed/pages` `{form}` | `201` `{id, url, …}`: the public form published as an embed page under a random id (the same page when one exists); `409` when the form has no public link. Audited `app.embed.page.created` |
+| `DELETE /api/apps/:app/embed/pages/:id` | `204`. Audited `app.embed.page.removed` |
+| `POST /api/apps/:app/embed/sessions/revoke` `{id?}` | Ends one or every embedded session of the app: `{revoked}`. Audited `app.embed.sessions.revoked` |
+| `GET /embed/:id` | Public. The embed page of a public form (HTML), served with `Content-Security-Policy: … frame-ancestors 'self' <allowed hosts>`, no `X-Frame-Options`, `X-Robots-Tag: noindex, nofollow`; `404` when public pages are off, the form is no longer public, or the page is gone |
+| `POST /api/public/embeds/open` `{embed}` | Public, rate-limited per address. The form's fields as `/api/public/forms/open` gives them, plus `form` |
+| `POST /api/public/embeds/submit` `{embed, values}` | Public. The same path as a public link submission (per-address and per-form limits, the `user-input` checkpoint, `202` when held); the form's link token is never on the page |
+| `GET /embed/app/:tenant/:app` | Public. The signed-embed page of an app (HTML, the same headers), `404` while signed embeds are off. The host site opens it with its token in the fragment (`#token=<jwt>`), never a query string |
+| `POST /api/public/embeds/session` `{tenant, app, token}` | Public, `APP_EMBED_SESSION_PER_MINUTE` per address. Verifies the host token and opens an embedded session: `{token (exe_…), expiresAt, app, user, write, entities: [{name, title, fields, states}]}`. The token's `kid` names a key of the app and `alg` must match it (`x5c` keys take ES256 or RS256 with the certificate chain in `x5c`, verified against the tenant's active intermediate and its revocations); `aud` must include `exprsn-ai:app:<app id>`; `exp` is required (a minute of skew), `iat` and `nbf` are honoured, `jti` is required and accepted once per key; the `claimName` claim names the person by `claimMatch` (an active user of the tenant). `401 invalid_token` with the reason otherwise; every exchange is audited `app.embed.session.created` or `app.embed.session.refused` (the kid and the reason, never the token) |
+
+An embedded session is a bearer credential of its own (`Authorization: Bearer exe_…`): no cookie, no CSRF token, apart
+from console sessions and their revocation; it lives for the shorter of the token's `exp`, the app's `maxTtlSeconds`
+and `APP_EMBED_MAX_TTL_SECONDS`, and ends with its key. It acts as the mapped user with `records:read` (and
+`records:write` when the app allows writes) under `/api/apps/<the app>` only, on the entities the settings list,
+within the user's policies, clearance and workspaces; anything else is `403 step: scope`. Ended sessions are purged
+after a day.

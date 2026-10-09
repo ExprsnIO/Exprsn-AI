@@ -176,6 +176,7 @@ export class AppForms {
     if (dup) throw conflict(`The app has a form named ${input.name}.`);
     await this.db('app_forms').insert({ ...row, definition: JSON.stringify(row.definition) });
     await this.audit(actor, 'app.form.created', { app: app.id, form: row.id, name: row.name, entity: entity.id });
+    await this.apps.schema.record(actor, app, 'form.created', row.name, `Form ${row.name} on ${entity.name} created with ${row.definition.fields.length} field${row.definition.fields.length === 1 ? '' : 's'}`, { entity: entity.name, definition: row.definition });
     return { app, entity, form: row };
   }
 
@@ -186,6 +187,7 @@ export class AppForms {
     const upd = { title: patch.title ?? form.title, definition: JSON.stringify(def), rate_per_minute: patch.ratePerMinute ?? form.rate_per_minute, updated_by: actor.principal.userId, updated_at: Date.now() };
     await this.db('app_forms').where({ id: form.id }).update(upd);
     await this.audit(actor, 'app.form.updated', { app: app.id, form: form.id, name: form.name }, { fields: def.fields.length, ratePerMinute: upd.rate_per_minute });
+    await this.apps.schema.record(actor, app, 'form.updated', form.name, `Form ${form.name} updated (${def.fields.length} field${def.fields.length === 1 ? '' : 's'})`, { entity: entity.name, definition: def });
     return { app, entity, form: { ...form, ...upd, definition: def } };
   }
 
@@ -193,6 +195,7 @@ export class AppForms {
     const { app, form } = await this.form(actor.principal, appRef, formRef);
     await this.db('app_forms').where({ id: form.id }).delete();
     await this.audit(actor, 'app.form.deleted', { app: app.id, form: form.id, name: form.name }, { public: form.public });
+    await this.apps.schema.record(actor, app, 'form.deleted', form.name, `Form ${form.name} deleted`, null);
   }
 
   private tokenHash(token: string): string {
@@ -331,7 +334,16 @@ export class AppForms {
 
   /** A public submission: per-address and per-form limits first, then the same path as a signed-in one. */
   async submitPublic(token: string, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; held: boolean; message: string; dropped: number }> {
-    const { app, entity, form } = await this.byToken(token);
+    const { form } = await this.byToken(token);
+    return this.submitPublicForm(form, input, ip, traceId, perAddress);
+  }
+
+  /** 1.6.0 (B-8701): the public submission path for a form an embed page already resolved (by its embed id). */
+  async submitPublicForm(formRow: FormRow, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; held: boolean; message: string; dropped: number }> {
+    const app = await this.apps.appById(formRow.tenant_id, formRow.app_id);
+    const entity = await this.apps.entityById(formRow.tenant_id, formRow.entity_id);
+    if (!app || !entity || !formRow.public) throw notFound('Form');
+    const form = formRow;
     const addr = await perAddress.consume(ip ?? 'unknown');
     if (!addr.allowed) throw tooManyRequests('Too many form submissions from this address; try again in a minute.', addr.resetMs / 1000);
     const perForm = await new Limiter(this.s().counters, 'app-form', form.rate_per_minute, 60_000).consume(form.id);

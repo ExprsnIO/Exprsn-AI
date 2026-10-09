@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Exprsn-AI",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "Every route the server registers. Operations added in 1.4.0 are described in full (x-exprsn-since: 1.4.0); earlier ones carry the summary from docs/api.md, which remains the reference for their bodies. Errors are RFC 9457 problem details. server/test/openapi.test.ts fails when a registered route is missing here or an operation here is no longer registered; `npx tsx server/test/openapi-routes.ts --write` adds missing routes as summaries."
   },
   "servers": [
@@ -34,7 +34,7 @@
       "pluginToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A plugin handler run's scoped token (xpt_\u2026), B-2004"
+        "description": "A plugin handler run's scoped token (xpt_…), B-2004"
       },
       "davBasic": {
         "type": "http",
@@ -49,7 +49,7 @@
       "scimToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A SCIM token (exai_scim1_\u2026) made under Identity for one SCIM store"
+        "description": "A SCIM token (exai_scim1_…) made under Identity for one SCIM store"
       }
     },
     "schemas": {
@@ -12924,7 +12924,7 @@
         "tags": [
           "admin/billing"
         ],
-        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, \u2026}]}",
+        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, …}]}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -14385,7 +14385,7 @@
         "tags": [
           "admin/guardrails"
         ],
-        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt\u2026}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
+        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt…}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
         "parameters": [
           {
             "name": "id",
@@ -16734,7 +16734,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft \u2192 evaluated",
+        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated",
         "parameters": [
           {
             "name": "id",
@@ -20404,7 +20404,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, \u2026}",
+        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, …}",
         "parameters": [
           {
             "name": "id",
@@ -20912,7 +20912,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Draft \u2192 in review, with fresh checks",
+        "summary": "Draft → in review, with fresh checks",
         "parameters": [
           {
             "name": "id",
@@ -23908,7 +23908,7 @@
         "tags": [
           "admin/users"
         ],
-        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({\u2026, invited}; 409 without an email address",
+        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({…, invited}; 409 without an email address",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -24242,7 +24242,7 @@
         "tags": [
           "admin/zones-cluster"
         ],
-        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH \u2026 application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
+        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH … application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -24777,7 +24777,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller\u2019s, or tenant-wide (workspaceId null). Audited app.created",
+        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller’s, or tenant-wide (workspaceId null). Audited app.created",
         "requestBody": {
           "required": true,
           "content": {
@@ -24838,6 +24838,54 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/apps/deployments/{id}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8203: one deployment with its report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/deployments/{id}/rollback": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8203: deploys the backup taken before a succeeded deployment onto the same stage (a rollback deployment with its own backup). 202. Audited app.package.rollback.requested, then app.package.rolled_back",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/apps/drafts": {
@@ -25435,6 +25483,176 @@
         }
       }
     },
+    "/api/apps/packages/git-import": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8204: {url (https, or file when APPS_GIT_ALLOW_FILE), ref?, path, credential? (vault:path#key), username?, name?, workspaceId?}: reads the package laid out one file per object in a repository, verifies it and creates the app. 201 with the app, the report, the package and the commit",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/packages/import": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8201: {package (exprsn-app/2), name?, workspaceId?}: verifies the signature over exactly what arrived, then creates the app it describes and fills it (entities, forms, triggers, policies, the workflows the triggers name as drafts, records when the package carries them). 201 with the app, the report and the stored package; 422 Package refused, audited app.import.refused",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/pipelines": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: the pipelines whose three stage apps the caller can see: {pipelines: [{id, name, stages: {development, test, production: app}, approvalWorkflow, last: {test, production: deployment}, activeDeployment}]}",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: creates a pipeline: {name, development, test, production (three different apps the caller may design, by id or name), approvalWorkflow? (a published workflow with an approval step; needed before a promotion to production)}. Audited app.pipeline.created",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/pipelines/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: deletes a pipeline and its history (409 while a deployment is going). Audited app.pipeline.deleted",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: one pipeline with its stages and last deployments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: changes the name, a stage's app or the approval workflow. Audited app.pipeline.updated",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/pipelines/{id}/deployments": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8203: the deployment history, newest first (limit, default 100), rows older than APPS_DEPLOYMENT_HISTORY_DAYS dropped: {deployments: [{id, kind: promotion | rollback, from, to, packageId, version, state, backupPackageId, approvalRunId, rollbackOf, report, error, createdBy, createdByName, createdAt, startedAt, finishedAt}]}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/pipelines/{id}/promote": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8202: {to: test | production, note?}. To test: packages the development app now (a new version) and deploys it onto the test app (job apps.deploy). To production: the exact package the last successful promotion to test landed, after the pipeline's approval workflow run succeeds (state awaiting-approval, caller app-deployment); a stage cannot be skipped. 202 with the deployment. Audited app.package.promotion.requested, then app.package.promoted or app.package.deployment.failed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/transfers/{id}": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -25605,6 +25823,236 @@
         }
       }
     },
+    "/api/apps/{app}/client.js": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/client.ts": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. A client generated from the same design: createClient({baseUrl, token, workspace?, fetch?}) with <entity>.list(q) / get(id, include) / create(values, label) / update(id, values, version) / delete(id) / transition(id, to, versi",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "The settings {publicEnabled, allowedHosts, signedEnabled, claimName, claimMatch (username \\| email \\| id), maxTtlSeconds, write, entities (null: every entity), audience, signedUrl, frameAncestors} with keys: [{id, kid, alg, publicKey, state",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Changes the settings. allowedHosts are origins (https://host[:port], at most 50); entities names entities of the app (400 otherwise). Audited app.embed.updated",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/keys": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "RS256 \\| EdDSA \\| HS256 \\| x5c, publicKey?, secret?} | 201 the key. ES256 (P-256), RS256 (2048 bits or more) and EdDSA take the public key (PEM, SPKI); HS256 takes a base64url secret of at least 32 bytes or generates one, answered once as s",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/keys/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Revokes the key and every session it opened. Audited app.embed.key.revoked",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/pages": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "201 {id, url, …}: the public form published as an embed page under a random id (the same page when one exists); 409 when the form has no public link. Audited app.embed.page.created",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/pages/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204. Audited app.embed.page.removed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/embed/sessions/revoke": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Ends one or every embedded session of the app: {revoked}. Audited app.embed.sessions.revoked",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/entities": {
       "post": {
         "x-exprsn-since": "1.4.0",
@@ -25744,6 +26192,180 @@
         }
       }
     },
+    "/api/apps/{app}/entities/{entity}/ai/estimate": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: {field, scope: empty | all} -> {records, capped, promptTokens, outputTokens, model, currency, cost}: what a fill of the AI field over the entity's records would take (tokens from a sample of rendered prompts; cost when the tenant prices the profile's model). 400 when the field is not an AI field",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: the entity's last 20 fills, newest first: {fills: [Fill]}. A Fill is {id, field, scope, state: queued | running | succeeded | failed | cancelled, total, done, failed, skipped, promptTokens, outputTokens, estimate, jobId, startedBy, error, createdAt, startedAt, finishedAt}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: {field, scope: empty | all} starts a fill of the AI field over every record (or the empty ones) as the job apps.ai-fill-all; 202 with the Fill and its estimate. Each record goes through the profile's guardrails, the quota and metering; progress on the job and the fill. 409 while a fill of the field runs. Audited app.ai.fill.started",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills/{id}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: one fill with its counters",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/ai/fills/{id}/cancel": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8402: stops a queued or running fill between records (the job's signal is aborted); records already filled keep their value. 409 when it has finished. Audited app.ai.fill.cancelled",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/entities/{entity}/fields/{field}/options": {
       "get": {
         "x-exprsn-since": "1.4.0",
@@ -25831,7 +26453,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,\u2026), q, limit, offset or cursor (keyset paging, B-3601)",
+        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,…), q, limit, offset or cursor (keyset paging, B-3601)",
         "responses": {
           "200": {
             "description": "OK",
@@ -26453,13 +27075,137 @@
         }
       }
     },
+    "/api/apps/{app}/entities/{entity}/source": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design and connections:manage. B-8501: detaches the table; the records stay as ordinary records. Audited app.entity.source.removed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8501: the outside table backing the entity: {entity, connectionId, connection, engine, object, keyColumn, keyField, columns, stateColumn, writes, deleteMissing, pullMinutes, enabled, nextPullAt, lastPullAt, lastPull: {rows, created, updated, deleted, unchanged, failed, capped, ms, error?, problems?}, updatedAt}. 404 when the entity has none",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design and connections:manage. B-8501: attaches a table of a PostgreSQL or MySQL data connection to the entity: {connectionId, object (on the connection's allow-list), keyColumn, keyField? (a string or number field; empty: the record id is the key), columns? {field: column}, stateColumn?, writes (app writes reach the table at once), deleteMissing, pullMinutes? (a scheduled pull), enabled}. The entity's label must cover the connection's. 403 step permission without connections:manage; 409 for an engine, object or label that does not fit. Audited app.entity.source.set / updated",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/entities/{entity}/source/pull": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8501: queues a pull now (the job apps.source-pull): 202 {jobId}. The pull reads the table unmasked (at most APPS_SOURCE_PULL_MAX_ROWS rows), creates, updates and (with deleteMissing) deletes records by the key column, and records the result on the source. Audited app.entity.source.pulled / pull_failed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/export": {
       "get": {
         "x-exprsn-since": "1.4.0",
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2208: the app\u2019s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
+        "summary": "apps:design. B-2208: the app’s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
         "responses": {
           "200": {
             "description": "OK",
@@ -26483,7 +27229,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. The app\u2019s forms",
+        "summary": "records:read. The app’s forms",
         "responses": {
           "200": {
             "description": "OK",
@@ -26773,6 +27519,188 @@
         }
       }
     },
+    "/api/apps/{app}/model/apply": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8301: accepts a draft {entities, triggers?} (edited or as returned): new entities are created in dependency order, existing ones gain the drafted fields and state machine (nothing is removed), and triggers whose workflow exists are created. {created, updated, unchanged, triggers: [{entity, workflow, created, reason}]}. 422 with problems when the draft is not valid. Audited app.model.applied",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/model/draft": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8301: {prompt, profile, label?} describes the app; a local model through the profile drafts its data model: {draft: {entities: [{name, title?, definition}], triggers: [{entity, events, workflow}]}, diff: [{entity, change: new | changed | same, addedFields, changedFields, removedFields, states, problems}], triggers: [{..., ok, problem}], valid, problems}. Validated like a saved entity and compared with the app's entities; nothing is saved. 422 when the model's answer is unusable or the description is refused; 503 when the model is unavailable. Audited app.model.drafted",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/openapi.json": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. An OpenAPI 3.1 document of the app's entity API, typed from the entity definitions (<Entity>Values, <Entity>Input, <Entity>, <Entity>Page, the transition states as an enum), info.version the schema version and x-exprsn-schema-",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/packages": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8201: the app's stored packages, newest first (exports, promotions, backups, git imports), and the pipeline stage the app sits in: {packages: [{id, version, source, hash, withData, size, note, createdBy, createdAt}], stage}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8201: {withData? (records too), note?}: builds, signs and stores a new version of the app's design. 201 with the row and the signed package (at most APPS_PACKAGE_MAX_BYTES, else 413). Audited app.package.created",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/packages/{id}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8201: one stored package, opened and verified: the row and the signed package",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/packages/{id}/git": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "apps:design. B-8204: {url, ref?, path, message?, credential?, username?}: writes the package into the repository under path (package.json with the signature, app.json, entities/, forms/, triggers/, policies/, workflows/, records/), commits and pushes: {commit, files, path}. Audited app.package.pushed",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/policies": {
       "get": {
         "tags": [
@@ -26881,13 +27809,359 @@
         "x-exprsn-since": "1.6.0"
       }
     },
+    "/api/apps/{app}/schema": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "{app, version, hash, changedAt, entities: [Entity], forms: [Form]}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204; 409 while another entity refers to it",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Creates the entity (201) or replaces its definition (200); the answer carries schema: {version, hash}",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Adds a field (201); 409 when the name is taken or rev is behind; 400 for a reserved name or an invalid field",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields/{field}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Removes the field (records keep their stored values; the index drops it on reindex)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Changes a field's settings (the name and type stay); the whole field is checked again",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/states": {
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "null, rev?} | Sets or removes the state machine",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/forms/{form}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "204",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "Creates (201) or replaces (200) a form",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/versions": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "{versions: [{version, kind, target, summary, change, hash, source, createdBy, createdAt}]}, newest first (100)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/schema/versions/{version}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "One version",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/apps/{app}/triggers": {
       "get": {
         "x-exprsn-since": "1.4.0",
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2206: the app\u2019s record and schedule triggers",
+        "summary": "apps:design. B-2206: the app’s record and schedule triggers",
         "responses": {
           "200": {
             "description": "OK",
@@ -27050,6 +28324,224 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/apps/{app}/{entity}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. A page: {total, limit, offset, nextCursor, records}. filter is a record filter as JSON; where (repeatable) is field:op:value with the ops eq, ne, gt, gte, lt, lte, in, contains, startsWith, exists (in takes a comma-separated l",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. 201 the record. 400 on a value that fails its field, 403 step: policy outside the reader's policies",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. 204",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:read. The record (404 outside the reader's reach)",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. The record; 409 when version is behind",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}/transition": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "records:write. The record in its new state; 409 on an illegal transition",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/atproto": {
@@ -29380,7 +30872,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=\u2026, single use,",
+        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=…, single use,",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -29580,7 +31072,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {\u2026, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
+        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {…, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -29709,7 +31201,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Effective-access matrix: users (and API keys) \u00d7 workspaces \u00d7 permissions, each cell policy.explain's decision",
+        "summary": "Effective-access matrix: users (and API keys) × workspaces × permissions, each cell policy.explain's decision",
         "parameters": [
           {
             "name": "workspaceId",
@@ -29899,7 +31391,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Role \u00d7 permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
+        "summary": "Role × permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
         "parameters": [
           {
             "name": "format",
@@ -30907,7 +32399,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller\u2019s calendar: events of their groups and events they RSVPed to",
+        "summary": "The caller’s calendar: events of their groups and events they RSVPed to",
         "parameters": [
           {
             "name": "from",
@@ -30970,7 +32462,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "An event with attendance and the caller\u2019s RSVP",
+        "summary": "An event with attendance and the caller’s RSVP",
         "parameters": [
           {
             "name": "id",
@@ -31324,7 +32816,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2503, moderators. The event\u2019s reminders and their states",
+        "summary": "B-2503, moderators. The event’s reminders and their states",
         "parameters": [
           {
             "name": "id",
@@ -31458,7 +32950,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller\u2019s signed calendar feeds",
+        "summary": "The caller’s signed calendar feeds",
         "responses": {
           "200": {
             "description": "OK",
@@ -31483,7 +32975,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller\u2019s calendar",
+        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller’s calendar",
         "requestBody": {
           "required": true,
           "content": {
@@ -33836,6 +35328,71 @@
         }
       }
     },
+    "/api/conversations/{id}/artifacts": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "chat:read. B-8001: the conversation's artifacts (owner or share reader): {artifacts: [{id, key, kind: code|document|html, language, title, label, versions: [{id, version, messageId, bytes, sha256, createdAt, rawUrl}], createdAt, updatedAt}]}; rawUrl is a short-lived capability for the sandboxed render",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/conversations/{id}/artifacts/{aid}/versions/{n}": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "chat:read. B-8001: one version with its content: {id, key, kind, language, title, label, version, messageId, bytes, sha256, createdAt, content}; 404 for a version that does not exist, 403 above the reader's clearance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/conversations/{id}/exports": {
       "post": {
         "tags": [
@@ -34130,7 +35687,7 @@
         "tags": [
           "conversations"
         ],
-        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is \u2026/#/shared?t=<token>; shares list anonymous: true",
+        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is …/#/shared?t=<token>; shares list anonymous: true",
         "parameters": [
           {
             "name": "id",
@@ -36617,7 +38174,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4405: the tenant\u2019s group categories in their order (managed under /api/admin/social/group-categories)",
+        "summary": "groups:read. B-4405: the tenant’s group categories in their order (managed under /api/admin/social/group-categories)",
         "responses": {
           "200": {
             "description": "OK",
@@ -36691,7 +38248,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "The caller\u2019s pending requests and invitations",
+        "summary": "The caller’s pending requests and invitations",
         "responses": {
           "200": {
             "description": "OK",
@@ -37061,7 +38618,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 \u00d7 shared members + 2 \u00d7 joins + posts in the last 30 days; nearest first with near",
+        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 × shared members + 2 × joins + posts in the last 30 days; nearest first with near",
         "parameters": [
           {
             "name": "workspace",
@@ -37178,7 +38735,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4404: the trending groups of the caller\u2019s workspaces as the groups.trending job last counted them (3 \u00d7 joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
+        "summary": "groups:read. B-4404: the trending groups of the caller’s workspaces as the groups.trending job last counted them (3 × joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
         "parameters": [
           {
             "name": "workspace",
@@ -37285,7 +38842,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. The group with the caller\u2019s role",
+        "summary": "groups:read. The group with the caller’s role",
         "parameters": [
           {
             "name": "id",
@@ -37317,7 +38874,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel\u2019s label is never below its group\u2019s (422 step label-floor); raising a group\u2019s label raises its channels below it",
+        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel’s label is never below its group’s (422 step label-floor); raising a group’s label raises its channels below it",
         "parameters": [
           {
             "name": "id",
@@ -37572,7 +39129,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "B-2505, moderators. Flags on the group\u2019s content from reports and moderation checks",
+        "summary": "B-2505, moderators. Flags on the group’s content from reports and moderation checks",
         "parameters": [
           {
             "name": "id",
@@ -37617,7 +39174,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group\u2019s readers, a private one by its members, a hidden one is known only to them)",
+        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group’s readers, a private one by its members, a hidden one is known only to them)",
         "parameters": [
           {
             "name": "id",
@@ -37652,7 +39209,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group\u2019s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
+        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group’s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
         "parameters": [
           {
             "name": "id",
@@ -37745,7 +39302,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers. The group\u2019s events in a window",
+        "summary": "Readers. The group’s events in a window",
         "parameters": [
           {
             "name": "id",
@@ -37949,7 +39506,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. Invites a user of the group\u2019s workspace; expires after GROUP_INVITE_DAYS",
+        "summary": "Moderators. Invites a user of the group’s workspace; expires after GROUP_INVITE_DAYS",
         "parameters": [
           {
             "name": "id",
@@ -38133,7 +39690,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes a member\u2019s group role (a group keeps one owner)",
+        "summary": "Owner. Changes a member’s group role (a group keeps one owner)",
         "parameters": [
           {
             "name": "id",
@@ -38215,7 +39772,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Leave (own id) or remove a member; the member\u2019s sockets leave the group room",
+        "summary": "Leave (own id) or remove a member; the member’s sockets leave the group room",
         "parameters": [
           {
             "name": "id",
@@ -38376,7 +39933,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. The group\u2019s requests and invitations (default pending)",
+        "summary": "Moderators. The group’s requests and invitations (default pending)",
         "parameters": [
           {
             "name": "id",
@@ -38483,7 +40040,7 @@
         "tags": [
           "images"
         ],
-        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, \u2026}",
+        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, …}",
         "parameters": [
           {
             "name": "id",
@@ -38545,6 +40102,30 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/images/{id}/content-credentials": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "images:generate. B-7901: the image's C2PA manifest read back from the stored bytes and verified against the tenant CA: {present, verified, checks {claimHashes, dataHash, signature, chain, anchor, certificateValid}, problems, manifest {label, generator, instanceId, created, action, model, profile, tenant, tenantName, job}, signer {subject, issuer, fingerprint, notBefore, notAfter}, summary}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/images/{id}/download": {
@@ -39510,7 +41091,7 @@
             "name": "facet.<key>",
             "in": "query",
             "required": false,
-            "description": "A facet value to filter on (classification, licence, format, \u2026); one per key",
+            "description": "A facet value to filter on (classification, licence, format, …); one per key",
             "schema": {
               "type": "string"
             }
@@ -47541,7 +49122,7 @@
         "tags": [
           "pki"
         ],
-        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, \u2026}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
+        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, …}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
         "responses": {
           "201": {
             "description": "Created; hmacKey is shown once",
@@ -48488,7 +50069,7 @@
         "tags": [
           "prompts"
         ],
-        "summary": "deprecated \\| retired, version?} | Lifecycle draft \u2192 published \u2192 deprecated \u2192 retired; publishing names the version (default the latest)",
+        "summary": "deprecated \\| retired, version?} | Lifecycle draft → published → deprecated → retired; publishing names the version (default the latest)",
         "parameters": [
           {
             "name": "id",
@@ -48527,6 +50108,39 @@
             "$ref": "#/components/responses/Default"
           }
         }
+      }
+    },
+    "/api/public/artifacts/{vid}/raw": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "public (no session). B-8001: the version's bytes for a sandboxed iframe, under the token minted with the artifact list (t); text/html for html artifacts, text/plain otherwise, with its own CSP (sandbox allow-scripts; default-src 'none'; frame-ancestors 'self'); 404 for a wrong or expired token",
+        "parameters": [
+          {
+            "name": "vid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "description": "the render token from rawUrl",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
       }
     },
     "/api/public/channels/session": {
@@ -48956,6 +50570,48 @@
         }
       }
     },
+    "/api/public/embeds/open": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public, rate-limited per address. The form's fields as /api/public/forms/open gives them, plus form",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/public/embeds/session": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public, APP_EMBED_SESSION_PER_MINUTE per address. Verifies the host token and opens an embedded session: {token (exe_…), expiresAt, app, user, write, entities: [{name, title, fields, states}]}. The token's kid names a key of the app and alg",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/api/public/embeds/submit": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public. The same path as a public link submission (per-address and per-form limits, the user-input checkpoint, 202 when held); the form's link token is never on the page",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/api/public/file-links/download": {
       "post": {
         "tags": [
@@ -49095,9 +50751,6 @@
               }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Default"
-          },
           "202": {
             "description": "Accepted: held for review",
             "content": {
@@ -49127,6 +50780,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
           }
         }
       }
@@ -52979,7 +54635,7 @@
         "tags": [
           "workflow-runs"
         ],
-        "summary": "{\u2026, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
+        "summary": "{…, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
         "parameters": [
           {
             "name": "id",
@@ -53061,7 +54717,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt\u2026}] (waiting: runs paused on an approval)",
+        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt…}] (waiting: runs paused on an approval)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -53233,7 +54889,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "{\u2026, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
+        "summary": "{…, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
         "parameters": [
           {
             "name": "id",
@@ -54652,6 +56308,62 @@
         }
       }
     },
+    "/embed/app/{tenant}/{app}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "Public. The signed-embed page of an app (HTML, the same headers), 404 while signed embeds are off. The host site opens it with its token in the fragment (#token=<jwt>), never a query string",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
+    "/embed/{id}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "Public. The embed page of a public form (HTML), served with Content-Security-Policy: … frame-ancestors 'self' <allowed hosts>, no X-Frame-Options, X-Robots-Tag: noindex, nofollow; 404 when public pages are off, the form is no longer public,",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        },
+        "x-exprsn-since": "1.6.0"
+      }
+    },
     "/federation/atproto/callback": {
       "get": {
         "tags": [
@@ -55220,7 +56932,7 @@
         "tags": [
           "oauth"
         ],
-        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:\u2026\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
+        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:…\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -55639,7 +57351,7 @@
         "tags": [
           "plugin-broker"
         ],
-        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_\u2026; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
         "security": [
           {
             "pluginToken": []
@@ -57901,7 +59613,7 @@
         "tags": [
           "v1"
         ],
-        "summary": "string[] (\u2264 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
+        "summary": "string[] (≤ 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -58418,7 +60130,7 @@
         "tags": [
           "atproto"
         ],
-        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (\u2026*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
+        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (…*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
         "parameters": [
           {
             "name": "uriPatterns",

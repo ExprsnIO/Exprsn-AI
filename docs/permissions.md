@@ -29,12 +29,12 @@ An admin permission is any permission outside the member baseline: a custom role
 
 | Permission | Admin | Routes | `system-admin` | `tenant-admin` | `identity-admin` | `model-admin` | `guardrail-admin` | `tool-admin` | `knowledge-curator` | `ml-admin` | `workflow-admin` | `connection-admin` | `flag-reviewer` | `member` | `legal-review` | `auditor` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `chat:read` | no | 26 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `chat:read` | no | 28 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `chat:write` | no | 19 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `inference:invoke` | no | 17 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:read` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `context:write` | no | 1 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
-| `images:generate` | no | 12 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
+| `images:generate` | no | 13 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `tools:invoke` | no | 4 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `agents:run` | no | 29 | x |  |  |  |  |  |  |  |  |  |  | x |  |  |
 | `scripts:run` | yes | 13 | x |  |  |  |  |  |  |  | x |  |  |  |  |  |
@@ -83,9 +83,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `firehose:manage` | yes | 15 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
-| `apps:design` | yes | 22 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
-| `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
+| `apps:design` | yes | 66 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
+| `records:read` | no | 18 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
+| `records:write` | no | 11 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `compliance:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  | x |  |
 | `compliance:export` | yes | 4 | x |  |  |  |  |  |  |  |  |  |  |  | x |  |
 | `groups:read` | no | 46 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -143,6 +143,8 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/flags/report`
 - `POST /api/prompts/{id}/render`
 - `POST /api/shared-links/open`
+- `GET /api/conversations/{id}/artifacts`
+- `GET /api/conversations/{id}/artifacts/{aid}/versions/{n}`
 
 ### `chat:write`
 
@@ -208,6 +210,7 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/images/{id}/cancel`
 - `POST /api/images/{id}/vary`
 - `POST /api/images/report`
+- `GET /api/images/{id}/content-credentials`
 
 ### `tools:invoke`
 
@@ -1231,10 +1234,54 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/drafts`
 - `POST /api/apps/import`
 - `DELETE /api/apps/{app}/policies/{id}`
+- `DELETE /api/apps/pipelines/{id}`
+- `GET /api/apps/deployments/{id}`
+- `GET /api/apps/pipelines`
+- `GET /api/apps/pipelines/{id}`
+- `GET /api/apps/pipelines/{id}/deployments`
+- `GET /api/apps/{app}/packages`
+- `GET /api/apps/{app}/packages/{id}`
+- `PATCH /api/apps/pipelines/{id}`
+- `POST /api/apps/deployments/{id}/rollback`
+- `POST /api/apps/packages/git-import`
+- `POST /api/apps/packages/import`
+- `POST /api/apps/pipelines`
+- `POST /api/apps/pipelines/{id}/promote`
+- `POST /api/apps/{app}/packages`
+- `POST /api/apps/{app}/packages/{id}/git`
 - `GET /api/apps/{app}/policies`
 - `POST /api/apps/{app}/entities/{entity}/policies/explain`
 - `POST /api/apps/{app}/policies`
 - `PUT /api/apps/{app}/policies/{id}`
+- `DELETE /api/apps/{app}/entities/{entity}/source`
+- `GET /api/apps/{app}/entities/{entity}/ai/fills`
+- `GET /api/apps/{app}/entities/{entity}/ai/fills/{id}`
+- `GET /api/apps/{app}/entities/{entity}/source`
+- `POST /api/apps/{app}/entities/{entity}/ai/estimate`
+- `POST /api/apps/{app}/entities/{entity}/ai/fills`
+- `POST /api/apps/{app}/entities/{entity}/ai/fills/{id}/cancel`
+- `POST /api/apps/{app}/entities/{entity}/source/pull`
+- `POST /api/apps/{app}/model/apply`
+- `POST /api/apps/{app}/model/draft`
+- `PUT /api/apps/{app}/entities/{entity}/source`
+- `DELETE /api/apps/{app}/embed/keys/{id}`
+- `DELETE /api/apps/{app}/embed/pages/{id}`
+- `DELETE /api/apps/{app}/schema/entities/{entity}`
+- `DELETE /api/apps/{app}/schema/entities/{entity}/fields/{field}`
+- `DELETE /api/apps/{app}/schema/forms/{form}`
+- `GET /api/apps/{app}/embed`
+- `GET /api/apps/{app}/schema`
+- `GET /api/apps/{app}/schema/versions`
+- `GET /api/apps/{app}/schema/versions/{version}`
+- `PATCH /api/apps/{app}/schema/entities/{entity}/fields/{field}`
+- `POST /api/apps/{app}/embed/keys`
+- `POST /api/apps/{app}/embed/pages`
+- `POST /api/apps/{app}/embed/sessions/revoke`
+- `POST /api/apps/{app}/schema/entities/{entity}/fields`
+- `PUT /api/apps/{app}/embed`
+- `PUT /api/apps/{app}/schema/entities/{entity}`
+- `PUT /api/apps/{app}/schema/entities/{entity}/states`
+- `PUT /api/apps/{app}/schema/forms/{form}`
 
 ### `records:read`
 
@@ -1251,6 +1298,11 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/records/aggregate`
 - `POST /api/apps/{app}/entities/{entity}/records/export`
 - `POST /api/apps/{app}/entities/{entity}/records/query`
+- `GET /api/apps/{app}/client.js`
+- `GET /api/apps/{app}/client.ts`
+- `GET /api/apps/{app}/openapi.json`
+- `GET /api/apps/{app}/{entity}`
+- `GET /api/apps/{app}/{entity}/{id}`
 
 ### `records:write`
 
@@ -1261,6 +1313,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/records/bulk`
 - `POST /api/apps/{app}/entities/{entity}/records/import`
 - `POST /api/apps/{app}/forms/{form}/submit`
+- `DELETE /api/apps/{app}/{entity}/{id}`
+- `PATCH /api/apps/{app}/{entity}/{id}`
+- `POST /api/apps/{app}/{entity}`
+- `POST /api/apps/{app}/{entity}/{id}/transition`
 
 ### `compliance:manage`
 
@@ -1897,3 +1953,9 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `PUT /scim/v2/Groups/{id}`
 - `PATCH /scim/v2/Groups/{id}`
 - `DELETE /scim/v2/Groups/{id}`
+- `GET /api/public/artifacts/{vid}/raw`
+- `GET /embed/app/{tenant}/{app}`
+- `GET /embed/{id}`
+- `POST /api/public/embeds/open`
+- `POST /api/public/embeds/session`
+- `POST /api/public/embeds/submit`

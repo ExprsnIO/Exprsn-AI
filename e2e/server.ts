@@ -35,6 +35,10 @@ import { FakeOpenAIServer } from '../server/test/fake-openai-server.js';
 import { FakeMcp } from '../server/test/fake-mcp.js';
 import { FakeRunner } from '../server/test/fake-runner.js';
 import { FakeImageBackend, FakeMediaRunner, FakeSafety } from '../server/test/sprint8-fakes.js';
+import { SqliteTableDriver } from '../server/test/sprint39c-helpers.js';
+import { createDrivers } from '../server/src/connections/drivers.js';
+import { parseAllowList } from '../server/src/mcp/hosts.js';
+import Database from 'better-sqlite3';
 import { FakeTrainer } from '../server/test/fake-trainer.js';
 import { startFakeAcme } from '../server/test/fake-acme.js';
 import { FakePlcDirectory } from '../server/test/sprint25b-fakes.js';
@@ -76,8 +80,21 @@ async function main() {
     const last = messages[messages.length - 1];
     if (call && last?.role !== 'tool') return { content: '', toolCall: { name: call[1]!, arguments: call[2] ? (JSON.parse(call[2]) as Record<string, unknown>) : { task: 'Carry on with the September close.' } } };
     if (call && last?.role === 'tool') return { content: `Done: ${String(last.content).slice(0, 160)}` };
+    // 1.6.0 (B-8001): a question that asks for an "html page" answers with a fenced index.html (and a helper script), so
+    // the Chat spec can open the artifact; a later turn with a different greeting makes a second version.
+    const page = /html page/i.exec(String(last?.content ?? ''));
+    if (page) {
+      const greeting = /goodbye/i.test(String(last?.content ?? '')) ? 'Goodbye' : 'Hello';
+      return { content: `Here is the page.\n\n\`\`\`html index.html\n<!doctype html>\n<html><body><h1 data-greeting>${greeting} from the artifact</h1><script>document.body.dataset.ran = 'yes';</script></body></html>\n\`\`\`\n\nAnd the helper:\n\n\`\`\`js\nexport function greet(name) {\n  return 'Welcome, ' + name;\n}\nexport const helper = true;\n\`\`\`` };
+    }
+    // 1.6.0 (B-8301): a data model draft for the Apps screen: a leave-request model with an approval state machine.
+    if (/data model of a low-code app/.test(system)) return { content: JSON.stringify({ entities: [{ name: 'employee', title: 'Employee', definition: { fields: [{ name: 'name', type: 'string', required: true, indexed: true, maxLength: 200 }] } }, { name: 'request', title: 'Leave request', definition: { fields: [{ name: 'employee', type: 'reference', entity: 'employee', required: true }, { name: 'from_day', type: 'date', required: true, indexed: true }, { name: 'to_day', type: 'date', required: true }, { name: 'days', type: 'formula', expression: 'days_between(from_day, to_day) + 1' }], states: { initial: 'submitted', states: [{ name: 'submitted' }, { name: 'approved' }, { name: 'rejected' }], transitions: [{ from: ['submitted'], to: 'approved' }, { from: ['submitted'], to: 'rejected' }] } } }], triggers: [{ entity: 'request', events: ['created'], workflow: 'notify-manager' }] }) };
     return { thinking: 'Reading the question first. ', content: `Fake answer to: ${last?.content ?? ''}` };
   };
+  // 1.6.0 (B-8501): an outside PostgreSQL table for the Apps screen, as a SQLite stand-in behind the real connection
+  // flow (register, schema, allow-list, attach, pull, write through).
+  const outside = new Database(':memory:');
+  outside.exec("create table customers (id integer primary key, name text not null, tier text, balance real); insert into customers (name, tier, balance) values ('Contoso', 'gold', 120.5), ('Fabrikam', 'silver', 0)");
   const mcp = await new FakeMcp().start();
   mcp.tools = [
     { name: 'lookup_invoice', description: 'Looks up an invoice by number.', inputSchema: { type: 'object', properties: { number: { type: 'string' } }, required: ['number'] }, annotations: { readOnlyHint: true }, run: (a) => ({ invoice: a.number, total: 1200 }) },
@@ -142,7 +159,11 @@ async function main() {
     mediaRunner: new FakeMediaRunner(),
     imageBackends: [new FakeImageBackend()],
     imageSafety: new FakeSafety(),
-    trainer
+    trainer,
+    // 1.6.0 (B-8501): the outside table the Apps spec attaches lives at crm.internal; every other PostgreSQL connection
+    // keeps the real driver, so the Connections and Refusals specs still see the outbound address guard.
+    drivers: { postgres: (spec) => (/^crm\.internal(:\d+)?$/.test(spec.endpoint) ? new SqliteTableDriver(outside, spec) : createDrivers(parseAllowList(''))
+      .postgres(spec)) }
   });
   s.scripts.runner = runner;
   // The deployment stays air-gapped for the other screens; only the PDS may treat its zone as having egress, so the

@@ -349,6 +349,8 @@ const base = z.object({
     STRIPE_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(10).max(3600).default(300),
     /** Without an image-safety classifier, withhold generated images and sampled frames instead of marking them. */
     IMAGE_SAFETY_REQUIRED: bool.default(false),
+    /** 1.6.0 (B-7901): sign generated PNGs with a C2PA manifest from the tenant's content-credentials certificate (off: the HMAC manifest only). */
+    IMAGE_C2PA: z.enum(['on', 'off']).default('on'),
     /** An OCI runtime for script containers (runsc for gVisor); the runner passes --runtime and checks it exists. */
     SCRIPT_RUNTIME: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,62}$/).optional(),
     // --- end Sprint 19 ---
@@ -469,6 +471,12 @@ const base = z.object({
     SHARE_ANONYMOUS_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /** How often each tenant's conversation retention policy is applied. */
     CHAT_RETENTION_SWEEP_MINUTES: z.coerce.number().int().min(0).max(7 * 24 * 60).default(60),
+    /** 1.6.0 (B-8001): a fenced block in an answer becomes an artifact from this many characters. */
+    CHAT_ARTIFACT_MIN_CHARS: z.coerce.number().int().min(1).max(100_000).default(80),
+    /** 1.6.0 (B-8001): the largest artifact version kept, in bytes; longer blocks stay in the answer only. */
+    CHAT_ARTIFACT_MAX_BYTES: z.coerce.number().int().min(1024).max(8 * 1024 * 1024).default(262_144),
+    /** 1.6.0 (B-8001): how long a sandboxed artifact render link (the iframe's URL) stays valid. */
+    CHAT_ARTIFACT_RAW_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(600),
 
     /**
      * Sprint 20 (B-1201, B-1205): the signer process's UNIX socket. With KMS_PROVIDER=local the key-encryption key and
@@ -534,6 +542,12 @@ const base = z.object({
      */
     COMPLIANCE_EXPORT_MAX_ROWS: z.coerce.number().int().min(100).max(10_000_000).default(100_000),
     COMPLIANCE_EXPORT_MAX_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
+    /**
+     * 1.6.0, Sprint 39d (B-8702): an embedded session lives at most APP_EMBED_MAX_TTL_SECONDS, whatever an app's own
+     * setting says; each address may exchange at most APP_EMBED_SESSION_PER_MINUTE host tokens for sessions a minute.
+     */
+    APP_EMBED_MAX_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+    APP_EMBED_SESSION_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(30),
     /**
      * 1.6.0, Sprint 37c (B-7201): SCIM 2.0 provisioning at /scim/v2. A list answers at most IDENTITY_SCIM_MAX_RESULTS
      * resources a page (ServiceProviderConfig `filter.maxResults`); each address is limited to
@@ -675,6 +689,16 @@ const base = z.object({
      * APPS_TRIGGER_MAX_DEPTH; schedule triggers are checked every APPS_SCHEDULE_TICK_SECONDS (0 turns them off).
      */
     APPS_PUBLIC_FORM_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(10),
+    /**
+     * App packages and promotion (1.6.0, B-82). A package (the app's design, its records when asked for) is at most
+     * APPS_PACKAGE_MAX_BYTES; the deployment history is kept APPS_DEPLOYMENT_HISTORY_DAYS; a git export or import
+     * waits APPS_GIT_TIMEOUT_MS for the repository, and APPS_GIT_ALLOW_FILE lets file:// repositories on this host
+     * stand in for a remote (tests and air-gapped mirrors).
+     */
+    APPS_PACKAGE_MAX_BYTES: z.coerce.number().int().min(10_000).max(50_000_000).default(8_000_000),
+    APPS_DEPLOYMENT_HISTORY_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
+    APPS_GIT_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(3_600_000).default(300_000),
+    APPS_GIT_ALLOW_FILE: bool.default(false),
     APPS_IMPORT_MAX_BYTES: z.coerce.number().int().min(1024).max(250_000).default(200_000),
     APPS_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(100_000).default(10_000),
     APPS_EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
@@ -688,6 +712,14 @@ const base = z.object({
      */
     APPS_HELD_MAX_PER_FORM: z.coerce.number().int().min(0).max(100_000).default(200),
     APPS_HELD_KEEP_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+    /**
+     * 1.6.0, Sprint 39c (B-8401, B-8402, B-8501): an edit of a field an AI field reads regenerates it once after
+     * APPS_AI_DEBOUNCE_MS of quiet (0: at once, every time); a fill of an AI field over every row covers at most
+     * APPS_AI_FILL_MAX_ROWS records; a pull from an outside table reads at most APPS_SOURCE_PULL_MAX_ROWS rows.
+     */
+    APPS_AI_DEBOUNCE_MS: z.coerce.number().int().min(0).max(600_000).default(2000),
+    APPS_AI_FILL_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(10_000),
+    APPS_SOURCE_PULL_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(10_000),
     /**
      * Sprint 32b (B-3903): workflows started by their own triggers. An event trigger fires at most
      * WORKFLOW_EVENT_RATE_PER_MINUTE times a minute (in the shared counter store), and an event caused by a chain of
