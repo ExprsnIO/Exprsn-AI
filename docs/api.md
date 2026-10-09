@@ -140,7 +140,7 @@ retireAt, notes, createdAt, updatedAt}`.
 | --- | --- |
 | `GET /admin/profiles` | Profiles with `model {id, name, state, label, capabilities, digest}`, `pool` (name), `canaryModel`, `residency: loaded\|cold\|unavailable\|none` |
 | `POST /admin/profiles` `{name, displayName, aliasOf?, modelId?, poolId?, numCtx?, temperature?, thinkDefault?, thinkCeiling?, systemPrompt?, fallback?: {profileId, afterQueueWaitMs}, tools?: ['calculate'], label?, description?}` | Creates a draft (an alias is created published and only points at another profile) |
-| `PATCH /admin/profiles/:id` (same fields, plus `note`) | Saves a new version |
+| `PATCH /admin/profiles/:id` (same fields, plus `note`) | Saves a new version. `tools` holds tool names only: a null or non-string entry is refused (400), and a name the profile does not already carry must be a tool in the registry (`calculate`, registry, HTTP and reviewed MCP tools; 400 `No such tool` otherwise). Names it already carries are kept, so a profile whose tool was since retired still saves (live review 2026-10-09) |
 | `POST /admin/profiles/:id/publish` `{status: published\|disabled\|draft}` | Publishing checks: approved model, placed on a pool cleared for the profile's label, thinking and tools supported |
 | `PUT /admin/profiles/:id/canary` `{modelId, percent}`, `POST /admin/profiles/:id/canary/promote`, `DELETE /admin/profiles/:id/canary` | Canary rollout |
 | `GET /admin/profiles/:id/versions`, `POST /admin/profiles/:id/rollback` `{version}` | History and rollback (as a new version) |

@@ -162,6 +162,17 @@
   and `registry.spec.ts` (a submit refused naming the example prompt, the reviewer's card) with axe-core, and the
   accessibility and reflow sweeps.
 
+### Fixes from the live review (2026-10-09)
+
+- Profiles with null tool entries no longer break the MCP servers page. A live profile's stored tool list held nulls
+  (`["calculate", null, null, null, null, null]`), and `GET /api/admin/mcp-servers` answered 500 on
+  `t.startsWith`. The gateway repository now reads a profile's tools, agents and skills as non-empty strings only (one
+  place every reader goes through: the MCP servers list and detail, chat capabilities and turns, the dispatcher, the
+  registry and discovery views, evaluations), and writes them the same way, version snapshots included, so a rollback
+  cannot bring a null back. `POST` and `PATCH /api/admin/profiles` refuse a null (400, as before) and now also a tool
+  name the profile does not already carry that is not a tool in the registry (400 `No such tool`); names it already
+  carries are kept. The dispatcher skips non-string names.
+
 ## 1.6.0
 
 ### Model servers beyond Ollama: Apple Foundation Models, MLX and llama.cpp (Sprint 35a, B-4301 to B-4307)

@@ -27,7 +27,7 @@ export function mcpAdminRoutes(s: Services): Router {
   };
   const load = (req: Request) => mcp.server(principalOf(req).tenantId, String(req.params.id));
   const toolNames = (srv: ServerRow, names: string[]) => names.map((n) => `${srv.name}.${n}`);
-  const boundProfiles = (all: ProfileRow[], srv: ServerRow) => all.filter((x) => x.tools.some((t) => t.startsWith(`${srv.name}.`)));
+  const boundProfiles = (all: ProfileRow[], srv: ServerRow) => all.filter((x) => x.tools.some((t) => typeof t === 'string' && t.startsWith(`${srv.name}.`)));
 
   r.get('/mcp-servers', manage, async (req, res) => {
     const p = principalOf(req);

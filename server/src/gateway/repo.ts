@@ -188,15 +188,21 @@ const modelFrom = (r: Record<string, unknown>): ModelRow => ({
   updated_at: Number(r.updated_at)
 });
 
+/**
+ * A profile's tool (or agent, skill) list as strings only. A stored list has been seen holding nulls
+ * (`["calculate", null, ...]`); every reader goes through here, so a stray entry is dropped rather than thrown on.
+ */
+export const nameList = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.filter((t): t is string => typeof t === 'string' && t.trim() !== '').map((t) => t.trim()))] : []);
+
 export const profileFrom = (r: Record<string, unknown>): ProfileRow => ({
   ...(r as unknown as ProfileRow),
   num_ctx: n(r.num_ctx),
   temperature: n(r.temperature),
   fallback: json<ProfileRow['fallback']>(r.fallback, null),
   canary: json<ProfileRow['canary']>(r.canary, null),
-  tools: json<string[]>(r.tools, []),
-  agents: json<string[]>(r.agents, []),
-  skills: json<string[] | null>(r.skills, null),
+  tools: nameList(json<unknown>(r.tools, [])),
+  agents: nameList(json<unknown>(r.agents, [])),
+  skills: ((x: unknown) => (x == null ? null : nameList(x)))(json<unknown>(r.skills, null)),
   trust_marking: r.trust_marking == null ? true : r.trust_marking === true || r.trust_marking === 1 || r.trust_marking === '1' || r.trust_marking === 't',
   thinking_budget: r.thinking_budget == null ? null : Number(r.thinking_budget),
   plan_first: r.plan_first === true || r.plan_first === 1 || r.plan_first === '1' || r.plan_first === 't',
@@ -388,7 +394,8 @@ export class GatewayRepo {
 
   private serialise(p: Partial<ProfileRow>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(p)) out[k] = ['fallback', 'canary', 'tools', 'agents', 'skills'].includes(k) ? (v == null ? null : JSON.stringify(v)) : v;
+    // Lists are written as strings only: a null or non-string entry never reaches the column.
+    for (const [k, v] of Object.entries(p)) out[k] = ['tools', 'agents'].includes(k) ? (v === undefined ? undefined : JSON.stringify(nameList(v))) : k === 'skills' ? (v == null ? null : JSON.stringify(nameList(v))) : ['fallback', 'canary'].includes(k) ? (v == null ? null : JSON.stringify(v)) : v;
     return out;
   }
 
@@ -405,7 +412,7 @@ export class GatewayRepo {
   }
 
   async snapshot(p: ProfileRow, note: string | null, by: string | null): Promise<void> {
-    await this.db('profile_versions').insert({ id: ulid(), profile_id: p.id, version: p.version, snapshot: JSON.stringify(p), note, created_by: by, created_at: Date.now() });
+    await this.db('profile_versions').insert({ id: ulid(), profile_id: p.id, version: p.version, snapshot: JSON.stringify({ ...p, tools: nameList(p.tools) }), note, created_by: by, created_at: Date.now() });
   }
 
   async versions(profileId: string): Promise<{ version: number; note: string | null; created_by: string | null; created_at: number; snapshot: ProfileRow }[]> {
@@ -414,7 +421,7 @@ export class GatewayRepo {
       note: (r.note as string | null) ?? null,
       created_by: (r.created_by as string | null) ?? null,
       created_at: Number(r.created_at),
-      snapshot: json<ProfileRow>(r.snapshot, {} as ProfileRow)
+      snapshot: ((x: ProfileRow) => ({ ...x, tools: nameList(x.tools) }))(json<ProfileRow>(r.snapshot, {} as ProfileRow))
     }));
   }
 }

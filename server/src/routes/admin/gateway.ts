@@ -690,6 +690,18 @@ export function gatewayAdminRoutes(s: Services): Router {
     if (p.tools.length && (!m.capabilities.includes('tools') || m.evaluation?.toolsWithheld)) throw conflict(`${m.name} has no tools capability${m.evaluation?.toolsWithheld ? ' (withheld until its tool-calling test passes)' : ''}.`);
   };
 
+  /**
+   * Live review 2026-10-09: a profile's tool list holds tool names only. Names new to the profile must be tool entries
+   * in the registry (calculate, registry and HTTP tools, and MCP tools once reviewed); names it already carries are
+   * kept, so saving a profile whose tool was since retired still works. Nulls never get this far (the schema refuses them).
+   */
+  const checkTools = async (tenantId: string, tools: string[] | undefined, kept: string[] = []) => {
+    const fresh = [...new Set(tools ?? [])].filter((t) => !kept.includes(t));
+    if (!fresh.length) return;
+    const unknown = (await s.registry.referenceStatus(tenantId, fresh)).filter((x) => x.status === null || x.status === 'retired').map((x) => x.name);
+    if (unknown.length) throw badRequest(`No such tool${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}.`, { errors: unknown.map((n) => ({ path: 'tools', message: `${n} is not a tool in the registry.` })) });
+  };
+
   r.post('/profiles', profiles, async (req, res) => {
     const p = principalOf(req);
     const body = parseBody(
@@ -697,6 +709,7 @@ export function gatewayAdminRoutes(s: Services): Router {
       req.body
     );
     if (body.label && !clears(p.clearance, body.label)) throw forbidden('You cannot label a profile above your clearance.', { step: 'clearance' });
+    await checkTools(p.tenantId, body.tools);
     if (body.aliasOf) {
       const target = await g.repo.profile(p.tenantId, body.aliasOf);
       if (!target) throw notFound('Profile');
@@ -777,6 +790,7 @@ export function gatewayAdminRoutes(s: Services): Router {
     const body = parseBody(profileBody.partial().extend({ aliasOf: z.string().length(26).optional(), note: z.string().trim().max(300).optional() }).strict(), req.body);
     if (body.label && !clears(p.clearance, body.label)) throw forbidden('You cannot label a profile above your clearance.', { step: 'clearance' });
     if (body.aliasOf !== undefined && !before.alias_of) throw badRequest('Only an alias can be repointed.');
+    await checkTools(p.tenantId, body.tools, before.tools);
     if (body.aliasOf) {
       const target = await g.repo.profile(p.tenantId, body.aliasOf);
       if (!target || target.alias_of || target.id === before.id) throw badRequest('An alias must point at a real profile.');

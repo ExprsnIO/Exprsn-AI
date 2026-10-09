@@ -209,7 +209,7 @@ export class ToolDispatcher {
   async resolve(p: Principal, names: string[], label: Label): Promise<{ tools: ResolvedTool[]; hidden: { name: string; reason: string }[] }> {
     const tools: ResolvedTool[] = [];
     const hidden: { name: string; reason: string }[] = [];
-    for (const name of [...new Set(names)]) {
+    for (const name of [...new Set(names.filter((n) => typeof n === 'string' && n !== ''))]) {
       const entry = await this.registry.resolve(p, name);
       if (!entry) {
         hidden.push({ name, reason: 'not published to this workspace' });
