@@ -83,9 +83,9 @@ An admin permission is any permission outside the member baseline: a custom role
 | `moderation:manage` | yes | 11 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
 | `members:invite` | yes | 3 | x | x | x |  |  |  |  |  |  |  |  |  |  |  |
 | `firehose:manage` | yes | 15 | x | x |  |  | x |  |  |  |  |  |  |  |  |  |
-| `apps:design` | yes | 22 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
-| `records:read` | no | 13 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
-| `records:write` | no | 7 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
+| `apps:design` | yes | 40 | x | x |  |  |  |  |  |  | x |  |  |  |  |  |
+| `records:read` | no | 18 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
+| `records:write` | no | 11 | x | x |  |  |  |  |  |  | x |  |  | x |  |  |
 | `compliance:manage` | yes | 14 | x | x |  |  |  |  |  |  |  |  |  |  | x |  |
 | `compliance:export` | yes | 4 | x |  |  |  |  |  |  |  |  |  |  |  | x |  |
 | `groups:read` | no | 46 | x | x |  |  |  |  |  |  |  |  |  | x |  |  |
@@ -1235,6 +1235,24 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/policies/explain`
 - `POST /api/apps/{app}/policies`
 - `PUT /api/apps/{app}/policies/{id}`
+- `DELETE /api/apps/{app}/embed/keys/{id}`
+- `DELETE /api/apps/{app}/embed/pages/{id}`
+- `DELETE /api/apps/{app}/schema/entities/{entity}`
+- `DELETE /api/apps/{app}/schema/entities/{entity}/fields/{field}`
+- `DELETE /api/apps/{app}/schema/forms/{form}`
+- `GET /api/apps/{app}/embed`
+- `GET /api/apps/{app}/schema`
+- `GET /api/apps/{app}/schema/versions`
+- `GET /api/apps/{app}/schema/versions/{version}`
+- `PATCH /api/apps/{app}/schema/entities/{entity}/fields/{field}`
+- `POST /api/apps/{app}/embed/keys`
+- `POST /api/apps/{app}/embed/pages`
+- `POST /api/apps/{app}/embed/sessions/revoke`
+- `POST /api/apps/{app}/schema/entities/{entity}/fields`
+- `PUT /api/apps/{app}/embed`
+- `PUT /api/apps/{app}/schema/entities/{entity}`
+- `PUT /api/apps/{app}/schema/entities/{entity}/states`
+- `PUT /api/apps/{app}/schema/forms/{form}`
 
 ### `records:read`
 
@@ -1251,6 +1269,11 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/records/aggregate`
 - `POST /api/apps/{app}/entities/{entity}/records/export`
 - `POST /api/apps/{app}/entities/{entity}/records/query`
+- `GET /api/apps/{app}/client.js`
+- `GET /api/apps/{app}/client.ts`
+- `GET /api/apps/{app}/openapi.json`
+- `GET /api/apps/{app}/{entity}`
+- `GET /api/apps/{app}/{entity}/{id}`
 
 ### `records:write`
 
@@ -1261,6 +1284,10 @@ From the route permission registry (`server/src/authz/routes.ts`, B-3304): every
 - `POST /api/apps/{app}/entities/{entity}/records/bulk`
 - `POST /api/apps/{app}/entities/{entity}/records/import`
 - `POST /api/apps/{app}/forms/{form}/submit`
+- `DELETE /api/apps/{app}/{entity}/{id}`
+- `PATCH /api/apps/{app}/{entity}/{id}`
+- `POST /api/apps/{app}/{entity}`
+- `POST /api/apps/{app}/{entity}/{id}/transition`
 
 ### `compliance:manage`
 
@@ -1897,3 +1924,8 @@ No sign-in: health checks, sign-in itself, protocol endpoints (OIDC, SAML, ACME,
 - `PUT /scim/v2/Groups/{id}`
 - `PATCH /scim/v2/Groups/{id}`
 - `DELETE /scim/v2/Groups/{id}`
+- `GET /embed/app/{tenant}/{app}`
+- `GET /embed/{id}`
+- `POST /api/public/embeds/open`
+- `POST /api/public/embeds/session`
+- `POST /api/public/embeds/submit`

@@ -98,13 +98,13 @@ export class AppBundles {
           const created = new Set((await this.apps.entities(app)).map((x) => x.name));
           const needs = e.definition.fields.flatMap((f) => (f.type === 'reference' ? [f.entity] : f.type === 'lookup' && f.source === 'entity' && f.entity ? [f.entity] : [])).filter((n) => n !== e.name);
           if (needs.every((n) => created.has(n))) {
-            await this.apps.createEntity(actor, app.id, e);
+            await this.apps.createEntity({ ...actor, via: actor.via ?? 'package' }, app.id, e);
             pending.splice(i, 1);
           } else i++;
         }
       }
       if (pending.length) throw new HttpProblem(422, 'Bundle refused', `The entities ${pending.map((e) => e.name).join(', ')} refer to each other in a cycle.`);
-      for (const f of b.forms) await this.apps.forms.create(actor, app.id, { name: f.name, title: f.title, entity: f.entity, definition: f.definition, ratePerMinute: f.ratePerMinute });
+      for (const f of b.forms) await this.apps.forms.create({ ...actor, via: actor.via ?? 'package' }, app.id, { name: f.name, title: f.title, entity: f.entity, definition: f.definition, ratePerMinute: f.ratePerMinute });
     } catch (err) {
       await this.apps.remove(actor, app.id).catch(() => undefined);
       throw err;

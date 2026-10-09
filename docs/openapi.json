@@ -34,7 +34,7 @@
       "pluginToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A plugin handler run's scoped token (xpt_\u2026), B-2004"
+        "description": "A plugin handler run's scoped token (xpt_…), B-2004"
       },
       "davBasic": {
         "type": "http",
@@ -49,7 +49,7 @@
       "scimToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A SCIM token (exai_scim1_\u2026) made under Identity for one SCIM store"
+        "description": "A SCIM token (exai_scim1_…) made under Identity for one SCIM store"
       }
     },
     "schemas": {
@@ -12924,7 +12924,7 @@
         "tags": [
           "admin/billing"
         ],
-        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, \u2026}]}",
+        "summary": "Stored statements and a preview of the current month: {current, provider, statements: [{month, state: preview \\| open \\| closed \\| pushed \\| push failed, currency, totalMicros, total, totals, lineCount, …}]}",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -14385,7 +14385,7 @@
         "tags": [
           "admin/guardrails"
         ],
-        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt\u2026}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
+        "summary": "The summary plus published and draft versions ({version, status, rules, createdByName, submittedBy, submittedByName, submittedAt, approvedByName, publishedAt…}), versions, yaml (per rule), stats (per rule: {evaluated, triggered, triggerRate",
         "parameters": [
           {
             "name": "id",
@@ -16734,7 +16734,7 @@
         "tags": [
           "admin/models"
         ],
-        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft \u2192 evaluated",
+        "summary": "Conformance job: chat smoke test, and a tool-calling test for models claiming tools (failing it withholds tools). Passing moves draft → evaluated",
         "parameters": [
           {
             "name": "id",
@@ -20404,7 +20404,7 @@
         "tags": [
           "admin/profiles"
         ],
-        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, \u2026}",
+        "summary": "202 with one queued run per set (job evals.run) on the profile as saved now: {id, setId, profileVersion, configHash, setRevision, state, …}",
         "parameters": [
           {
             "name": "id",
@@ -20912,7 +20912,7 @@
         "tags": [
           "admin/registry"
         ],
-        "summary": "Draft \u2192 in review, with fresh checks",
+        "summary": "Draft → in review, with fresh checks",
         "parameters": [
           {
             "name": "id",
@@ -23908,7 +23908,7 @@
         "tags": [
           "admin/users"
         ],
-        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({\u2026, invited}; 409 without an email address",
+        "summary": "Now takes mustChange (default true: the initial password must be changed at first sign-in), or invite: true with an email and no password to email a single-use link valid for PASSWORD_INVITE_HOURS ({…, invited}; 409 without an email address",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -24242,7 +24242,7 @@
         "tags": [
           "admin/zones-cluster"
         ],
-        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH \u2026 application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
+        "summary": "Applies every zone's current NetworkPolicy now with server-side apply (PATCH … application/apply-patch+yaml, the field manager, force=true): {applied, failed, objects}. Also how drift is put right. 409 while ZONES_APPLY is off; 502 when the",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -24777,7 +24777,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller\u2019s, or tenant-wide (workspaceId null). Audited app.created",
+        "summary": "apps:design. B-2201: creates an app in the current workspace, another of the caller’s, or tenant-wide (workspaceId null). Audited app.created",
         "requestBody": {
           "required": true,
           "content": {
@@ -25605,6 +25605,227 @@
         }
       }
     },
+    "/api/apps/{app}/client.js": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/client.ts": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed/keys": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed/keys/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed/pages": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed/pages/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/embed/sessions/revoke": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/apps/{app}/entities": {
       "post": {
         "x-exprsn-since": "1.4.0",
@@ -25831,7 +26052,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,\u2026), q, limit, offset or cursor (keyset paging, B-3601)",
+        "summary": "records:read. B-2202: records within clearance; filter (JSON), sort (field:dir,…), q, limit, offset or cursor (keyset paging, B-3601)",
         "responses": {
           "200": {
             "description": "OK",
@@ -26459,7 +26680,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2208: the app\u2019s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
+        "summary": "apps:design. B-2208: the app’s design as a bundle signed with the KMS HMAC key (no records, triggers or form links). Audited app.exported",
         "responses": {
           "200": {
             "description": "OK",
@@ -26483,7 +26704,7 @@
         "tags": [
           "apps"
         ],
-        "summary": "records:read. The app\u2019s forms",
+        "summary": "records:read. The app’s forms",
         "responses": {
           "200": {
             "description": "OK",
@@ -26773,6 +26994,29 @@
         }
       }
     },
+    "/api/apps/{app}/openapi.json": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/apps/{app}/policies": {
       "get": {
         "tags": [
@@ -26881,13 +27125,348 @@
         "x-exprsn-since": "1.6.0"
       }
     },
+    "/api/apps/{app}/schema": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/fields/{field}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/entities/{entity}/states": {
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/forms/{form}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/versions": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/schema/versions/{version}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/apps/{app}/triggers": {
       "get": {
         "x-exprsn-since": "1.4.0",
         "tags": [
           "apps"
         ],
-        "summary": "apps:design. B-2206: the app\u2019s record and schedule triggers",
+        "summary": "apps:design. B-2206: the app’s record and schedule triggers",
         "responses": {
           "200": {
             "description": "OK",
@@ -27046,6 +27625,218 @@
           "204": {
             "description": "Deleted"
           },
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/{entity}": {
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}": {
+      "delete": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/apps/{app}/{entity}/{id}/transition": {
+      "post": {
+        "tags": [
+          "apps"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
           }
@@ -29380,7 +30171,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=\u2026, single use,",
+        "summary": "When the session signed in to applications with a front-channel logout URI (OIDC clients, SAML SPs with a redirect-binding logout endpoint), answers 200 {signedOut, next}; next is the signed-out page (/oauth/logged-out?handle=…, single use,",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -29580,7 +30371,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {\u2026, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
+        "summary": "With an enrolment link (admin:create --enrol-link) also signs in: {…, session} with stage: enroll, which reaches only the factor enrolment routes; audit password.enrol.accepted",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -29709,7 +30500,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Effective-access matrix: users (and API keys) \u00d7 workspaces \u00d7 permissions, each cell policy.explain's decision",
+        "summary": "Effective-access matrix: users (and API keys) × workspaces × permissions, each cell policy.explain's decision",
         "parameters": [
           {
             "name": "workspaceId",
@@ -29899,7 +30690,7 @@
         "tags": [
           "authz"
         ],
-        "summary": "Role \u00d7 permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
+        "summary": "Role × permission matrix (roles:manage): built-in and the tenant's custom roles, the routes of each permission; ?format=csv for CSV",
         "parameters": [
           {
             "name": "format",
@@ -30907,7 +31698,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller\u2019s calendar: events of their groups and events they RSVPed to",
+        "summary": "The caller’s calendar: events of their groups and events they RSVPed to",
         "parameters": [
           {
             "name": "from",
@@ -30970,7 +31761,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "An event with attendance and the caller\u2019s RSVP",
+        "summary": "An event with attendance and the caller’s RSVP",
         "parameters": [
           {
             "name": "id",
@@ -31324,7 +32115,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2503, moderators. The event\u2019s reminders and their states",
+        "summary": "B-2503, moderators. The event’s reminders and their states",
         "parameters": [
           {
             "name": "id",
@@ -31458,7 +32249,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "The caller\u2019s signed calendar feeds",
+        "summary": "The caller’s signed calendar feeds",
         "responses": {
           "200": {
             "description": "OK",
@@ -31483,7 +32274,7 @@
         "tags": [
           "calendar"
         ],
-        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller\u2019s calendar",
+        "summary": "B-2504. Creates a signed iCalendar feed for an event, a group or the caller’s calendar",
         "requestBody": {
           "required": true,
           "content": {
@@ -34130,7 +34921,7 @@
         "tags": [
           "conversations"
         ],
-        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is \u2026/#/shared?t=<token>; shares list anonymous: true",
+        "summary": "Only for a conversation labelled public (403), when the tenant allows it (403), within its maximum (400). The url is …/#/shared?t=<token>; shares list anonymous: true",
         "parameters": [
           {
             "name": "id",
@@ -36617,7 +37408,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4405: the tenant\u2019s group categories in their order (managed under /api/admin/social/group-categories)",
+        "summary": "groups:read. B-4405: the tenant’s group categories in their order (managed under /api/admin/social/group-categories)",
         "responses": {
           "200": {
             "description": "OK",
@@ -36691,7 +37482,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "The caller\u2019s pending requests and invitations",
+        "summary": "The caller’s pending requests and invitations",
         "responses": {
           "200": {
             "description": "OK",
@@ -37061,7 +37852,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 \u00d7 shared members + 2 \u00d7 joins + posts in the last 30 days; nearest first with near",
+        "summary": "groups:read. B-4402: groups the caller may join now (not a member; active; open or by request, or invite-only with an invitation waiting), never labelled above their clearance, ranked by 3 × shared members + 2 × joins + posts in the last 30 days; nearest first with near",
         "parameters": [
           {
             "name": "workspace",
@@ -37178,7 +37969,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. B-4404: the trending groups of the caller\u2019s workspaces as the groups.trending job last counted them (3 \u00d7 joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
+        "summary": "groups:read. B-4404: the trending groups of the caller’s workspaces as the groups.trending job last counted them (3 × joins + posts in the last FEED_TRENDING_HOURS), those the caller may see and is cleared for",
         "parameters": [
           {
             "name": "workspace",
@@ -37285,7 +38076,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:read. The group with the caller\u2019s role",
+        "summary": "groups:read. The group with the caller’s role",
         "parameters": [
           {
             "name": "id",
@@ -37317,7 +38108,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel\u2019s label is never below its group\u2019s (422 step label-floor); raising a group\u2019s label raises its channels below it",
+        "summary": "Owner. Changes name, description, visibility, join mode or label. 1.6.0: categoryId and location (groups only; 422 on a channel); a channel’s label is never below its group’s (422 step label-floor); raising a group’s label raises its channels below it",
         "parameters": [
           {
             "name": "id",
@@ -37572,7 +38363,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "B-2505, moderators. Flags on the group\u2019s content from reports and moderation checks",
+        "summary": "B-2505, moderators. Flags on the group’s content from reports and moderation checks",
         "parameters": [
           {
             "name": "id",
@@ -37617,7 +38408,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group\u2019s readers, a private one by its members, a hidden one is known only to them)",
+        "summary": "Readers of the group. B-4401: its channels the caller may know of (a public channel is read by the group’s readers, a private one by its members, a hidden one is known only to them)",
         "parameters": [
           {
             "name": "id",
@@ -37652,7 +38443,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group\u2019s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
+        "summary": "groups:write and the channels right (owners and moderators of the group). B-4401: creates a channel; the creator is its owner. Its label is at least the group’s (422 step label-floor) and at most the workspace ceiling; channels do not nest (422 step parent). Audited group.channel.created",
         "parameters": [
           {
             "name": "id",
@@ -37745,7 +38536,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Readers. The group\u2019s events in a window",
+        "summary": "Readers. The group’s events in a window",
         "parameters": [
           {
             "name": "id",
@@ -37949,7 +38740,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. Invites a user of the group\u2019s workspace; expires after GROUP_INVITE_DAYS",
+        "summary": "Moderators. Invites a user of the group’s workspace; expires after GROUP_INVITE_DAYS",
         "parameters": [
           {
             "name": "id",
@@ -38133,7 +38924,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Owner. Changes a member\u2019s group role (a group keeps one owner)",
+        "summary": "Owner. Changes a member’s group role (a group keeps one owner)",
         "parameters": [
           {
             "name": "id",
@@ -38215,7 +39006,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Leave (own id) or remove a member; the member\u2019s sockets leave the group room",
+        "summary": "Leave (own id) or remove a member; the member’s sockets leave the group room",
         "parameters": [
           {
             "name": "id",
@@ -38376,7 +39167,7 @@
         "tags": [
           "groups"
         ],
-        "summary": "Moderators. The group\u2019s requests and invitations (default pending)",
+        "summary": "Moderators. The group’s requests and invitations (default pending)",
         "parameters": [
           {
             "name": "id",
@@ -38483,7 +39274,7 @@
         "tags": [
           "images"
         ],
-        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, \u2026}",
+        "summary": "{id, state: queued\\|running\\|succeeded\\|withheld\\|failed\\|cancelled, stage, step, steps, position?, etaMs?, seed, gpuSeconds, safety, classified, provenance, prompt, label, …}",
         "parameters": [
           {
             "name": "id",
@@ -39510,7 +40301,7 @@
             "name": "facet.<key>",
             "in": "query",
             "required": false,
-            "description": "A facet value to filter on (classification, licence, format, \u2026); one per key",
+            "description": "A facet value to filter on (classification, licence, format, …); one per key",
             "schema": {
               "type": "string"
             }
@@ -47541,7 +48332,7 @@
         "tags": [
           "pki"
         ],
-        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, \u2026}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
+        "summary": "An external account binding key (RFC 8555 7.3.4). 201 {id, kid, hmacKey, …}: hmacKey (base64url, 32 bytes) is shown once and kept sealed with the tenant key. A key binds one account. Audited pki.acme.eab.created",
         "responses": {
           "201": {
             "description": "Created; hmacKey is shown once",
@@ -48488,7 +49279,7 @@
         "tags": [
           "prompts"
         ],
-        "summary": "deprecated \\| retired, version?} | Lifecycle draft \u2192 published \u2192 deprecated \u2192 retired; publishing names the version (default the latest)",
+        "summary": "deprecated \\| retired, version?} | Lifecycle draft → published → deprecated → retired; publishing names the version (default the latest)",
         "parameters": [
           {
             "name": "id",
@@ -48956,6 +49747,45 @@
         }
       }
     },
+    "/api/public/embeds/open": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/public/embeds/session": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/api/public/embeds/submit": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "See docs/api.md",
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/api/public/file-links/download": {
       "post": {
         "tags": [
@@ -49095,9 +49925,6 @@
               }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Default"
-          },
           "202": {
             "description": "Accepted: held for review",
             "content": {
@@ -49127,6 +49954,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Default"
           }
         }
       }
@@ -52979,7 +53809,7 @@
         "tags": [
           "workflow-runs"
         ],
-        "summary": "{\u2026, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
+        "summary": "{…, graph, input, steps: [{nodeId, state, label, attempts, detail, error, output, resumeAt, startedAt, finishedAt}], approvals}; outputs above the caller's clearance are withheld",
         "parameters": [
           {
             "name": "id",
@@ -53061,7 +53891,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt\u2026}] (waiting: runs paused on an approval)",
+        "summary": "[{id, name, description, label, draftRev, publishedVersion, waiting, createdAt, updatedAt…}] (waiting: runs paused on an approval)",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -53233,7 +54063,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "{\u2026, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
+        "summary": "{…, draft: graph, dirty, validation, limits, tools: [{id, name, version, status, workflowVersion, sideEffect, label}] (registry tools that run it), versions: [{version, state: published\\|deprecated, note, publishedBy, publishedAt, graph}]}",
         "parameters": [
           {
             "name": "id",
@@ -54652,6 +55482,60 @@
         }
       }
     },
+    "/embed/app/{tenant}/{app}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "app",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
+    "/embed/{id}": {
+      "get": {
+        "tags": [
+          "embed"
+        ],
+        "summary": "See docs/api.md",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "$ref": "#/components/responses/Default"
+          }
+        }
+      }
+    },
     "/federation/atproto/callback": {
       "get": {
         "tags": [
@@ -55220,7 +56104,7 @@
         "tags": [
           "oauth"
         ],
-        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:\u2026\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
+        "summary": "RFC 9126: validates the request as /oauth/authorize would and answers 201 {request_uri: \"urn:ietf:params:oauth:request_uri:…\", expires_in: 60}. The URI works for one authorization; once a browser presents it, it stays usable for the sign-in",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -55639,7 +56523,7 @@
         "tags": [
           "plugin-broker"
         ],
-        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_\u2026; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
+        "summary": "B-2004: one platform call from a plugin handler, with the invocation's scoped token (Authorization: Bearer xpt_…; no session). Checked against the plugin's grants: 403 and audited plugin.call.refused when not granted; 401 for an unknown, expired or revoked token; 404 for no such call; 429 past PLUGIN_MAX_CALLS. B-3904 (1.5.0): records.read, records.write, files.read, groups.read and posts.write are live and act as the user who installed the plugin (400 for bad arguments, 403 when that user is gone or lacks the permission)",
         "security": [
           {
             "pluginToken": []
@@ -57901,7 +58785,7 @@
         "tags": [
           "v1"
         ],
-        "summary": "string[] (\u2264 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
+        "summary": "string[] (≤ 256), encoding_format?: float \\| base64} | An approved catalogue model with the embedding capability, through the gateway; inputs pass the user-input checkpoint. dimensions is refused",
         "responses": {
           "default": {
             "$ref": "#/components/responses/Default"
@@ -58418,7 +59302,7 @@
         "tags": [
           "atproto"
         ],
-        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (\u2026*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
+        "summary": "com.atproto.label.queryLabels for the labeler on this host: prefix (…*) or exact URI patterns, optional sources, seq cursor. XRPC errors {error, message}. The subscribeLabels WebSocket at the same base is documented in docs/api.md",
         "parameters": [
           {
             "name": "uriPatterns",
