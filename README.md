@@ -1,114 +1,135 @@
-# Exprsn-AI
+<div align="center">
 
-Self-hosted, multi-tenant control plane and chat interface for Ollama-served models.
+# Exprsn AI
 
-**Status:** version `1.7.0`. Sprints 0 to 9 are done: identity and access; tenancy, quotas, audit
-and platform services (KMS with per-tenant keys, blob store, job queue, notifications, Redis fan-out, directory sync);
-the Ollama gateway (pools, instances, the model catalogue with dual-control approval, profiles with canary and
-rollback); chat and compare with streaming, branches, attachments, exact calculation and metering; guardrails at eleven
-checkpoints with classifiers and a flag queue; knowledge bases with hybrid search, memory and read-only data
-connections; the tool registry, MCP servers, agent runs and a script sandbox; workflows, media processing and image
-generation; and training, network zones, platform operations (signed import bundles, mirrors, ACME, backups and
-restore drills) and federation (OIDC provider, SAML IdP, upstream OIDC and SAML, Kerberos, device flow). Every console
-screen is live. Sprint 10 added a Helm chart with NetworkPolicies, supply-chain scanning, a streaming load test,
-runbooks, an OWASP ASVS level 2 review, AA and AAA accessibility modes and a Playwright suite across the console
-(release candidate `1.0.0-rc.1`). Sprints 11 to 15 make up 1.1.0: password change and reset, a breached-password
-check, step-up re-authentication and security notices; streaming output guardrails, held answers and resumable
-streams; an OpenAI-compatible API, signed webhooks, a prompt library, conversation sharing and export, and billing
-statements; token revocation, logout, PAR, DPoP, SAML single logout and signing in OpenBao; and shared rate limits, key
-re-wrap, ACME dns-01, blob-store backups with restore, and sandboxed media. Sprints 16 to 19 make up 1.2.0: knowledge,
-memory and server-side tools on `/v1`, the guard model while streaming, held prompts, live and anonymous sharing;
-new-sign-in notices, a password strength meter, upstream step-up, DPoP nonces, SAML metadata by URL and enrolment
-links; automated WCAG A/AA and reflow checks; checks on operator service URLs, backend TLS, consistent backups, ACME
-account binding and certificate hooks, and sealed training data; and MySQL and replicated PostgreSQL knowledge sources
-with row access, ordered and Ed25519-signed webhooks, per-tenant price books with Stripe reconciliation, and workflow
-tools agent runs can await. Sprints 20 to 23 make up 1.3.0: an optional signer process that keeps private keys out of
-the application, KMS-held webhook keys, HTTP Message Signatures and CI steps that sign and attest the image; held `/v1`
-requests, a Responses API subset, profile evaluations with a publish gate and scheduled agent runs; OpenTelemetry
-tracing, Prometheus rules and Grafana dashboards, safe rolling upgrades, key escrow, zones applied in-cluster and an NTP
-quorum; and S3 and web-crawl knowledge sources, PostgreSQL row security, webhook order across instances, proration and
-Stripe refunds, and axe-core in the accessibility checks. Sprints 24 to 28 make up 1.4.0, the server features of exprsn-platform
-re-implemented here: a certificate authority with OCSP and an ACME server, a secrets vault with dynamic database
-leases, the event catalogue and plugins; AT-Protocol keys, DIDs, a labeler, sign-in and firehose ingest; moderation
-actions and appeals, a file store, low-code data apps, groups and events with iCalendar feeds, customer-service chat and
-email channels, person-to-person messaging, a workspace feed, and a load test of the event and data paths. Sprints 29
-to 34 make up 1.5.0: console screens for those features (Certificates, Vault, Plugins and events, Apps, Files,
-Moderation, Groups and events, Channels, Messages and feed, Roles and access, AT-Protocol); permission matrices, custom
-roles, effective access and access reviews; CalDAV, CardDAV and WebDAV for the file store with DAV-only app passwords;
-model-based memory management and MongoDB connections; an AT-Protocol personal data server with feed generators;
-import repositories and model import; Workflows 2 (sub-workflow, agent, map and loop steps, event and schedule
-triggers, failure edges and dead letters, signed bundles, domain built-in tools) on one chain context, with agents
-delegating to agents, skills composing, checks at publish and a chain view; and profiles and presence
-([Backlog-1.5.0.md](https://github.com/ExprsnIO/Exprsn-AI/blob/b49b596a57da4a1087ad6f501f1aea162dd4105f/Backlog-1.5.0.md)). Sprints 35 to 39 make up 1.6.0: model servers beyond Ollama (Apple Foundation
-Models, MLX, llama.cpp) and the platform administration screens; groups depth, blob deduplication and image
-classification in Knowledge; the HTTP tool kind, prompt-injection defence, SCIM and the MCP server; the AI inventory,
-analytics, audit export, red-team suites, agent identities and handoffs, row and field policies, DLP and legal hold;
-C2PA content credentials, versioned chat artifacts, app packages with environments and promotion, data model drafts,
-AI field fills, outside tables, entity APIs and app embedding ([Backlog-1.6.0.md](https://github.com/ExprsnIO/Exprsn-AI/blob/b49b596a57da4a1087ad6f501f1aea162dd4105f/Backlog-1.6.0.md)). 1.7.0 is in
-progress ([Backlog-1.7.0.md](https://github.com/ExprsnIO/Exprsn-AI/blob/b49b596a57da4a1087ad6f501f1aea162dd4105f/Backlog-1.7.0.md), Sprints 40 to 43): Sprint 40 is done (agents, tools and skills called
-from chat; dataset import, knowledge sets and the Import screen) and Sprint 41 is under way, with Redis required for
-multi-process installs, workflow HTTP steps to listed public hosts, held messages for review, evidence retention and
-legal hold on a case or an object, and guardrail rules drafted from a description done, and the vault's platform
-scope, leases and key rotation and API-key leases open. 1.8.0 (Sprints 44 to 48, `Backlog-1.8.0.md`), then 2.0.0 (cloud deployments and integrations, Sprints 49 to 55)
-follows in [Backlog-2.0.0.md](https://github.com/ExprsnIO/Exprsn-AI/blob/b49b596a57da4a1087ad6f501f1aea162dd4105f/Backlog-2.0.0.md). See [Sprints.md](Sprints.md) and [CHANGELOG.md](CHANGELOG.md).
+**A self-hosted, multi-tenant control plane and chat interface for your own models.**
 
-## What's in the repository
+[![Version](https://img.shields.io/badge/version-2.0.0%20%22GM%22-blue)](docs/release-2.0.0.md)
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A5%2022-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](server/tsconfig.json)
+[![Licence](https://img.shields.io/badge/licence-Apache%202.0-lightgrey)](LICENSE)
 
-| Path | Contents |
+[Quick start](#quick-start) · [Features](#features) · [Documentation](#documentation) · [Development](#development) · [Changelog](CHANGELOG.md)
+
+</div>
+
+---
+
+Exprsn AI runs chat, agents, knowledge and tools on models you host (Ollama, Apple Foundation Models, MLX, llama.cpp
+or any OpenAI-compatible server), for many tenants at once, with identity, guardrails and an audit trail built in.
+Everything is served by one Node.js server with a web console and a native Apple app.
+
+> **Current release:** `2.0.0` "GM" (2026-10-21). See the [release notes](docs/release-2.0.0.md) and, for work since
+> then, the **Unreleased** section of the [changelog](CHANGELOG.md).
+
+## Features
+
+| Area | What you get |
 | --- | --- |
-| [`server/`](server) | Node.js 22, TypeScript, Express 5 and Socket.io. Users sign in against a per-tenant chain of user stores (OpenLDAP, PostgreSQL / MySQL / SQLite user tables, local accounts), with TOTP, passkeys and recovery codes, role and clearance based access, API keys, and a per-tenant SHA-256 audit chain with signed checkpoints. It is the only component that talks to Ollama. The application database is PostgreSQL, MySQL or SQLite (Knex); Redis, OpenBao, S3 and SMTP are optional |
-| [`web/`](web) | The user workspace and admin console, served by the server. Plain HTML, CSS and JavaScript with no build step and a strict CSP |
-| [`deploy/`](deploy) | Dockerfile; Compose for production, development and GPU hosts; a Helm chart with NetworkPolicies; systemd unit and installer for bare metal; an example identity YAML |
-| [`e2e/`](e2e/README.md) | The Playwright suite that drives every console screen against a real server and test fakes |
-| [`docs/`](docs) | [Plan and decisions](docs/PLAN.md), [API](docs/api.md), [identity](docs/identity.md), [deployment](docs/deploy.md), [security](docs/security.md), [ASVS assessment](docs/asvs.md), [accessibility](docs/accessibility.md), [runbooks](docs/runbooks/README.md), [load testing](docs/loadtest.md) |
+| 💬 **Chat and models** | Streaming chat and side-by-side compare, branches, attachments, artifacts, sharing and export · an OpenAI-compatible API (`/v1`, Responses subset) · a gateway with pools, profiles, canaries and fallback across Ollama, MLX, llama.cpp, Apple and cloud model servers · evaluations, training and model import |
+| 🛡️ **Safety and governance** | Guardrails at every checkpoint (rules, classifiers, a guard model, prompt-injection defence, DLP) · held answers and a review queue · moderation and appeals · AI inventory and legal hold · a tamper-evident audit chain with signed checkpoints · an [OWASP ASVS L2](docs/asvs.md) review |
+| 🔐 **Identity and access** | Per-tenant user stores (OpenLDAP, SQL, local, upstream OIDC and SAML, SCIM) · TOTP and passkeys · roles, custom roles, clearance labels and network zones · its own OIDC provider and SAML IdP |
+| 📚 **Knowledge and data** | Knowledge bases with hybrid search and reviewed, versioned references · a **Docs portal** that publishes knowledge bases as documentation sites · memory · data connections to SQL, document, search, key-value, queue and time-series engines, with a **Schema designer** to create, edit and drop objects · REST, GraphQL, SOAP and OData APIs |
+| 🛠️ **Building** | Tool registry and MCP servers (and an MCP server of its own) · agents with schedules and handoffs · skills · sandboxed scripts · durable workflows and decision tables · low-code apps with charts, reports and dashboards · media processing and image generation with content credentials |
+| 🏗️ **Platform** | Certificate authority with OCSP and ACME · secrets vault with leases and escrow · files with WebDAV, CalDAV and CardDAV · groups, events, channels, messaging and a feed · an AT-Protocol PDS · cloud deployments on AWS, Azure, DigitalOcean and Cloudflare with FinOps · backups and restore drills |
+| 🖥️ **Clients** | A web console where every screen is live, with AA and AAA accessibility modes · a native [macOS, iPhone and iPad app](apple/README.md) |
 
-## Run it locally
+## Quick start
 
-Requires Node.js 22 or later.
+You need **Node.js 22** or later.
 
 ```sh
 npm ci
-cp server/.env.example server/.env        # then fill in SESSION_SECRET and DATA_KEY as it describes
+cp server/.env.example server/.env      # fill in SESSION_SECRET and DATA_KEY as the file describes
 set -a; . server/.env; set +a
 npm run cli -w server -- admin:create --username root --display-name "Platform admin"
-npm run dev                                # http://localhost:8080
+npm run dev                              # → http://localhost:8080
 ```
 
-Sign in as `root`; the console asks you to set up an authenticator app first (admin roles require a second factor).
-Add your OpenLDAP or SQL user store under **Admin → User stores**, map directory groups to roles, and use
-**Test a login** to check it. Stores can also be declared in a YAML file named by `IDENTITY_CONFIG`
-(see [deploy/config/identity.example.yaml](deploy/config/identity.example.yaml)).
+1. Sign in as `root`. Admin roles need a second factor, so the console asks you to set up an authenticator app first.
+2. Add your OpenLDAP or SQL user store under **Admin → User stores**, map directory groups to roles, and use
+   **Test a login** to check it. Stores can also be declared in YAML: see
+   [`identity.example.yaml`](deploy/config/identity.example.yaml).
 
-Everything at once, with seeded OpenLDAP, PostgreSQL and MySQL user stores:
+### Everything at once with Docker
 
 ```sh
 docker compose -f deploy/docker/compose.dev.yml up --build
 ```
 
-The seed accounts and their development passwords are listed at the top of
-[`deploy/docker/compose.dev.yml`](deploy/docker/compose.dev.yml) (`mokafor` is a system admin on OpenLDAP).
+This starts the server with seeded OpenLDAP, PostgreSQL and MySQL user stores. The seed accounts are listed at the top
+of [`compose.dev.yml`](deploy/docker/compose.dev.yml) (`mokafor` is a system admin).
 
-The `exprsn-ai` CLI (`npm run cli -w server -- <command>`, or `node server/dist/cli.js` in the image) has `migrate`,
-`admin:create` and `audit:verify`.
+### In production
 
-For production (Docker Compose or bare-metal systemd, TLS, secrets as files, Ollama nodes) see
-[docs/deploy.md](docs/deploy.md).
+Docker Compose, Kubernetes (Helm) or bare-metal systemd, with TLS, file-based secrets and separate Ollama nodes: see
+the [deployment guide](docs/deploy.md).
 
-## Checks
+### The CLI
+
+`npm run cli -w server -- <command>` (or `node server/dist/cli.js` in the image):
+
+| Command | Does |
+| --- | --- |
+| `migrate` | Applies database migrations |
+| `admin:create`, `tenant:create` | Creates the first administrator or a tenant |
+| `audit:verify` | Checks the audit chain and its signed checkpoints |
+| `kms:rotate`, `kms:rewrap`, `kms:escrow`, `kms:recover` | Rotates, re-wraps, escrows and recovers keys |
+| `signer` | Runs the process that keeps private keys out of the application |
+| `backup:create`, `backup:restore-drill`, `backup:restore` | Backs up and restores |
+
+Run `npm run cli -w server -- --help` for the full list.
+
+## Documentation
+
+| Topic | Read |
+| --- | --- |
+| Release notes and upgrade | [2.0.0 release notes](docs/release-2.0.0.md) · [Changelog](CHANGELOG.md) · [Sprints](Sprints.md) |
+| Design | [Plan and decisions](docs/PLAN.md) · [Screen contract](docs/screen-contract.md) |
+| API | [API reference](docs/api.md) · [OpenAPI](docs/openapi.json) · [Permissions](docs/permissions.md) |
+| Running it | [Deployment](docs/deploy.md) · [Cloud](docs/cloud.md) · [Runbooks](docs/runbooks/README.md) · [Load testing](docs/loadtest.md) |
+| Identity and security | [Identity](docs/identity.md) · [Security model and known gaps](docs/security.md) · [ASVS assessment](docs/asvs.md) |
+| Accessibility | [Accessibility modes and checks](docs/accessibility.md) |
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| [`server/`](server) | The application server: Node.js 22, TypeScript, Express 5, Socket.io and Knex on PostgreSQL, MySQL or SQLite. The only component that talks to model servers. Redis, OpenBao, S3 and SMTP are optional |
+| [`web/`](web) | The web console, served by the server: plain HTML, CSS and JavaScript, no build step, strict CSP |
+| [`apple/`](apple/README.md) | The native macOS, iPhone and iPad client (SwiftUI, no dependencies) |
+| [`deploy/`](deploy) | Dockerfile, Compose files, a Helm chart with NetworkPolicies, and a systemd unit and installer |
+| [`e2e/`](e2e/README.md) | The Playwright suite that drives every console screen |
+| [`interop/`](interop) | Runs the AT-Protocol PDS against the reference AppView |
+| [`docs/`](docs) | Design, API, operations and security documentation |
+
+## Development
 
 ```sh
-npm run lint && npm run typecheck && npm test      # unit and API tests on in-memory SQLite
-for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
-TEST_PG_URL=postgres://… TEST_MYSQL_URL=mysql://… TEST_LDAP_URL=ldap://… TEST_LDAP_INSECURE=true TEST_LDAP_BIND_PW=… \
-  npm run test:integration -w server              # user stores against real servers
-# B-3605: the email channel's IMAP adapter against GreenMail (prints NODE_EXTRA_CA_CERTS, TEST_IMAP_URL, TEST_IMAP_SMTP_URL)
-server/test/integration/greenmail.sh /tmp/greenmail
+npm run lint && npm run typecheck && npm test     # unit and API tests on in-memory SQLite
+for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done    # console scripts must parse
 ```
 
-CI runs all of these, builds the container image and checks that it answers `/readyz`.
+Integration tests run against real servers when their variables are set:
 
-Screen modules follow [`docs/screen-contract.md`](docs/screen-contract.md).
+```sh
+TEST_PG_URL=postgres://… TEST_MYSQL_URL=mysql://… \
+TEST_LDAP_URL=ldap://… TEST_LDAP_INSECURE=true TEST_LDAP_BIND_PW=… \
+  npm run test:integration -w server
+
+server/test/integration/greenmail.sh /tmp/greenmail   # the email channel's IMAP adapter against GreenMail
+```
+
+CI runs all of these, builds the container image and checks it answers `/readyz`. On `main` it also pushes, attests
+and signs the image as `ghcr.io/exprsnio/exprsn-ai`.
+
+New console screens follow the [screen contract](docs/screen-contract.md).
+
+## About this repository
+
+The history here starts from the 2.0.0 tree on 2026-10-27, and `main` is the only branch. Planning backlogs
+(`Backlog-*.md`) are kept beside the code but not in git.
 
 ## Licence
 
-Apache License 2.0. See [LICENSE](LICENSE).
+[Apache License 2.0](LICENSE).

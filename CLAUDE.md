@@ -16,39 +16,47 @@ has three parts:
 | `apple/` | The native macOS, iPhone and iPad client (`ExprsnAI.xcodeproj`, SwiftUI + SwiftData, Swift 5 mode, no dependencies): every console screen of 1.0 to 1.9.9 behind the same permissions, OpenAI-compatible platforms over `/v1`, a Streamable HTTP MCP client, Keychain-held secrets, export and import. `apple/README.md` has the build, the smoke run (`EXPRSN_SNAPSHOT_DIR`) and the layout |
 | `docs/` | `PLAN.md` (decisions and rules), `api.md` (every route from Sprint 2 on), `identity.md`, `security.md`, `deploy.md`, `asvs.md`, `accessibility.md`, `loadtest.md`, `training-worker.md`, `classifier-worker.md`, `runbooks/` |
 | `Sprints.md` | Sprint status: what each sprint delivered or will deliver, and which screens it makes live |
+| Repository | `github.com/ExprsnIO/Exprsn-AI`, recreated on 2026-10-27 from the 2.0.0 tree with one fresh commit; one branch, `main` (the old history and branches are in a git bundle on the backup drive) |
 
 Sprints 0 to 9 are done (foundations; identity and access; tenancy, audit and platform services; the Ollama gateway,
 models, pools and profiles; chat, compare and metering; guardrails, classifiers and flags; knowledge, memory and
 connections; registry, MCP servers, agent runs and scripts; workflows, media and images; training, zones, platform
 operations and federation), Sprint 10 (hardening: Helm chart, supply-chain CI, streaming load test, runbooks, the ASVS
 L2 review in `docs/asvs.md`, AA/AAA accessibility modes in `docs/accessibility.md` and the Playwright suite in `e2e/`)
-produced release candidate `1.0.0-rc.1`, and Sprints 11 to 15 (`Backlog-1.1.0.md`: account self-service and security
+produced release candidate `1.0.0-rc.1`, and Sprints 11 to 15 (account self-service and security
 notices; streaming guardrails, held answers and resumable streams; the OpenAI-compatible API, webhooks, prompts,
 sharing, export and billing; the second federation sprint; shared rate limits, key re-wrap, dns-01, blob backups and
-restore) made version `1.1.0`. Sprints 16 to 19 (`Backlog-1.2.0.md`: `/v1` context and tools, the guard model while
+restore) made version `1.1.0`. Sprints 16 to 19 (`/v1` context and tools, the guard model while
 streaming, held prompts, live and anonymous sharing; sign-in notices, the strength meter, upstream step-up, DPoP nonces,
 SAML metadata, enrolment links and automated accessibility checks; service URL checks, backend TLS, consistent
 backups, ACME binding and hooks, sealed training data; MySQL and replicated knowledge sources with row access, ordered
 and Ed25519 webhooks, price books with Stripe reconciliation, awaited workflow tools) made version `1.2.0`. Sprints 20
-to 23 (`Backlog-1.3.0.md`: the signer process, KMS-held webhook keys, HTTP Message Signatures and image provenance;
+to 23 (the signer process, KMS-held webhook keys, HTTP Message Signatures and image provenance;
 held `/v1` requests, the Responses API, evaluations and scheduled agents; tracing, dashboards and alerts, safe upgrades,
 key escrow, zones applied in-cluster and an NTP quorum; S3 and web-crawl knowledge sources, PostgreSQL row security,
 webhook order across instances, proration and Stripe refunds, axe-core and dialog reflow) are done in version `1.3.0`.
-Sprints 24 to 28 (`Backlog-1.4.0.md`: exprsn-platform's server features: a certificate authority with OCSP and an
+Sprints 24 to 28 (exprsn-platform's server features: a certificate authority with OCSP and an
 ACME server, a secrets vault with leases, the event catalogue and plugins; AT-Protocol keys, DIDs, labeler, sign-in and
 firehose ingest; moderation actions and appeals, the file store, low-code data apps, groups and events,
 customer-service channels, messaging and the workspace feed, and a platform load test) made version `1.4.0`; they are
-server-only. Sprints 29 to 34 (`Backlog-1.5.0.md`: the console screens for the 1.4.0 domains, permission matrices,
+server-only. Sprints 29 to 34 (the console screens for the 1.4.0 domains, permission matrices,
 custom roles and access reviews, CalDAV, CardDAV and WebDAV with DAV-only app passwords, model-based memory, MongoDB
 connections, the AT-Protocol PDS and feed generators, import repositories and model import, Workflows 2 on the chain
 context, chaining agents, skills, tools and workflows, profiles and presence, IMAP in CI) made version `1.5.0`; Sprint
-33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 39 (`Backlog-1.6.0.md`: model
+33 moved to 1.7.0; B-3606 (capturing real DAV client traffic) was dropped. Sprints 35 to 39 (model
 servers beyond Ollama, platform administration screens, groups depth, blob deduplication, image classification, the HTTP
 tool kind, prompt-injection defence, SCIM, the MCP server, the AI inventory, analytics, audit export, red-team suites,
 agent identities, handoffs, policies, DLP, legal hold, content credentials, chat artifacts, app packages and promotion,
 data model drafts, AI field fills, outside tables, entity APIs and app embedding) made version `1.6.0` (B-5001,
-capability tokens, was dropped on 2026-10-07); Sprints 40 to 43 in
-`Backlog-1.7.0.md`, with the exprsn-platform port items decided on 2026-10-06; Sprints 44 to 48 in `Backlog-1.8.0.md` (features of the platform's exprsn-svr, rebuilt), Sprints 49 to 55 in `Backlog-1.9.0.md`, Sprint QA-1 in `Backlog-1.9.9-qa.md`, the cloud epic (Sprints 56 to 62, imported from 2.0.0) in `Backlog-1.9.99-final.md`, shipping as 2.0.0 (GM), and the Wikis in `Backlog-2.1.0.md`.
+capability tokens, was dropped on 2026-10-07). Sprints 40 to 43 made `1.7.0` (agents, tools and skills in chat,
+dataset import, the exprsn-platform port items decided on 2026-10-06), Sprints 44 to 48 `1.8.0` (features of the
+platform's exprsn-svr, rebuilt), Sprints 49 to 55 `1.9.0`, Sprint QA-1 `1.9.9-qa`, and the cloud epic (Sprints 56 to
+62) shipped as **`2.0.0` "GM" on 2026-10-21** (`docs/release-2.0.0.md`). Since then: the Connections schema designer
+and schema editing, and the Docs portal (`CHANGELOG.md`, Unreleased). Next are the Wikis (2.1.0).
+
+Planning backlogs (`Backlog-*.md`: `1.8.0`, `1.9.0`, `1.9.9-qa`, `1.9.99-final` for the cloud epic, `2.1.0` for the
+Wikis) are kept beside the code on disk and are git-ignored; the backlogs of 1.1.0 to 1.7.0 and 2.0.0 were removed on
+2026-10-27. Item ids (`B-…`) cited in code and docs refer to them.
 Every console screen is live, plus the Person page opened from people's names. New screens are written in `web/`
 to `docs/screen-contract.md` and go live when every control is backed by the server. Check `Sprints.md` and the known
 gaps in `docs/security.md` before starting work.
@@ -91,8 +99,8 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, unit tests, build and the 
 against real PostgreSQL 17, MySQL 8.4, OpenLDAP and Redis 7; a container build that must answer `/readyz`; npm audit,
 `npm audit signatures`, CycloneDX SBOMs and a Trivy image scan; Helm lint and render; promtool on the Prometheus rules;
 the in-process streaming load test; and the Playwright console suite. On `main` and `v*` tags it also pushes, attests
-and cosign-signs the image and attaches the SBOMs to the release (not yet run on GitHub; it assumes
-`ghcr.io/<owner>/<repo>`).
+and cosign-signs the image as `ghcr.io/exprsnio/exprsn-ai` (from `GITHUB_REPOSITORY`) and attaches the SBOMs to the
+release.
 
 Tests never need a real Ollama: `server/test/fake-ollama.ts` speaks enough of its API (version, tags, ps, show, pull,
 delete, generate, streamed chat with thinking and tool calls) and is also handy for driving the console by hand
@@ -780,3 +788,7 @@ delete, generate, streamed chat with thinking and tool calls) and is also handy 
 
 When a sprint's work lands, update its row and section in `Sprints.md`, move screens to live in `web/js/app.js`, and
 adjust `docs/security.md` "Known gaps" and this file if commands or structure changed.
+
+`README.md` gives the status and the feature summary: update its first section when a release ships or a major
+feature lands. Work since the last release is listed under Unreleased in `CHANGELOG.md`; each feature also raises the
+version of its system doc under `scripts/system-docs/` (outside this repository).
