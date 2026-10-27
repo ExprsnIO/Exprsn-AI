@@ -1,0 +1,46 @@
+# promtool test rules exprsn-ai.rules.test.yml (CI runs it after `promtool check rules`).
+rule_files:
+  - exprsn-ai.rules.yml
+evaluation_interval: 30s
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'exprsn_ratelimit_degraded{job="exprsn-ai", instance="a:8080"}'
+        values: '0 0 1 1 1 1 1 1'
+      - series: 'exprsn_schema_behind{job="exprsn-ai", instance="b:8080"}'
+        values: '0 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: ExprsnRateLimitsPerInstance
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ExprsnRateLimitsPerInstance
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, instance: "a:8080" }
+            exp_annotations:
+              summary: Rate limits on a:8080 count per instance because Redis does not answer
+              description: Limits still apply, but each instance counts on its own, so a client spread over N instances gets N times the limit.
+              runbook: docs/runbooks/alerts.md#exprsnratelimitsperinstance
+      - eval_time: 4m
+        alertname: ExprsnSchemaBehind
+        exp_alerts:
+          - exp_labels: { severity: critical, job: exprsn-ai, instance: "b:8080" }
+            exp_annotations:
+              summary: b:8080 is older than the database schema and takes no jobs
+              description: A newer release migrated the database. Finish the rollout (or roll the database back) so every instance runs a build that knows the schema.
+              runbook: docs/runbooks/alerts.md#exprsnschemabehind
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_http_request_duration_seconds_count{job="exprsn-ai", status="200", route="/api/me"}'
+        values: '0+100x30'
+      - series: 'exprsn_http_request_duration_seconds_count{job="exprsn-ai", status="500", route="/api/me"}'
+        values: '0+20x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ExprsnHighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, job: exprsn-ai }
+            exp_annotations:
+              summary: More than 5% of requests to exprsn-ai fail with a server error
+              description: "16.67% of requests answered 5xx over the last 5 minutes. Quote a trace id from the logs when you look for the cause."
+              runbook: docs/runbooks/alerts.md#exprsnhigherrorrate

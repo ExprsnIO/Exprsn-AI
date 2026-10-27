@@ -1,0 +1,45 @@
+{{- if .Values.ingress.enabled }}
+# WebSocket: the console's Socket.io connection (/socket.io) upgrades to WebSocket and chat streams stay open for
+# minutes. The controller must forward Upgrade and Connection headers (ingress-nginx does by default) and allow long
+# read and send timeouts; the default annotations in values.yaml set them for ingress-nginx. README.md lists the
+# equivalents for Traefik, HAProxy and the Gateway API.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- range . }}
+    - secretName: {{ .secretName }}
+      hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "exprsn-ai.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}

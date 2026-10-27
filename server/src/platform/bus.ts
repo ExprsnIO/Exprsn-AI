@@ -1,0 +1,187 @@
+import { EventEmitter } from 'node:events';
+import { randomBytes } from 'node:crypto';
+import { Redis } from 'ioredis';
+import type { Logger } from 'pino';
+import { redisCompatibility, type RedisCompatibility } from './redis-compat.js';
+
+const CHANNEL = 'exprsn:bus';
+
+/**
+ * In-process events, fanned out to every instance through Redis pub/sub when REDIS_URL is set. Used for things
+ * any instance may need to act on: session revocation (close sockets), job cancellation, chat stop requests,
+ * job progress and notifications for sockets held by another instance.
+ */
+export class Bus {
+  private readonly local = new EventEmitter();
+  private readonly instance = randomBytes(8).toString('hex');
+  private pub: Redis | null = null;
+  private sub: Redis | null = null;
+
+  constructor(private readonly log: Logger, redisUrl?: string) {
+    this.local.setMaxListeners(100);
+    if (redisUrl) {
+      this.pub = new Redis(redisUrl, { lazyConnect: false, maxRetriesPerRequest: 3 });
+      this.sub = new Redis(redisUrl, { lazyConnect: false });
+      this.pub.on('error', (err) => this.log.warn({ err: err.message }, 'bus publisher error'));
+      this.sub.on('error', (err) => this.log.warn({ err: err.message }, 'bus subscriber error'));
+      void this.sub.subscribe(CHANNEL).catch((err: Error) => this.log.error({ err: err.message }, 'bus subscribe failed'));
+      this.sub.on('message', (_ch: string, raw: string) => {
+        try {
+          const m = JSON.parse(raw) as { from: string; topic: string; payload: unknown };
+          if (m.from !== this.instance) this.local.emit(m.topic, m.payload);
+        } catch (err) {
+          this.log.warn({ err }, 'bus message dropped');
+        }
+      });
+    }
+  }
+
+  get distributed(): boolean {
+    return this.pub !== null;
+  }
+
+  /**
+   * 1.7.0 (B-9001): whether Redis carries the bus right now, or null when no Redis is configured. The subscriber
+   * connection must be up (a publisher that answers while the subscriber is cut off still loses every event from
+   * other instances) and the publisher must answer a PING within `timeoutMs`.
+   */
+  async health(timeoutMs = 2000): Promise<{ ok: boolean; detail: string } | null> {
+    if (!this.pub || !this.sub) return null;
+    if (this.sub.status !== 'ready') return { ok: false, detail: `subscriber ${this.sub.status}` };
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.pub.ping(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer in ${timeoutMs} ms`)), timeoutMs);
+        })
+      ]);
+      return { ok: true, detail: 'ok' };
+    } catch (err) {
+      return { ok: false, detail: ((err as Error).message || 'Redis did not answer').slice(0, 200) };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private compat: { at: number; value: RedisCompatibility | null } | null = null;
+
+  /**
+   * 1.9.99-final (B-10305): whether this Redis suits BullMQ and the bus (no cluster mode, `maxmemory-policy
+   * noeviction`), read with `INFO cluster` and `INFO memory` at most once a minute; null without Redis or when it
+   * cannot be read. `/readyz` reports what it finds (`checks.redis`) without failing on it.
+   */
+  async compatibility(maxAgeMs = 60_000): Promise<RedisCompatibility | null> {
+    const pub = this.pub;
+    if (!pub) return null;
+    if (this.compat && Date.now() - this.compat.at < maxAgeMs) return this.compat.value;
+    const value = await redisCompatibility({ info: (section) => pub.info(section) }).catch(() => null);
+    this.compat = { at: Date.now(), value };
+    if (value?.problems.length) this.log.warn({ problems: value.problems.map((p) => p.code), evictionPolicy: value.evictionPolicy }, 'Redis is not suited to BullMQ and the bus');
+    return value;
+  }
+
+  /** Delivers to local listeners now and to other instances through Redis. */
+  publish(topic: string, payload: unknown): void {
+    this.local.emit(topic, payload);
+    if (this.pub) void this.pub.publish(CHANNEL, JSON.stringify({ from: this.instance, topic, payload })).catch((err: Error) => this.log.warn({ err: err.message, topic }, 'bus publish failed'));
+  }
+
+  /** Local only: for events other instances must not also act on (they will have their own). */
+  emitLocal(topic: string, payload: unknown): void {
+    this.local.emit(topic, payload);
+  }
+
+  /**
+   * Listeners are isolated: one that throws (or rejects) is logged and skipped, so it cannot fail the publisher, stop
+   * later listeners, or keep the event from reaching other instances.
+   */
+  on<T = unknown>(topic: string, fn: (payload: T) => unknown): () => void {
+    const h = (payload: unknown) => {
+      try {
+        const r = fn(payload as T);
+        if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch((err: unknown) => this.log.error({ err, topic }, 'bus listener failed'));
+      } catch (err) {
+        this.log.error({ err, topic }, 'bus listener failed');
+      }
+    };
+    this.local.on(topic, h);
+    return () => this.local.off(topic, h);
+  }
+
+  async close(): Promise<void> {
+    this.local.removeAllListeners();
+    await Promise.all([this.pub?.quit().catch(() => undefined), this.sub?.quit().catch(() => undefined)]);
+  }
+}
+
+export const TOPICS = {
+  sessionsRevoked: 'sessions.revoked',
+  /** 1.7.0 (B-9203): a platform key or a platform policy changed: `{ name }`. Every instance reloads its keys. */
+  vaultSys: 'vault.sys',
+  /** 1.7.0 (B-9203, B-9204): a lease ended or changed: `{ id, verifier }`. Every instance drops it from its cache. */
+  vaultLease: 'vault.lease',
+  jobProgress: 'job.progress',
+  jobCancel: 'job.cancel',
+  notification: 'notification',
+  chatStop: 'chat.stop',
+  chatEvent: 'chat.event',
+  poolState: 'pool.state',
+  auditAppended: 'audit.appended',
+  /** Agent-run steps and script runs: `{ userId?, tenantId?, perm?, event, data }`. */
+  runEvent: 'run.event',
+  /**
+   * Events for outbound webhooks that are not audit appends or job states (flags, approvals), emitted locally on the
+   * instance where they happen: `{ tenantId, type, label, id, data }`.
+   */
+  integrationEvent: 'integration.event',
+  /** Sprint 16: access to a shared conversation may have ended (a share revoked, a label raised): `ShareAccessEvent`. */
+  shareAccess: 'share.access',
+  /** Sprint 21 (B-1305): a user left workspaces (removed, or a mapping or directory change): `MembershipEvent`. */
+  workspaceMembership: 'workspace.membership',
+  /** 1.4.0 (B-2102): a cached entry or namespace changed: `CacheInvalidation` (platform/cache.ts). */
+  cacheInvalidate: 'cache.invalidate',
+  /** 1.4.0 (B-2101): access to a realtime room may have ended: `RoomAccessEvent` (realtime/rooms.ts). */
+  roomAccess: 'room.access',
+  /** 1.4.0 (B-2101): an event for the sockets in a domain room: `RoomEvent` (realtime/rooms.ts). */
+  roomEvent: 'room.event',
+  /** 1.4.0 (B-2002): a tenant's plugin installs changed: `{ tenantId, pluginId }`. */
+  pluginChanged: 'plugin.changed',
+  /** 1.4.0 (B-2606, B-2702): a block, mute or follow between two users changed: `SocialRelationEvent` (social/service.ts). */
+  socialRelation: 'social.relation',
+  /** 1.5.0 (B-5802): someone's effective presence status changed: `PresenceEvent` (profiles/presence.ts). */
+  presence: 'presence.changed',
+  /**
+   * 1.5.0 (B-3302, B-3305): a tenant's custom role definitions changed (`definitions`), or grants of some users were
+   * removed (`userIds`): `RolesChangedEvent`. Every instance reloads the definitions and re-decides socket rooms.
+   */
+  rolesChanged: 'authz.roles',
+  /** 1.6.0 (B-4206): close every socket of a user on every instance (Social and messaging › Realtime): `{ tenantId, userId }`. */
+  roomsClose: 'rooms.close',
+  /** 1.6.0 (B-4202): an administrator drained a server instance: `{ id }`. Only that instance acts on it. */
+  instanceDrain: 'platform.instance.drain'
+} as const;
+
+/** 1.5.0: see `TOPICS.rolesChanged`. */
+export interface RolesChangedEvent {
+  tenantId: string;
+  definitions?: boolean;
+  userIds?: string[];
+}
+
+/** Sprint 21: workspaces a user is no longer a member of; live shared watches through them end at once. */
+export interface MembershipEvent {
+  tenantId: string;
+  userId: string;
+  workspaceIds: string[];
+}
+
+export interface IntegrationEvent {
+  tenantId: string;
+  /** Event type, e.g. `flag.created` or `approval.requested`. */
+  type: string;
+  label: 'public' | 'internal' | 'confidential' | 'restricted';
+  /** Stable id of the occurrence, so a subscription receives it once. */
+  id: string;
+  data: Record<string, unknown>;
+}

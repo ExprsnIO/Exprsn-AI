@@ -1,0 +1,18 @@
+// Prints the MST root CIDs pinned in sprint31a-repo.test.ts (npm i @atproto/repo@0.11.0; node gen-mst.mjs example_keys.txt).
+import { MST, MemoryBlockstore } from '@atproto/repo';
+import { CID } from 'multiformats/cid';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const v = CID.parse('bafyreie5cvv4h45feadgeuwhbcutmh6t2ceseocckahdoe6uat64zmz454');
+const keys1 = readFileSync(process.argv[2], 'utf8').split('\n').map(s=>s.trim()).filter(Boolean);
+// deterministic 600 keys: collection by i%3, rkey = sha256(i) hex prefix 13
+const cols = ['app.bsky.feed.post','app.bsky.feed.like','app.bsky.graph.follow'];
+const keys2 = Array.from({length: 600}, (_, i) => `${cols[i%3]}/${createHash('sha256').update(String(i)).digest('hex').slice(0,13)}`);
+for (const keys of [keys1, keys2]) {
+  let mst = await MST.create(new MemoryBlockstore());
+  for (const k of keys) mst = await mst.add(k, v);
+  console.log(keys.length, (await mst.getPointer()).toString());
+  // delete every 3rd
+  for (let i = 0; i < keys.length; i += 3) mst = await mst.delete(keys[i]);
+  console.log('after deletes', (await mst.getPointer()).toString());
+}

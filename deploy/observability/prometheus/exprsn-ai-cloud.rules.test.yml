@@ -1,0 +1,200 @@
+# promtool test rules exprsn-ai-cloud.rules.test.yml (CI runs it after `promtool check rules`), B-10702.
+rule_files:
+  - exprsn-ai-cloud.rules.yml
+evaluation_interval: 30s
+tests:
+  # Failed steps: four create steps fail within a quarter of an hour.
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_operations_total{job="exprsn-ai", instance="a:8080", step="create", state="failed"}'
+        values: '0 0 1 2 3 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'exprsn_cloud_operations_total{job="exprsn-ai", instance="a:8080", step="create", state="succeeded"}'
+        values: '0+5x15'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ExprsnCloudOperationsFailing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ExprsnCloudOperationsFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, step: create }
+            exp_annotations:
+              summary: Cloud create steps keep failing on exprsn-ai
+              description: "Three or more create steps failed in the last 15 minutes. The deployment's journal (Deployments, Operations) names each step's error and the provider's request id."
+              runbook: docs/runbooks/alerts.md#exprsncloudoperationsfailing
+
+  # A failed apply fires at once; a successful one does not.
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_apply_duration_seconds_count{job="exprsn-ai", instance="a:8080", provider="aws", state="failed"}'
+        values: '0 0 0 1 1 1 1 1'
+      - series: 'exprsn_cloud_apply_duration_seconds_count{job="exprsn-ai", instance="a:8080", provider="azure", state="applied"}'
+        values: '0 1 2 3 4 5 6 7'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ExprsnCloudApplyFailed
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ExprsnCloudApplyFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: aws }
+            exp_annotations:
+              summary: A cloud apply on aws failed
+              description: An apply ended failed in the last 30 minutes; the deployment is marked failed and offers rollback.
+              runbook: docs/runbooks/alerts.md#exprsncloudapplyfailed
+
+  # Throttling: half the DigitalOcean calls throttled and a second a second spent waiting, for 20 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_calls_total{job="exprsn-ai", instance="a:8080", provider="digitalocean", api_class="read", outcome="ok"}'
+        values: '0+60x40'
+      - series: 'exprsn_cloud_calls_total{job="exprsn-ai", instance="a:8080", provider="digitalocean", api_class="read", outcome="throttled"}'
+        values: '0+60x40'
+      - series: 'exprsn_cloud_wait_seconds_sum{job="exprsn-ai", instance="a:8080", provider="digitalocean", api_class="read", reason="retry"}'
+        values: '0+60x40'
+      - series: 'exprsn_cloud_calls_total{job="exprsn-ai", instance="a:8080", provider="aws", api_class="read", outcome="ok"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExprsnCloudThrottled
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: digitalocean }
+            exp_annotations:
+              summary: "digitalocean is throttling Exprsn-AI's calls"
+              description: "50% of calls to digitalocean were throttled or held by the local limiter over 10 minutes; applies and drift slow down but complete."
+              runbook: docs/runbooks/alerts.md#exprsncloudthrottled
+
+  # Gauges read the same database on every instance: two instances report one open breaker, the alert says one.
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_breakers_open{job="exprsn-ai", instance="a:8080", provider="azure"}'
+        values: '1x20'
+      - series: 'exprsn_cloud_breakers_open{job="exprsn-ai", instance="b:8080", provider="azure"}'
+        values: '1x20'
+      - series: 'exprsn_cloud_breakers_open{job="exprsn-ai", instance="a:8080", provider="aws"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ExprsnCloudBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: azure }
+            exp_annotations:
+              summary: "A cloud circuit breaker for azure stays open"
+              description: "1 azure accounts have an open or half-open breaker: their calls fail fast until the provider answers again."
+              runbook: docs/runbooks/alerts.md#exprsncloudbreakeropen
+
+  # Drift, budgets and idle GPUs over a working day (a gauge scraped every minute; a sample older than five minutes is stale).
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_drift_findings{job="exprsn-ai", instance="a:8080", kind="field", state="open"}'
+        values: '2x480'
+      - series: 'exprsn_cloud_drift_findings{job="exprsn-ai", instance="a:8080", kind="missing", state="open"}'
+        values: '0x480'
+      - series: 'exprsn_cloud_budget_burn_ratio{job="exprsn-ai", instance="a:8080", provider="aws", basis="forecast"}'
+        values: '0.9 0.95 1.05x480'
+      - series: 'exprsn_cloud_budget_burn_ratio{job="exprsn-ai", instance="a:8080", provider="aws", basis="actual"}'
+        values: '0.6x480'
+      - series: 'exprsn_cloud_budgets_stopped{job="exprsn-ai", instance="a:8080", provider="azure"}'
+        values: '0 0 1x480'
+      - series: 'exprsn_cloud_gpu_nodes{job="exprsn-ai", instance="a:8080", provider="aws", state="idle"}'
+        values: '2x480'
+      - series: 'exprsn_cloud_gpu_nodes{job="exprsn-ai", instance="a:8080", provider="azure", state="idle"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: ExprsnCloudDriftOpen
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: ExprsnCloudDriftOpen
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, kind: field, state: open }
+            exp_annotations:
+              summary: "2 field drift findings stay undecided"
+              description: A managed resource differs from its desired state and nobody has reverted, adopted or ignored the finding for six hours.
+              runbook: docs/runbooks/alerts.md#exprsnclouddriftopen
+      - eval_time: 2h
+        alertname: ExprsnCloudBudgetForecastOver
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: aws, basis: forecast }
+            exp_annotations:
+              summary: "A aws account is forecast to pass its monthly budget"
+              description: "The forecast is 105% of the budget. Scale down or raise the budget before actual spend reaches it and the hard stop refuses plans."
+              runbook: docs/runbooks/alerts.md#exprsncloudbudgetforecastover
+      - eval_time: 1m
+        alertname: ExprsnCloudBudgetHardStop
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ExprsnCloudBudgetHardStop
+        exp_alerts:
+          - exp_labels: { severity: critical, job: exprsn-ai, provider: azure }
+            exp_annotations:
+              summary: "The budget hard stop is engaged on 1 azure accounts"
+              description: Plans that add monthly cost are refused with budget_exceeded until next month, a larger budget, or an approved override.
+              runbook: docs/runbooks/alerts.md#exprsncloudbudgethardstop
+      - eval_time: 4h
+        alertname: ExprsnCloudGpuIdle
+        exp_alerts:
+          - exp_labels: { severity: info, job: exprsn-ai, provider: aws, state: idle }
+            exp_annotations:
+              summary: "2 aws GPU nodes have been idle for three hours"
+              description: GPU nodes are provisioned but not joined to a healthy gateway pool instance. Scale the pool down (or to zero) unless they are warming up for planned work.
+              runbook: docs/runbooks/alerts.md#exprsncloudgpuidle
+
+  # Cost fetches: Azure keeps failing, AWS fails once and then succeeds.
+  - interval: 1h
+    input_series:
+      - series: 'exprsn_cloud_cost_ingests_total{job="exprsn-ai", instance="a:8080", provider="azure", outcome="failed"}'
+        values: '0+1x30'
+      - series: 'exprsn_cloud_cost_ingests_total{job="exprsn-ai", instance="a:8080", provider="aws", outcome="failed"}'
+        values: '0 1x30'
+      - series: 'exprsn_cloud_cost_ingests_total{job="exprsn-ai", instance="a:8080", provider="aws", outcome="ok"}'
+        values: '0 0 1+1x29'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: ExprsnCloudCostIngestFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: azure }
+            exp_annotations:
+              summary: "No azure cost fetch has succeeded for a day"
+              description: Billing ingestion (cloud.costs.ingest) keeps failing; after three days without billing data, budgets fall back to estimates from the applied plans.
+              runbook: docs/runbooks/alerts.md#exprsncloudcostingestfailing
+
+  # The idle GPU node-hours recording rule: two idle nodes for a day are 48 node-hours.
+  - interval: 1h
+    input_series:
+      - series: 'exprsn_cloud_gpu_idle_seconds_total{job="exprsn-ai", instance="a:8080", provider="aws"}'
+        values: '0+7200x30'
+      - series: 'exprsn_cloud_gpu_idle_seconds_total{job="exprsn-ai", instance="b:8080", provider="aws"}'
+        values: '0+7200x30'
+    promql_expr_test:
+      - expr: exprsn:cloud_gpu_idle_node_hours:increase1d
+        eval_time: 26h
+        exp_samples:
+          - labels: 'exprsn:cloud_gpu_idle_node_hours:increase1d{job="exprsn-ai", provider="aws"}'
+            value: 48
+
+  # Spend anomalies (B-10606): one open AWS anomaly seen by both instances fires after a quarter of an hour; an
+  # acknowledged one (the gauge back at 0) ends it; DigitalOcean with none never fires.
+  - interval: 1m
+    input_series:
+      - series: 'exprsn_cloud_anomalies_open{job="exprsn-ai", instance="a:8080", provider="aws"}'
+        values: '0 1x40 0x10'
+      - series: 'exprsn_cloud_anomalies_open{job="exprsn-ai", instance="b:8080", provider="aws"}'
+        values: '0 1x40 0x10'
+      - series: 'exprsn_cloud_anomalies_open{job="exprsn-ai", instance="a:8080", provider="digitalocean"}'
+        values: '0x50'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ExprsnCloudSpendAnomaly
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ExprsnCloudSpendAnomaly
+        exp_alerts:
+          - exp_labels: { severity: warning, job: exprsn-ai, provider: aws }
+            exp_annotations:
+              summary: "1 aws cloud spend anomalies are open"
+              description: "A service's daily spend in a cloud account is well above its 14-day baseline (B-10606). Cloud spend, Anomalies names the deployment, region and tags behind it; acknowledge it once it is explained."
+              runbook: docs/runbooks/alerts.md#exprsncloudspendanomaly
+      - eval_time: 48m
+        alertname: ExprsnCloudSpendAnomaly
+        exp_alerts: []

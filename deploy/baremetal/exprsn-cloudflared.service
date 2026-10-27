@@ -1,0 +1,59 @@
+# /etc/systemd/system/exprsn-cloudflared.service — the Cloudflare Tunnel connector beside Exprsn-AI on bare metal
+# (1.9.99-final, B-10902). It dials out to Cloudflare and forwards the front door's name to the app on 127.0.0.1;
+# nothing listens for the internet. Exprsn-AI creates the tunnel and manages its ingress through the Cloudflare API
+# (Admin > Cloud > Front door, docs/cloud.md), so the connector only needs its token, which stays in Exprsn-AI's vault
+# and reaches this host as a systemd credential file written from it:
+#
+#   exprsn-ai cloud:tunnel-token --edge <name> --out /etc/exprsn-ai/credentials/cloudflared_token   # root:root 0600
+#
+# and in /etc/exprsn-ai/exprsn-ai.env (then systemctl restart exprsn-ai):
+#
+#   HOST=127.0.0.1                      the app listens on loopback only; close 80 and 443 in the host firewall
+#   TRUST_PROXY=loopback,cloudflare     CF-Connecting-IP is the client address only from the connector
+#   CLOUDFLARE_TUNNEL_PEERS=loopback
+#
+# cloudflared is Cloudflare's release 2025.8.1 (2025-08-21) or later, installed at /usr/local/bin/cloudflared from
+# Cloudflare's package repository; it never updates itself (--no-autoupdate). `tunnel run --token-file` needs 2025.4.0
+# or later (developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/
+# cloudflared-parameters/run-parameters/, checked 2026-10-21). Type=notify as in the cloudflared.service unit that
+# Cloudflare's same page shows.
+[Unit]
+Description=Cloudflare Tunnel connector for Exprsn-AI
+Documentation=file:///opt/exprsn-ai/docs/cloud.md
+After=network-online.target exprsn-ai.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+DynamicUser=yes
+LoadCredential=cloudflared_token:/etc/exprsn-ai/credentials/cloudflared_token
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:2000 run --token-file ${CREDENTIALS_DIRECTORY}/cloudflared_token
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+
+# Hardening: outbound connections only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

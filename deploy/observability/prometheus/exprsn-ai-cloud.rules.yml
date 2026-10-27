@@ -1,0 +1,123 @@
+# Prometheus recording and alert rules for Exprsn-AI's cloud plane (1.9.99-final, Sprint 59, B-10702).
+#
+# Load beside exprsn-ai.rules.yml (`rule_files: [exprsn-ai.rules.yml, exprsn-ai-cloud.rules.yml]`). Every metric here is
+# served by /metrics (server/src/cloud/cloud-metrics.ts and cloud/limits-metrics.ts). The scrape-time gauges read the
+# same database on every instance, so the rules take `max without (instance)` of them, never the sum; the event
+# counters (operations, applies, drift, budget alerts, waits, calls) count on the instance that did the work and are
+# summed. What to do for each alert: docs/runbooks/alerts.md.
+
+groups:
+  - name: exprsn-ai-cloud.recording
+    interval: 30s
+    rules:
+      - record: exprsn:cloud_operations_failed:increase15m
+        expr: sum by (job, step) (increase(exprsn_cloud_operations_total{state="failed"}[15m]))
+      - record: exprsn:cloud_apply_duration_seconds:p90_6h
+        expr: histogram_quantile(0.9, sum by (job, provider, le) (rate(exprsn_cloud_apply_duration_seconds_bucket{state="applied"}[6h])))
+      - record: exprsn:cloud_throttle_wait_seconds:rate10m
+        expr: sum by (job, provider) (rate(exprsn_cloud_wait_seconds_sum{reason=~"retry|hold"}[10m]))
+      - record: exprsn:cloud_calls_throttled:ratio_rate10m
+        expr: |
+          sum by (job, provider) (rate(exprsn_cloud_calls_total{outcome=~"throttled|rate_limited"}[10m]))
+            / clamp_min(sum by (job, provider) (rate(exprsn_cloud_calls_total[10m])), 1e-9)
+      - record: exprsn:cloud_gpu_idle_node_hours:increase1d
+        expr: max without (instance) (increase(exprsn_cloud_gpu_idle_seconds_total[1d])) / 3600
+
+  - name: exprsn-ai-cloud.alerts
+    rules:
+      - alert: ExprsnCloudOperationsFailing
+        expr: exprsn:cloud_operations_failed:increase15m >= 3
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Cloud {{ $labels.step }} steps keep failing on {{ $labels.job }}
+          description: "Three or more {{ $labels.step }} steps failed in the last 15 minutes. The deployment's journal (Deployments, Operations) names each step's error and the provider's request id."
+          runbook: docs/runbooks/alerts.md#exprsncloudoperationsfailing
+      - alert: ExprsnCloudApplyFailed
+        expr: sum by (job, provider) (increase(exprsn_cloud_apply_duration_seconds_count{state="failed"}[30m])) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: A cloud apply on {{ $labels.provider }} failed
+          description: An apply ended failed in the last 30 minutes; the deployment is marked failed and offers rollback.
+          runbook: docs/runbooks/alerts.md#exprsncloudapplyfailed
+      - alert: ExprsnCloudApplySlow
+        expr: exprsn:cloud_apply_duration_seconds:p90_6h > 3600
+        for: 30m
+        labels: { severity: info }
+        annotations:
+          summary: Cloud applies on {{ $labels.provider }} take more than an hour
+          description: "The 90th percentile of successful applies over six hours is {{ $value | humanizeDuration }}. Long-running operations (clusters, node groups, databases) dominate it; check the throttling panels."
+          runbook: docs/runbooks/alerts.md#exprsncloudapplyslow
+      - alert: ExprsnCloudStepsStuck
+        expr: max without (instance) (exprsn_cloud_operations_inflight{state="pending"}) > 0 and max without (instance) (exprsn_cloud_operations_inflight{state="pending"} offset 2h) > 0
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: Cloud operations have been pending for hours on {{ $labels.job }}
+          description: "{{ $value | humanize }} steps are still waiting on a provider's long-running operation. A poll job resumes them; if none runs, queue cloud.poll for the deployment."
+          runbook: docs/runbooks/alerts.md#exprsncloudstepsstuck
+      - alert: ExprsnCloudThrottled
+        expr: exprsn:cloud_calls_throttled:ratio_rate10m > 0.2 and exprsn:cloud_throttle_wait_seconds:rate10m > 0.25
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.provider }} is throttling Exprsn-AI's calls"
+          description: "{{ $value | humanizePercentage }} of calls to {{ $labels.provider }} were throttled or held by the local limiter over 10 minutes; applies and drift slow down but complete."
+          runbook: docs/runbooks/alerts.md#exprsncloudthrottled
+      - alert: ExprsnCloudBreakerOpen
+        expr: max without (instance) (exprsn_cloud_breakers_open) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "A cloud circuit breaker for {{ $labels.provider }} stays open"
+          description: "{{ $value | humanize }} {{ $labels.provider }} accounts have an open or half-open breaker: their calls fail fast until the provider answers again."
+          runbook: docs/runbooks/alerts.md#exprsncloudbreakeropen
+      - alert: ExprsnCloudDriftOpen
+        expr: max without (instance) (exprsn_cloud_drift_findings{state="open"}) > 0
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value | humanize }} {{ $labels.kind }} drift findings stay undecided"
+          description: A managed resource differs from its desired state and nobody has reverted, adopted or ignored the finding for six hours.
+          runbook: docs/runbooks/alerts.md#exprsnclouddriftopen
+      - alert: ExprsnCloudBudgetForecastOver
+        expr: max without (instance) (exprsn_cloud_budget_burn_ratio{basis="forecast"}) >= 1
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "A {{ $labels.provider }} account is forecast to pass its monthly budget"
+          description: "The forecast is {{ $value | humanizePercentage }} of the budget. Scale down or raise the budget before actual spend reaches it and the hard stop refuses plans."
+          runbook: docs/runbooks/alerts.md#exprsncloudbudgetforecastover
+      - alert: ExprsnCloudBudgetHardStop
+        expr: max without (instance) (exprsn_cloud_budgets_stopped) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: "The budget hard stop is engaged on {{ $value | humanize }} {{ $labels.provider }} accounts"
+          description: Plans that add monthly cost are refused with budget_exceeded until next month, a larger budget, or an approved override.
+          runbook: docs/runbooks/alerts.md#exprsncloudbudgethardstop
+      - alert: ExprsnCloudCostIngestFailing
+        expr: sum by (job, provider) (increase(exprsn_cloud_cost_ingests_total{outcome="failed"}[1d])) > 0 unless sum by (job, provider) (increase(exprsn_cloud_cost_ingests_total{outcome="ok"}[1d])) > 0
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "No {{ $labels.provider }} cost fetch has succeeded for a day"
+          description: Billing ingestion (cloud.costs.ingest) keeps failing; after three days without billing data, budgets fall back to estimates from the applied plans.
+          runbook: docs/runbooks/alerts.md#exprsncloudcostingestfailing
+      - alert: ExprsnCloudGpuIdle
+        expr: max without (instance) (exprsn_cloud_gpu_nodes{state="idle"}) > 0
+        for: 3h
+        labels: { severity: info }
+        annotations:
+          summary: "{{ $value | humanize }} {{ $labels.provider }} GPU nodes have been idle for three hours"
+          description: GPU nodes are provisioned but not joined to a healthy gateway pool instance. Scale the pool down (or to zero) unless they are warming up for planned work.
+          runbook: docs/runbooks/alerts.md#exprsncloudgpuidle
+      - alert: ExprsnCloudSpendAnomaly
+        expr: max without (instance) (exprsn_cloud_anomalies_open) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value | humanize }} {{ $labels.provider }} cloud spend anomalies are open"
+          description: "A service's daily spend in a cloud account is well above its 14-day baseline (B-10606). Cloud spend, Anomalies names the deployment, region and tags behind it; acknowledge it once it is explained."
+          runbook: docs/runbooks/alerts.md#exprsncloudspendanomaly

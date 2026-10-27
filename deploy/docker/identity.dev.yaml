@@ -1,0 +1,51 @@
+# Development identity configuration for compose.dev.yml: all four store kinds against local containers.
+tenants:
+  - slug: default
+    name: Northwind
+    directoryDn: dc=northwind,dc=local
+    workspaces:
+      - { name: Finance Ops, labelCeiling: confidential }
+      - { name: People Ops, labelCeiling: internal }
+    providers:
+      - name: Northwind OpenLDAP
+        kind: ldap
+        position: 10
+        config:
+          url: ldap://openldap:389
+          allowInsecure: true            # development only; refused when NODE_ENV=production
+          bindDN: cn=admin,dc=northwind,dc=local
+          bindPassword: env:DEV_LDAP_ADMIN_PASSWORD
+          userBase: ou=people,dc=northwind,dc=local
+          groupBase: ou=groups,dc=northwind,dc=local
+      - name: HR PostgreSQL
+        kind: sql
+        position: 20
+        config:
+          dialect: pg
+          connection: env:DEV_HR_PG_URL
+          table: staff
+          columns: { id: staff_id, username: login, passwordHash: password_hash, displayName: full_name, email: email, disabled: is_disabled }
+          groupTable: { table: staff_groups, userColumn: staff_id, groupColumn: group_name }
+      - name: Partner portal MySQL
+        kind: sql
+        position: 30
+        config:
+          dialect: mysql
+          connection: env:DEV_PARTNER_MYSQL_URL
+          table: users
+          columns: { id: id, username: username, passwordHash: pass_hash, displayName: name, groups: roles }
+      - name: Lab SQLite
+        kind: sql
+        position: 40
+        enabled: false
+        config:
+          dialect: sqlite
+          connection: env:DEV_LAB_SQLITE_PATH
+          table: users
+          columns: { username: username, passwordHash: password_hash }
+          defaultRoles: [member]
+    groupMappings:
+      - { group: "cn=finance-ops,ou=groups,dc=northwind,dc=local", role: member, clearance: confidential }
+      - { group: "cn=ai-admins,ou=groups,dc=northwind,dc=local", provider: Northwind OpenLDAP, role: system-admin, clearance: restricted }
+      - { group: finance, provider: HR PostgreSQL, role: member, clearance: internal }
+      - { group: partners, provider: Partner portal MySQL, role: member, clearance: public }

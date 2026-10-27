@@ -1,0 +1,910 @@
+(function () {
+  const { UI, esc } = App;
+
+  // ---------- formatting ----------
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  const compact = (n) => (n >= 1e6 ? +(n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? +(n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k' : String(Math.round(n)));
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'never');
+  const whenFull = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+  const whenRow = (ms) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const dayLabel = (d) => { const p = String(d).split('-'); return new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+  const ymd = (date) => date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate();
+  const short = (h) => (h ? String(h).slice(0, 12) : '');
+  const oneLine = (o) => (o && typeof o === 'object' ? Object.keys(o).map((k) => k + ': ' + (o[k] && typeof o[k] === 'object' ? JSON.stringify(o[k]) : String(o[k]))).join(', ') : '');
+  // A "nice" axis maximum: 1, 2, 2.5 or 5 times a power of ten at or above the largest value.
+  const niceMax = (v) => { if (!(v > 0)) return 10; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; };
+
+  const KINDS = [['all', 'All'], ['decision', 'Decisions'], ['admin', 'Admin actions'], ['auth', 'Sign-ins'], ['correction', 'Corrections'], ['system', 'System']];
+  const PERIODS = [{ value: 'today', label: 'Today' }, { value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: 'month', label: 'This month' }];
+  const BY_LABEL = { user: 'User or agent', model: 'Model', workspace: 'Workspace', profile: 'Profile', tenant: 'Tenant' };
+  const ACTION_RE = /^[a-z0-9._]+$/;
+  const isSysAdmin = () => !!(App.me && App.me.roles.some((r) => r.id === 'system-admin'));
+  const actorName = (a) => (!a ? '' : a.name || a.username || a.service || (a.ip ? 'anonymous, ' + a.ip : 'system'));
+  const mix = (r) => {
+    const out = Number(r.output || 0), th = Math.min(out, Number(r.thinking || 0));
+    const split = out ? Math.round((th / out) * 100) + '% / ' + (100 - Math.round((th / out) * 100)) + '%' : '- / -';
+    return split + ' · ' + fmt(r.calc) + ' calc';
+  };
+
+  // One job.progress listener for the whole screen; it removes itself once the screen is left.
+  let jobSocket = null, jobHandler = null;
+  const stopJobs = () => { if (jobSocket && jobHandler) jobSocket.off('job.progress', jobHandler); jobSocket = null; jobHandler = null; };
+
+  // ---------- chart (inline SVG) ----------
+  function chart(st, days) {
+    const W = 600, H = 160, L = 44, R = 590, top = 20, base = 130;
+    const n = days.length || 1;
+    const max = niceMax(Math.max.apply(null, days.map((d) => d.tokens).concat([0])));
+    const y = (v) => base - (v / max) * (base - top);
+    const slot = (R - L) / n, bw = Math.max(4, Math.min(24, slot * 0.6));
+    const cx = (i) => L + slot * i + slot / 2;
+    const hov = st.hover != null && st.hover < days.length ? st.hover : null;
+    let bars = '';
+    days.forEach((d, i) => {
+      const x = cx(i) - bw / 2, yy = y(d.tokens), h = base - yy;
+      const hi = i === days.length - 1 || hov === i;
+      const r = Math.min(4, h / 2, bw / 2);
+      const path = h > 0.5 ? 'M' + x + ' ' + base + ' V' + (yy + r) + ' a' + r + ' ' + r + ' 0 0 1 ' + r + ' -' + r + ' h' + (bw - 2 * r) + ' a' + r + ' ' + r + ' 0 0 1 ' + r + ' ' + r + ' V' + base + ' z' : 'M' + x + ' ' + (base - 1) + ' h' + bw + ' v1 h-' + bw + ' z';
+      bars += '<g class="ua-bar' + (hov === i ? ' hov' : '') + '" data-bar="' + i + '" tabindex="0" role="listitem" aria-label="' + esc(dayLabel(d.day)) + ', ' + esc(fmt(d.tokens)) + ' tokens">'
+        + '<rect x="' + (cx(i) - slot / 2) + '" y="' + top + '" width="' + slot + '" height="' + (base - top) + '" fill="transparent"></rect>'
+        + '<path d="' + path + '" fill="' + (hi ? 'var(--accent)' : 'var(--meter)') + '"></path>'
+        + '<title>' + esc(dayLabel(d.day)) + ': ' + esc(fmt(d.tokens)) + ' tokens, ' + esc(fmt(d.gpuSeconds)) + ' GPU-seconds</title></g>';
+    });
+    let tip = '';
+    if (hov != null) {
+      const d = days[hov], text = dayLabel(d.day) + ', ' + fmt(d.tokens) + ' tokens';
+      const tw = Math.max(110, text.length * 6.4 + 16), tx = Math.min(R - tw, Math.max(L, cx(hov) - tw / 2)), ty = Math.max(0, y(d.tokens) - 34);
+      tip = '<g pointer-events="none"><rect x="' + tx + '" y="' + ty + '" width="' + tw + '" height="26" rx="4" fill="var(--fg)"></rect><text x="' + (tx + tw / 2) + '" y="' + (ty + 17) + '" text-anchor="middle" font-size="11" font-weight="600" fill="var(--bg)">' + esc(text) + '</text></g>';
+    }
+    const last = days[days.length - 1];
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="160" role="img" aria-label="Tokens per day, ' + days.length + ' days" style="display:block;font-family:var(--sans)">'
+      + '<g stroke="var(--line2)"><line x1="' + L + '" y1="' + top + '" x2="' + R + '" y2="' + top + '"></line><line x1="' + L + '" y1="' + (top + (base - top) / 2) + '" x2="' + R + '" y2="' + (top + (base - top) / 2) + '"></line></g>'
+      + '<line x1="' + L + '" y1="' + base + '" x2="' + R + '" y2="' + base + '" stroke="var(--faint)"></line>'
+      + '<g role="list">' + bars + '</g>'
+      + '<g font-size="11" fill="var(--muted)"><text x="' + (L - 6) + '" y="' + (top + 4) + '" text-anchor="end">' + compact(max) + '</text><text x="' + (L - 6) + '" y="' + (top + (base - top) / 2 + 4) + '" text-anchor="end">' + compact(max / 2) + '</text><text x="' + (L - 6) + '" y="' + (base + 4) + '" text-anchor="end">0</text>'
+      + (days.length ? '<text x="' + (cx(0) - bw / 2) + '" y="148">' + esc(dayLabel(days[0].day)) + '</text><text x="' + (cx(days.length - 1) + bw / 2) + '" y="148" text-anchor="end">' + esc(dayLabel(last.day)) + '</text>' : '')
+      + (hov == null && last && last.tokens > 0 ? '<text x="' + cx(days.length - 1) + '" y="' + Math.max(12, y(last.tokens) - 6) + '" text-anchor="middle" fill="var(--fg)" font-weight="600">' + compact(last.tokens) + '</text>' : '') + '</g>' + tip + '</svg>';
+  }
+
+  // ---------- Sprint 13: statements and price books (billing:read to see, billing:manage to change) ----------
+  const METER_LABEL = { prompt_tokens: 'Prompt tokens', output_tokens: 'Output tokens', thinking_tokens: 'Thinking tokens', gpu_seconds: 'GPU-seconds', requests: 'Requests', calc_calls: 'Calculator calls' };
+  const FINAL = { pushed: 1, paid: 1, 'payment failed': 1, void: 1, 'partly refunded': 1, refunded: 1, disputed: 1, 'dispute lost': 1 };
+  const dayTime = (ms) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const money = (micros, cur) => (Number(micros || 0) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }) + ' ' + (cur || '');
+  function billingLoad(st, refresh) {
+    const b = st.bill = st.bill || {};
+    if (b.loading || b.loaded) return;
+    b.loading = true;
+    Promise.all([App.get('/api/admin/billing/statements'), App.get('/api/admin/billing/price-books'), App.get('/api/admin/billing/settings')])
+      .then(([list, books, settings]) => { Object.assign(b, { list, books, settings, loaded: true, error: null }); if (!b.month || !list.statements.some((x) => x.month === b.month)) b.month = list.statements.length ? list.statements[0].month : list.current; b.detail = null; })
+      .catch((err) => { b.error = err; b.loaded = true; })
+      .finally(() => { b.loading = false; refresh(); });
+  }
+  function billingDetail(st, refresh) {
+    const b = st.bill; if (!b.month || (b.detail && b.detail.month === b.month) || b.detailLoading === b.month) return;
+    b.detailLoading = b.month;
+    App.get('/api/admin/billing/statements/' + encodeURIComponent(b.month))
+      .then((d) => { if (b.month === d.month) b.detail = d; })
+      .catch((err) => { b.detail = { month: b.month, error: err }; })
+      .finally(() => { b.detailLoading = null; refresh(); });
+  }
+  function billingHtml(st, refresh) {
+    const b = st.bill || {};
+    if (!b.loaded) return UI.notice('Loading…', 'info');
+    if (b.error) return UI.problem('Statements could not be loaded', b.error.message, b.error.problem && b.error.problem.trace_id);
+    billingDetail(st, refresh);
+    const d = b.detail && b.detail.month === b.month ? b.detail : null;
+    const manage = App.can('billing:manage');
+    const list = b.list.statements;
+    const book = b.settings.effectiveBook;
+    let h = '<div class="hstack wrap"><div class="eyebrow">Statements from the usage meter</div>'
+      + UI.select(list.map((x) => ({ value: x.month, label: x.month + ', ' + x.state + ', ' + money(x.totalMicros, x.currency) })), b.month, 'data-bmonth aria-label="Month" style="width:260px"')
+      + '<span class="right hstack gap6">'
+      + (d && !d.error && d.id ? '<a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(d.id) + '.pdf" download>PDF</a>' : '') // 1.9.0 (B-166)
+      + (d && !d.error ? '<a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=csv" download>CSV</a><a class="btn ghost sm" href="/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/export?format=json" download>JSON</a>' : '')
+      + (manage && d && !d.error && !FINAL[d.state] ? UI.btn(d.state === 'preview' ? 'Save statement' : 'Recompute', { size: 'sm', attrs: 'data-bcompute' }) : '')
+      + (manage && b.settings.provider && d && !d.error && !FINAL[d.state] && b.month < b.list.current ? UI.btn('Send to ' + b.settings.provider, { size: 'sm', kind: 'primary', attrs: 'data-bpush' }) : '')
+      + '</span></div>';
+    if (!book) h += UI.notice('<b>No price book applies to this tenant.</b> Statements list the usage with no amounts until ' + (manage ? 'you set a default price book below.' : 'a system admin sets a default price book.'), 'warn');
+    if (!d) h += UI.notice('Loading…', 'info');
+    else if (d.error) h += UI.problem('The statement could not be loaded', d.error.message, d.error.problem && d.error.problem.trace_id);
+    else {
+      const t = d.totals;
+      h += (d.state === 'push failed' ? UI.notice('<b>Sending failed.</b> ' + esc(d.pushError || ''), 'danger') : '')
+        + (d.state === 'pushed' ? UI.notice('Sent to ' + esc(b.settings.provider || 'the billing provider') + ' as ' + esc(d.providerRef || '') + ' on ' + esc(when(d.pushedAt)) + '. The statement is final.' + (b.settings.reconciliation ? ' It is marked paid, failed or void when ' + esc(b.settings.provider || 'the provider') + ' reports it.' : ''), 'ok') : '')
+        + (d.state === 'paid' ? UI.notice('<b>Paid.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported invoice ' + esc(d.providerRef || '') + ' paid on ' + esc(when(d.paidAt)) + '.', 'ok') : '')
+        + (d.state === 'payment failed' ? UI.notice('<b>Payment failed.</b> ' + esc(b.settings.provider || 'The billing provider') + ' reported that invoice ' + esc(d.providerRef || '') + ' could not be collected. It is marked paid when a later payment succeeds.', 'danger') : '')
+        + (d.state === 'void' ? UI.notice('<b>Void.</b> Invoice ' + esc(d.providerRef || '') + ' was voided at ' + esc(b.settings.provider || 'the billing provider') + '.', 'warn') : '')
+        + (d.state === 'refunded' || d.state === 'partly refunded' ? UI.notice('<b>' + (d.state === 'refunded' ? 'Refunded.' : 'Partly refunded.') + '</b> ' + esc(money(d.refundedMicros, d.currency)) + ' of ' + esc(money(d.totalMicros, d.currency)) + ' was returned to the customer.', 'warn') : '')
+        + (d.state === 'disputed' ? UI.notice('<b>Disputed.</b> The customer disputes ' + esc(money(d.disputedMicros, d.currency)) + (d.disputeStatus ? ' (' + esc(d.disputeStatus.replace(/_/g, ' ')) + ')' : '') + '. The statement returns to paid if the dispute is won.', 'danger') : '')
+        + (d.state === 'dispute lost' ? UI.notice('<b>Dispute lost.</b> ' + esc(money(d.disputedMicros, d.currency)) + ' was taken back from the payment.', 'danger') : '')
+        + (d.creditedMicros ? UI.notice('Credit notes for ' + esc(money(d.creditedMicros, d.currency)) + ' were issued against invoice ' + esc(d.providerRef || '') + ' (' + esc(String(d.credits.filter((c) => c.state === 'issued').length)) + ' issued' + (d.credits.some((c) => c.state === 'void') ? ', ' + esc(String(d.credits.filter((c) => c.state === 'void').length)) + ' voided' : '') + ').', 'info') : '')
+        + (d.prorated ? UI.notice('Prices changed during this month: each part of the month is priced with the prices in effect then.', 'info') : '')
+        + '<div class="grid4">' + UI.stat(esc(money(d.totalMicros, d.currency)), 'Total, ' + d.month, esc(d.state === 'preview' ? 'preview, not saved' : d.state)) + UI.stat(fmt(t.promptTokens + t.outputTokens), 'Tokens', fmt(t.promptTokens) + ' in, ' + fmt(t.outputTokens) + ' out') + UI.stat(fmt(Math.round(t.gpuSeconds)), 'GPU-seconds', '') + UI.stat(fmt(t.requests), 'Requests', d.book ? 'price book ' + esc(d.book.name) : 'no price book') + '</div>'
+        + UI.table(['Kind', 'Model', 'Profile', 'Meter'].concat(d.prorated ? ['Period'] : []).concat([{ label: 'Quantity', right: true }, { label: 'Price', right: true }, { label: 'Amount', right: true }]), d.lines.map((l) => [esc(l.kind), '<span class="mono">' + esc(l.model || '') + '</span>', esc(l.profile || ''), esc(METER_LABEL[l.meter] || l.meter)].concat(d.prorated ? [l.from != null ? esc(dayTime(l.from)) + ' to ' + esc(dayTime(l.to)) : ''] : []).concat([fmt(l.quantity), l.priced ? esc(money(l.unitPriceMicros, '')) + ' <span class="muted">per ' + fmt(l.perUnits) + '</span>' : '<span class="muted">not priced</span>', esc(money(l.amountMicros, d.currency))])), { clickable: false, minWidth: d.prorated ? '880px' : '720px', emptyTitle: 'No usage this month', emptyText: 'Lines appear as models are used.' })
+        + (d.taxes && d.taxes.length ? UI.kv([['Subtotal', esc(money(d.subtotalMicros, d.currency))]].concat(d.taxes.map((x) => [esc(x.name) + ' ' + esc(String(x.ratePpm / 10000)) + '%', esc(money(x.amountMicros, d.currency))])).concat([['Total', '<b>' + esc(money(d.totalMicros, d.currency)) + '</b>']]), 1) : '')
+        + '<div class="muted" style="font-size:12px">Totals come from the same usage records as the Usage tab, so they match its report for the month. Usage without a price is listed at zero.' + (d.computedAt ? ' Computed ' + esc(when(d.computedAt)) + '.' : '') + '</div>';
+    }
+    h += '<div class="hstack"><div class="eyebrow grow">Price books</div>' + (manage ? UI.btn('New price book', { size: 'sm', icon: 'plus', attrs: 'data-bnewbook' }) : '') + '</div>'
+      + UI.table(['Name', 'Currency', 'Items', 'State', ''], b.books.books.map((x) => ['<b>' + esc(x.name) + '</b>' + (x.tenantId ? ' ' + UI.pill(x.tenantId === b.settings.tenantId ? 'this tenant' : 'another tenant', 'outline') : '') + (x.isDefault ? ' ' + UI.pill('default', 'accent') : '') + (book && book.id === x.id ? ' <span class="muted">used for this tenant</span>' : ''), esc(x.currency), fmt(x.items.length), UI.pill(x.state, x.state === 'active' ? 'ok' : 'outline'), manage ? UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-beditbook="' + esc(x.id) + '"' }) : '']), { clickable: false, minWidth: '520px', emptyTitle: 'No price books', emptyText: manage ? 'Create one to price the usage meter.' : 'A system admin keeps the price books.' });
+    if (manage) h += '<div class="hstack wrap gap6"><span class="muted" style="font-size:12px">This tenant uses</span>' + UI.select([{ value: '', label: 'The default price book' }].concat(b.books.books.filter((x) => x.state === 'active').map((x) => ({ value: x.id, label: x.name }))), b.settings.priceBookId || '', 'data-bbook aria-label="Price book for this tenant" style="width:220px"')
+      + (b.settings.provider ? UI.input(b.settings.billingCustomer || '', { attrs: 'data-bcustomer aria-label="Billing customer" style="width:200px"', placeholder: 'Stripe customer, cus_...' }) : '')
+      + UI.input(b.settings.billingCurrency || '', { attrs: 'data-bcurrency aria-label="Billing currency" maxlength="3" style="width:90px"', placeholder: 'Currency' })
+      + UI.input((b.settings.taxRates || []).map((x) => x.name + ' ' + x.ratePercent).join(', '), { attrs: 'data-btaxes aria-label="Tax rates" style="width:220px"', placeholder: 'Taxes, e.g. VAT 20' })
+      + UI.btn('Save', { size: 'sm', attrs: 'data-bsettings' }) + '</div>'
+      + '<div class="muted" style="font-size:12px">A currency limits this tenant to price books in it (there is no conversion). Taxes are a name and a percentage each, comma separated, added to the priced subtotal.</div>';
+    else if (b.settings.billingCurrency || (b.settings.taxRates || []).length) h += '<div class="muted" style="font-size:12px">Billed in ' + esc(b.settings.billingCurrency || 'the price book\'s currency') + ((b.settings.taxRates || []).length ? ', with ' + esc(b.settings.taxRates.map((x) => x.name + ' ' + x.ratePercent + '%').join(', ')) : '') + '.</div>';
+    return h;
+  }
+  function priceBookModal(ctx, st, existing, reload) {
+    const meters = Object.keys(METER_LABEL);
+    const items = existing ? existing.items.slice() : [{ match: 'any', value: null, usage: '*', meter: 'prompt_tokens', perUnits: 1000000, unitPriceMicros: 0 }];
+    const row = (it, i) => '<tr data-bitem="' + i + '"><td>' + UI.select([{ value: 'any', label: 'Anything' }, { value: 'model', label: 'Model' }, { value: 'profile', label: 'Profile' }], it.match, 'data-bf="match" aria-label="Applies to"') + '</td>'
+      + '<td>' + UI.input(it.value || '', { attrs: 'data-bf="value" aria-label="Model or profile name"', placeholder: 'name' }) + '</td>'
+      + '<td>' + UI.input(it.usage, { attrs: 'data-bf="usage" aria-label="Usage kind" style="width:80px"', placeholder: '*' }) + '</td>'
+      + '<td>' + UI.select(meters.map((m) => ({ value: m, label: METER_LABEL[m] })), it.meter, 'data-bf="meter" aria-label="Meter"') + '</td>'
+      + '<td>' + UI.input(String(it.unitPriceMicros / 1e6), { attrs: 'data-bf="price" aria-label="Price" style="width:90px"' }) + '</td>'
+      + '<td>' + UI.input(String(it.perUnits), { attrs: 'data-bf="per" aria-label="Per units" style="width:100px"' }) + '</td>'
+      + '<td>' + UI.iconbtn('x', 'Remove item', { cls: 'sm ghost', attrs: 'data-bdel="' + i + '"' }) + '</td></tr>';
+    ctx.modal({
+      title: existing ? 'Edit ' + esc(existing.name) : 'New price book', cls: 'wide',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input(existing ? existing.name : '', { attrs: 'data-bname maxlength="100"' })) + UI.field('Currency', UI.input(existing ? existing.currency : 'USD', { attrs: 'data-bcur maxlength="3"' }))
+        + UI.field('State', UI.select(['active', 'retired'], existing ? existing.state : 'active', 'data-bstate')) + '</div>'
+        + UI.check('Default for tenants without their own', existing ? existing.isDefault : false, 'data-bdefault')
+        + (!existing && isSysAdmin() ? UI.check('Only for this tenant, not the whole platform', false, 'data-bowner') : existing && existing.tenantId ? '<div class="muted" style="font-size:12px">This book belongs to one tenant; only it can use it.</div>' : '')
+        + '<div class="fg2" style="font-size:12px">Each item prices one meter. The most specific item wins: a profile, then a model, then anything; a named usage kind (chat, api, embed, agent, workflow…) beats *.</div>'
+        + '<div class="tablewrap"><table class="dt"><thead><tr><th>Applies to</th><th>Name</th><th>Usage</th><th>Meter</th><th>Price</th><th>Per</th><th></th></tr></thead><tbody data-bitems></tbody></table></div>'
+        + UI.btn('Add item', { size: 'sm', icon: 'plus', attrs: 'data-badd' })
+        + (existing ? UI.field('New prices take effect from', UI.input('', { type: 'datetime-local', attrs: 'data-beffective' }), 'Empty: from now. Earlier this month prorates the month: usage before that moment keeps the old prices.') : '')
+        + '<div data-err></div>',
+      actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn(existing ? 'Save price book' : 'Create price book', { kind: 'primary', attrs: 'data-bsave' }),
+      onMount(m) {
+        const tbody = m.querySelector('[data-bitems]');
+        const read = () => Array.prototype.slice.call(tbody.querySelectorAll('tr')).map((tr) => { const g = (k) => tr.querySelector('[data-bf="' + k + '"]').value.trim(); return { match: g('match'), value: g('match') === 'any' ? null : g('value') || null, usage: g('usage') || '*', meter: g('meter'), perUnits: Number(g('per')), unitPriceMicros: Math.round(Number(g('price')) * 1e6) }; });
+        const paint = () => { tbody.innerHTML = items.map(row).join(''); };
+        paint();
+        m.querySelector('[data-badd]').addEventListener('click', () => { items.splice(0, items.length, ...read()); items.push({ match: 'model', value: '', usage: '*', meter: 'output_tokens', perUnits: 1000000, unitPriceMicros: 0 }); paint(); });
+        tbody.addEventListener('click', (e) => { const x = e.target.closest('[data-bdel]'); if (!x) return; items.splice(0, items.length, ...read()); items.splice(+x.dataset.bdel, 1); paint(); });
+        m.querySelector('[data-bsave]').addEventListener('click', async (e) => {
+          const list = read();
+          const bad = list.find((it) => !(it.perUnits >= 1) || !(it.unitPriceMicros >= 0) || (it.match !== 'any' && !it.value));
+          const box = m.querySelector('[data-err]'); box.innerHTML = '';
+          if (bad) { box.innerHTML = UI.notice('Each item needs a price of zero or more, a per-unit count of one or more, and a name when it applies to a model or profile.', 'warn'); return; }
+          const def = m.querySelector('[data-bdefault]');
+          const body = { name: m.querySelector('[data-bname]').value.trim(), currency: m.querySelector('[data-bcur]').value.trim().toUpperCase(), isDefault: !!(def && def.checked), items: list };
+          const own = m.querySelector('[data-bowner]');
+          if (!existing && own && own.checked) body.tenantId = st.bill.settings.tenantId;
+          if (existing) body.state = m.querySelector('[data-bstate]').value;
+          const eff = m.querySelector('[data-beffective]');
+          if (existing && eff && eff.value) { const t = new Date(eff.value); if (isNaN(t.getTime())) { box.innerHTML = UI.notice('Give the effective time as a date and time.', 'warn'); return; } body.effectiveFrom = t.toISOString(); }
+          e.target.disabled = true;
+          try {
+            if (existing) await App.patch('/api/admin/billing/price-books/' + encodeURIComponent(existing.id), body); else await App.post('/api/admin/billing/price-books', body);
+            App.closeOverlay(); ctx.toast('Price book saved. Audit entry written.', 'ok'); reload();
+          } catch (err) { e.target.disabled = false; const p = err.problem || {}; box.innerHTML = UI.notice('<b>' + esc(p.detail || err.message) + '</b>', 'danger'); }
+        });
+      }
+    });
+  }
+  function billingWire(st, ctx, refresh) {
+    const b = st.bill || {};
+    const reload = () => { b.loaded = false; b.detail = null; refresh(); };
+    ctx.on('change', '[data-bmonth]', (e, t) => { b.month = t.value; b.detail = null; ctx.rerender(); });
+    ctx.on('click', '[data-bcompute]', async () => {
+      const ok = await ctx.confirm({ title: 'Save the ' + b.month + ' statement?', body: 'The statement is computed again from the usage meter and stored. A finished month is saved as closed.', ok: 'Save' });
+      if (!ok) return;
+      try { await App.post('/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/compute', {}); ctx.toast('Statement saved. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not save the statement'); }
+    });
+    ctx.on('click', '[data-bpush]', async () => {
+      const d = b.detail;
+      const ok = await ctx.confirm({ title: 'Send ' + b.month + ' to ' + b.settings.provider + '?', tone: 'danger', body: 'An invoice is created for the tenant\'s billing customer with a line per priced item. After that the statement is final.', kv: [['Total', esc(money(d.totalMicros, d.currency))], ['Customer', esc(b.settings.billingCustomer || 'not set')]], ok: 'Send invoice' });
+      if (!ok) return;
+      try { const r = await App.post('/api/admin/billing/statements/' + encodeURIComponent(b.month) + '/push', {}); ctx.toast('Invoice ' + esc(r.providerRef || '') + ' created. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not send the invoice'); reload(); }
+    });
+    ctx.on('click', '[data-bnewbook]', () => priceBookModal(ctx, st, null, reload));
+    ctx.on('click', '[data-beditbook]', (e, t) => { const x = b.books.books.find((y) => y.id === t.dataset.beditbook); if (x) priceBookModal(ctx, st, x, reload); });
+    ctx.on('click', '[data-bsettings]', async () => {
+      const sel = ctx.$('[data-bbook]'); const cus = ctx.$('[data-bcustomer]'); const cur = ctx.$('[data-bcurrency]'); const tax = ctx.$('[data-btaxes]');
+      const body = { priceBookId: sel && sel.value ? sel.value : null };
+      if (cus) body.billingCustomer = cus.value.trim() || null;
+      if (cur) { const c = cur.value.trim().toUpperCase(); if (c && !/^[A-Z]{3}$/.test(c)) { ctx.toast('A currency is a three-letter code, such as EUR.', 'warn'); return; } body.billingCurrency = c || null; }
+      if (tax) {
+        const parts = tax.value.split(',').map((x) => x.trim()).filter(Boolean);
+        const rates = parts.map((x) => { const m = /^(.+?)\s+(\d+(?:\.\d+)?)\s*%?$/.exec(x); return m ? { name: m[1].trim(), ratePercent: Number(m[2]) } : null; });
+        if (rates.some((r) => !r || r.ratePercent > 100)) { ctx.toast('Write each tax as a name and a percentage, such as VAT 20.', 'warn'); return; }
+        body.taxRates = rates;
+      }
+      try { await App.api('PUT', '/api/admin/billing/tenants/' + encodeURIComponent(b.settings.tenantId), body); ctx.toast('Billing settings saved. Audit entry written.', 'ok'); reload(); } catch (err) { App.fail(err, 'Could not save the billing settings'); }
+    });
+  }
+
+  // ---------- Compliance tab (1.6.0, Sprint 38c: B-7601 DLP, B-7602 legal holds, B-7603 compliance exports) ----------
+  const canCompliance = () => App.can('compliance:manage') || App.can('compliance:export');
+  const detectorLabel = (d, patterns) => (d.startsWith('pattern:') ? 'pattern ' + (((patterns || []).find((p) => p.id === d.slice(8)) || {}).name || d.slice(8, 14)) : d.replace(/_/g, ' '));
+  const holdTone = (s) => (s === 'active' ? 'ok' : s === 'pending' ? 'info' : s === 'rejected' ? 'danger' : '');
+
+  function complianceLoad(st, refresh) {
+    if (st.cmpLoaded || st.cmpBusy) return;
+    st.cmpBusy = true; st.cmpError = null;
+    const manage = App.can('compliance:manage');
+    const exporter = App.can('compliance:export');
+    Promise.all([manage ? App.get('/api/compliance/dlp') : null, manage ? App.get('/api/compliance/holds') : null, exporter ? App.get('/api/compliance/exports') : null])
+      .then(([dlp, holds, exports]) => { st.cmp = { dlp, holds, exports: exports ? exports.exports : [] }; st.cmpLoaded = true; })
+      .catch((err) => { st.cmpError = err; st.cmpLoaded = true; })
+      .finally(() => { st.cmpBusy = false; refresh(); });
+  }
+
+  function complianceHtml(st) {
+    if (st.cmpError) return UI.problem('Compliance could not be loaded', (st.cmpError.problem && (st.cmpError.problem.detail || st.cmpError.problem.title)) || st.cmpError.message, st.cmpError.problem && st.cmpError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-cmpreload' }) + '</div>';
+    if (!st.cmpLoaded) return UI.notice('Loading…', 'info');
+    const c = st.cmp;
+    const me = App.me.user.id;
+    let out = st.cmpProblem ? UI.problem(st.cmpProblem.title, st.cmpProblem.text, st.cmpProblem.trace) : '';
+    if (c.dlp) {
+      const rules = c.dlp.rules.map((r) => ({ cells: ['<b>' + esc(r.name) + '</b>', esc(r.detectors.map((d) => detectorLabel(d, c.dlp.patterns)).join(', ')), UI.label(r.raiseTo, { sm: true }), UI.pill(r.action, r.action === 'hold' ? 'danger' : r.action === 'redact' ? 'warn' : 'info'), esc(r.scopes.join(', ')), UI.pill(r.enabled ? 'enabled' : 'off', r.enabled ? 'ok' : ''), UI.btn('Edit', { size: 'xs', kind: 'ghost', attrs: 'data-dlpedit="' + esc(r.id) + '"' }) + ' ' + UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-dlpdel="' + esc(r.id) + '"' })], attrs: 'data-dlprule="' + esc(r.id) + '"' }));
+      const pats = c.dlp.patterns.map((p) => [esc(p.name), '<span class="mono">' + esc(p.pattern) + '</span>', UI.label(p.label, { sm: true }), UI.pill(p.enabled ? 'enabled' : 'off', p.enabled ? 'ok' : ''), UI.btn('Remove', { size: 'xs', kind: 'ghost', attrs: 'data-patdel="' + esc(p.id) + '"' })]);
+      const t = st.dlpTest;
+      out += UI.panel('DLP: classification of answers, agent outputs and uploads', UI.notice('A rule names what it detects (the built-in PII and secret detectors, and your own RE2 patterns), the label the content rises to, and what happens by that label: <b>label</b> raises it only, <b>redact</b> replaces the detected spans, <b>hold</b> keeps the answer for a reviewer (an upload is refused). The message, run, attachment or file version and the conversation carry the raised label; content raised above its owner\'s clearance is held whatever the rule says.', 'info')
+        + UI.table(['Rule', 'Detects', 'Raises to', 'Action', 'Scopes', 'State', { label: '', right: true }], rules, { clickable: false, minWidth: '900px', emptyTitle: 'No DLP rules', emptyText: 'Answers and uploads keep the label of their conversation or workspace.' })
+        + '<div class="hstack gap6 wrap" style="margin:8px 0 12px">' + UI.btn('New rule', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-dlpnew' }) + UI.btn('New pattern', { size: 'sm', icon: 'plus', attrs: 'data-patnew' }) + '</div>'
+        + '<div class="eyebrow">Your patterns (RE2)</div>' + UI.table(['Pattern', 'Expression', 'Label', 'State', ''], pats, { clickable: false, cls: 'bare', minWidth: '0', emptyTitle: 'No patterns', emptyText: 'Add one for project codes, customer numbers or anything the built-in detectors do not know.' })
+        + '<div class="eyebrow" style="margin-top:12px">Try the rules</div><div class="formgrid">' + UI.field('Text', UI.textarea(st.dlpText || '', { placeholder: 'The card on file is 4111 1111 1111 1111', attrs: 'data-dlptext aria-label="Text to try"', rows: 3 })) + UI.field('Scope', UI.select(c.dlp.scopes, st.dlpScope || 'answer', 'data-dlpscope aria-label="Scope"')) + '</div>'
+        + '<div class="hstack gap6">' + UI.btn('Try', { size: 'sm', attrs: 'data-dlptry' }) + '<span class="muted" style="font-size:12px">Nothing is stored or audited.</span></div>'
+        + (t ? (t.rules.length ? UI.notice('<b>' + esc(t.rules.map((r) => r.name).join(', ')) + '</b> fired on ' + esc(t.rules.map((r) => r.kinds.join(', ')).join('; ')) + ': label ' + UI.label(t.label, { sm: true }) + ', action <b>' + esc(t.action) + '</b>.' + (t.action === 'redact' ? '<pre class="codebox" style="margin-top:6px;white-space:pre-wrap">' + esc(t.text) + '</pre>' : ''), t.action === 'hold' ? 'danger' : t.action === 'redact' ? 'warn' : 'info') : UI.notice('No rule fired. The text keeps its label.', 'info')) : ''));
+    }
+    if (c.holds) {
+      const person = (x) => (x ? esc(x.displayName || x.username || x.id) : '');
+      const rows = c.holds.holds.map((h) => ({ cells: ['<b>' + esc(h.subject) + '</b><div class="muted" style="font-size:12px">' + esc(h.scope) + '</div>', esc(h.reason), UI.pill(h.state, holdTone(h.state)), person(h.requestedBy) + '<div class="muted" style="font-size:12px">' + esc(when(h.createdAt)) + '</div>', person(h.approver) + (h.decidedAt ? '<div class="muted" style="font-size:12px">' + esc(when(h.decidedAt)) + '</div>' : h.state === 'pending' ? '<div class="muted" style="font-size:12px">waiting</div>' : ''),
+        h.state === 'pending' && h.requestedBy && h.requestedBy.id === me ? UI.btn('Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-holdwithdraw="' + esc(h.id) + '"' }) : h.state === 'pending' ? UI.btn('Approve', { size: 'xs', attrs: 'data-holddecide="' + esc(h.id) + ':approved"' }) + ' ' + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-holddecide="' + esc(h.id) + ':rejected"' }) : h.state === 'active' ? ((h.scope === 'case' || h.scope === 'object') ? UI.btn('Export', { size: 'xs', attrs: 'data-holdexport="' + esc(h.id) + '"' }) + ' ' : '') + UI.btn('Release', { size: 'xs', kind: 'ghost', attrs: 'data-holdrelease="' + esc(h.id) + '"' }) : ''], attrs: 'data-hold="' + esc(h.id) + '"' }));
+      out += UI.panel('Legal holds', UI.notice('A hold on a user or a workspace suspends every retention purge of their conversations, memories and files until it is released. It is placed under dual control: you ask and name another compliance manager, who approves; nothing is suspended until then. The people concerned are not told. Audited legal_hold.requested, approved, rejected, withdrawn and released.', 'info')
+        + UI.table(['Subject', 'Reason', 'State', 'Requested by', 'Approver', { label: '', right: true }], rows, { clickable: false, minWidth: '860px', emptyTitle: 'No holds', emptyText: 'Retention runs as configured for everyone.' })
+        + '<div class="hstack gap6 wrap">' + UI.btn('Request a hold', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-holdnew' }) + (c.holds.approvers.length ? '' : '<span class="muted" style="font-size:12px">No other compliance manager can approve a request yet.</span>') + '</div>'
+        + '<span class="muted" style="font-size:12px">What a moderation decision hid or took down is also kept, without a hold, until its case and any appeal close and for ' + esc(String(c.holds.evidenceDays == null ? 30 : c.holds.evidenceDays)) + ' days after the last decision.</span>'
+        + evidenceExportsHtml(c.holds.evidenceExports || [], me));
+    }
+    if (c.exports) {
+      const rows = c.exports.map((x) => ['<span class="mono">' + esc(x.file) + '</span>', esc(x.scope), UI.pill(x.state, x.state === 'ready' ? 'ok' : x.state === 'failed' ? 'danger' : 'info'), UI.label(x.label, { sm: true }), x.counts ? esc(Object.keys(x.counts).filter((k) => x.counts[k]).map((k) => fmt(x.counts[k]) + ' ' + k).join(', ')) + (x.omitted ? '<div class="muted" style="font-size:12px">' + fmt(x.omitted) + ' above the requester\'s clearance left out</div>' : '') : x.error ? '<span class="fg2">' + esc(x.error) + '</span>' : '<span class="muted">-</span>', (x.apiKeyId ? 'API key ' : 'user ') + esc(String(x.createdBy).slice(-6)) + '<div class="muted" style="font-size:12px">' + esc(when(x.createdAt)) + '</div>', x.state === 'ready' ? UI.btn('Download', { size: 'xs', icon: 'download', attrs: 'data-cxdl="' + esc(x.id) + '"' }) : '']);
+      out += UI.panel('Compliance exports (eDiscovery)', UI.notice('An export writes the conversations (with their messages), files (metadata and versions), memories, agent runs and accounts of one user or one workspace over a date range as JSON Lines, sealed in the blob store. It needs <span class="mono">compliance:export</span>: a person, or an API key scoped to it that an eDiscovery tool holds (Settings, API keys). Rows above the requester\'s clearance are left out and counted; only someone cleared for the export\'s label downloads it. Every request, run and download is audited.', 'info')
+        + UI.table(['Export', 'Scope', 'State', 'Label', 'Contents', 'Requested by', { label: '', right: true }], rows, { clickable: false, minWidth: '900px', emptyTitle: 'No exports', emptyText: 'Request one for a user or a workspace and a date range.' })
+        + '<div class="hstack gap6 wrap">' + UI.btn('Request an export', { kind: 'primary', size: 'sm', icon: 'plus', attrs: 'data-cxnew' }) + UI.btn('Refresh', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-cmpreload' }) + '</div>');
+    }
+    return out;
+  }
+
+  /** The exports of what case and object holds keep (B-9504): asked by one compliance manager, approved by another. */
+  function evidenceExportsHtml(list, me) {
+    if (!list.length) return '';
+    const tone = { pending: 'warn', approved: 'info', ready: 'ok', rejected: 'danger', failed: 'danger', withdrawn: 'outline' };
+    const rows = list.map((x) => ({ cells: [esc(x.reason || ''), UI.pill(x.state, tone[x.state] || 'outline'), x.objects != null ? '<span class="num">' + esc(String(x.objects)) + '</span>' : '<span class="muted">not written</span>', esc(new Date(x.createdAt).toISOString().slice(0, 16).replace('T', ' ')),
+      x.state === 'pending' && x.requestedBy === me ? UI.btn('Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-evxwithdraw="' + esc(x.id) + '"' }) : x.state === 'pending' ? UI.btn('Approve', { size: 'xs', attrs: 'data-evxdecide="' + esc(x.id) + ':approved"' }) + ' ' + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-evxdecide="' + esc(x.id) + ':rejected"' }) : x.state === 'ready' && x.requestedBy === me ? '<a class="btn ghost sm" href="/api/compliance/evidence-exports/' + encodeURIComponent(x.id) + '/download" download>Download</a>' : ''] }));
+    return '<div class="eyebrow">Evidence exports</div>' + UI.table(['Reason', 'State', 'Objects', 'Requested', { label: '', right: true }], rows, { clickable: false, minWidth: '640px' });
+  }
+
+  function complianceWire(st, ctx, refresh) {
+    const reload = () => { st.cmpLoaded = false; st.cmpProblem = null; ctx.rerender(); };
+    const fail = (err, title) => { st.cmpProblem = { title, text: (err.problem && (err.problem.detail || err.problem.title)) || err.message, trace: err.problem && err.problem.trace_id }; App.closeOverlay(); ctx.rerender(); };
+    ctx.on('click', '[data-cmpreload]', reload);
+    const c = st.cmp || {};
+    // ----- DLP -----
+    const ruleModal = (existing) => {
+      const r = existing ? JSON.parse(JSON.stringify(existing)) : { name: '', enabled: true, detectors: ['payment_card'], raiseTo: 'confidential', action: 'redact', scopes: ['answer', 'agent', 'upload'] };
+      const choices = c.dlp.detectors.map((d) => ({ value: d, label: d.replace(/_/g, ' ') })).concat(c.dlp.patterns.map((p) => ({ value: 'pattern:' + p.id, label: 'pattern ' + p.name })));
+      ctx.modal({
+        title: existing ? 'Edit ' + existing.name : 'New DLP rule',
+        body: '<div class="formgrid">' + UI.field('Name', UI.input(r.name, { attrs: 'data-rname aria-label="Rule name"' }))
+          + UI.field('Detects', '<div class="vstack gap4">' + choices.map((x) => '<label class="hstack gap6" style="font-size:13px"><input type="checkbox" data-rdet="' + esc(x.value) + '"' + (r.detectors.includes(x.value) ? ' checked' : '') + '> ' + esc(x.label) + '</label>').join('') + '</div>', 'Built-in detectors score by checksum where one exists (cards by Luhn, IBANs by mod-97); patterns are your own.')
+          + UI.field('Raises the label to', UI.select(c.dlp.labels, r.raiseTo, 'data-rraise aria-label="Raise to"'))
+          + UI.field('Action', UI.select([{ value: 'label', label: 'label: raise only' }, { value: 'redact', label: 'redact: replace the spans' }, { value: 'hold', label: 'hold: keep for a reviewer' }], r.action, 'data-raction aria-label="Action"'))
+          + UI.field('Scopes', '<div class="hstack gap6">' + c.dlp.scopes.map((s) => '<label class="hstack gap4" style="font-size:13px"><input type="checkbox" data-rscope="' + s + '"' + (r.scopes.includes(s) ? ' checked' : '') + '> ' + s + '</label>').join('') + '</div>', 'answer: chat and /v1; agent: run outputs; upload: attachments and files (a hold refuses the upload).')
+          + UI.field('Enabled', UI.toggle('In force', r.enabled !== false, 'data-renabled')) + '</div>',
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn(existing ? 'Save' : 'Create rule', { kind: 'primary', attrs: 'data-rsave' }),
+        onMount(m) {
+          const tg = m.querySelector('[data-renabled]'); tg.addEventListener('click', () => { tg.classList.toggle('on'); tg.setAttribute('aria-checked', tg.classList.contains('on')); });
+          m.querySelector('[data-rsave]').addEventListener('click', async () => {
+            const name = m.querySelector('[data-rname]').value.trim(); if (!name) { ctx.toast('A rule needs a name.', 'warn'); return; }
+            const detectors = [...m.querySelectorAll('[data-rdet]:checked')].map((el) => el.dataset.rdet); if (!detectors.length) { ctx.toast('Pick at least one detector.', 'warn'); return; }
+            const scopes = [...m.querySelectorAll('[data-rscope]:checked')].map((el) => el.dataset.rscope); if (!scopes.length) { ctx.toast('Pick at least one scope.', 'warn'); return; }
+            const body = { name, enabled: tg.classList.contains('on'), detectors, raiseTo: m.querySelector('[data-rraise]').value, action: m.querySelector('[data-raction]').value, scopes };
+            try { if (existing) await App.put('/api/compliance/dlp/rules/' + encodeURIComponent(existing.id), body); else await App.post('/api/compliance/dlp/rules', body); App.closeOverlay(); reload(); ctx.toast('DLP rule ' + esc(name) + (existing ? ' saved' : ' created') + '. Audited dlp.rule.' + (existing ? 'updated' : 'created') + '.', 'ok'); } catch (err) { fail(err, existing ? 'Rule not saved' : 'Rule not created'); }
+          });
+        }
+      });
+    };
+    ctx.on('click', '[data-dlpnew]', () => ruleModal(null));
+    ctx.on('click', '[data-dlpedit]', (e, t) => ruleModal(c.dlp.rules.find((r) => r.id === t.dataset.dlpedit)));
+    ctx.on('click', '[data-dlpdel]', async (e, t) => { const r = c.dlp.rules.find((x) => x.id === t.dataset.dlpdel); if (!r) return; const ok = await ctx.confirm({ title: 'Remove ' + r.name, tone: 'danger', body: '<p class="fg2" style="margin:0">Answers and uploads it classified keep their labels. Audited dlp.rule.deleted.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del('/api/compliance/dlp/rules/' + encodeURIComponent(r.id)); reload(); ctx.toast('Rule ' + esc(r.name) + ' removed.', 'ok'); } catch (err) { fail(err, 'Rule not removed'); } });
+    ctx.on('click', '[data-patnew]', () => ctx.modal({
+      title: 'New pattern',
+      body: '<div class="formgrid">' + UI.field('Name', UI.input('', { placeholder: 'Customer numbers', attrs: 'data-pname aria-label="Pattern name"' })) + UI.field('Expression (RE2)', UI.input('', { placeholder: 'NW-C-\\d{6}', attrs: 'data-pexpr aria-label="Expression"' }), 'RE2 refuses backreferences and look-around; the position of the offending construct is reported.') + UI.field('Label it implies', UI.select(c.dlp.labels, 'confidential', 'data-plabel aria-label="Label"')) + '</div>',
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Create pattern', { kind: 'primary', attrs: 'data-psave' }),
+      onMount(m) {
+        m.querySelector('[data-psave]').addEventListener('click', async () => {
+          const name = m.querySelector('[data-pname]').value.trim(); const pattern = m.querySelector('[data-pexpr]').value; if (!name || !pattern.trim()) { ctx.toast('A pattern needs a name and an expression.', 'warn'); return; }
+          try { await App.post('/api/compliance/dlp/patterns', { name, pattern, label: m.querySelector('[data-plabel]').value, enabled: true }); App.closeOverlay(); reload(); ctx.toast('Pattern ' + esc(name) + ' created. Audited dlp.pattern.created.', 'ok'); } catch (err) { fail(err, 'Pattern not created'); }
+        });
+      }
+    }));
+    ctx.on('click', '[data-patdel]', async (e, t) => { const p = c.dlp.patterns.find((x) => x.id === t.dataset.patdel); if (!p) return; const ok = await ctx.confirm({ title: 'Remove ' + p.name, tone: 'danger', body: '<p class="fg2" style="margin:0">A pattern a rule detects with cannot go; change the rule first. Audited dlp.pattern.deleted.</p>', ok: 'Remove' }); if (!ok) return; try { await App.del('/api/compliance/dlp/patterns/' + encodeURIComponent(p.id)); reload(); ctx.toast('Pattern removed.', 'ok'); } catch (err) { fail(err, 'Pattern not removed'); } });
+    ctx.on('input', '[data-dlptext]', (e, t) => { st.dlpText = t.value; });
+    ctx.on('change', '[data-dlpscope]', (e, t) => { st.dlpScope = t.value; });
+    ctx.on('click', '[data-dlptry]', async () => { if (!(st.dlpText || '').trim()) { ctx.toast('Write a text to try.', 'warn'); return; } try { st.dlpTest = await App.post('/api/compliance/dlp/test', { text: st.dlpText, scope: st.dlpScope || 'answer' }); ctx.rerender(); } catch (err) { App.fail(err, 'The rules could not be tried'); } });
+    // ----- legal holds -----
+    ctx.on('click', '[data-holdnew]', () => {
+      const approvers = (c.holds && c.holds.approvers) || [];
+      ctx.modal({
+        title: 'Request a legal hold',
+        body: UI.notice('Nothing is suspended until the approver, another compliance manager, approves. The people concerned are not told.', 'info')
+          + '<div class="formgrid">' + UI.field('On', '<div class="hstack gap6">' + UI.select([{ value: 'user', label: 'A user (id)' }, { value: 'workspace', label: 'A workspace' }, { value: 'case', label: 'A moderation case (flag)' }, { value: 'object', label: 'A single object' }], 'user', 'data-hscope aria-label="Scope"') + UI.input('', { placeholder: 'user id, flag such as F-12, or object id', attrs: 'data-hsubject aria-label="Subject"' }) + '</div>', 'A user by id, a case by its flag reference, an object by its id with its type below. For a workspace, pick it below.')
+          + UI.field('Object type', UI.select([{ value: '', label: 'none' }].concat(((c.holds && c.holds.objectTypes) || []).map((t) => ({ value: t.type, label: t.type }))), '', 'data-hotype aria-label="Object type"'), 'Only for a single object: a file, a message, a post, a record.')
+          + UI.field('Workspace', UI.select([{ value: '', label: 'none' }].concat(((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name }))), '', 'data-hws aria-label="Workspace"'))
+          + UI.field('Reason', UI.textarea('', { placeholder: 'Litigation, regulator request, investigation: the case and what to preserve.', attrs: 'data-hreason aria-label="Reason"', rows: 3 }), 'Sealed with the tenant key; the audit chain keeps an excerpt.')
+          + UI.field('Approver', UI.select(approvers.map((a) => ({ value: a.userId, label: a.displayName + ' (' + a.username + ')' })), approvers[0] ? approvers[0].userId : '', 'data-happrover aria-label="Approver"'), 'Another holder of compliance:manage.') + '</div>',
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Ask for approval', { kind: 'primary', attrs: 'data-hsave', disabled: !approvers.length }),
+        onMount(m) {
+          m.querySelector('[data-hsave]').addEventListener('click', async () => {
+            const scope = m.querySelector('[data-hscope]').value; const scopeId = scope === 'workspace' ? m.querySelector('[data-hws]').value : m.querySelector('[data-hsubject]').value.trim(); const reason = m.querySelector('[data-hreason]').value.trim(); const approverId = m.querySelector('[data-happrover]').value;
+            if (!scopeId || reason.length < 3) { ctx.toast('Name the subject and give a reason.', 'warn'); return; }
+            const objectType = m.querySelector('[data-hotype]').value;
+            if (scope === 'object' && !objectType) { ctx.toast('Pick the type of the object.', 'warn'); return; }
+            try { await App.post('/api/compliance/holds', scope === 'object' ? { scope, objectType, objectId: scopeId, reason, approverId } : { scope, scopeId, reason, approverId }); App.closeOverlay(); reload(); ctx.toast('Hold requested; the approver was asked. Audited legal_hold.requested.', 'ok'); } catch (err) { fail(err, 'Hold not requested'); }
+          });
+        }
+      });
+    });
+    ctx.on('click', '[data-holddecide]', async (e, t) => { const i = t.dataset.holddecide.lastIndexOf(':'); const id = t.dataset.holddecide.slice(0, i), decision = t.dataset.holddecide.slice(i + 1); const h = c.holds.holds.find((x) => x.id === id); if (!h) return; const ok = await ctx.confirm({ title: (decision === 'approved' ? 'Approve' : 'Reject') + ' the hold on ' + h.subject, tone: decision === 'approved' ? 'info' : 'danger', body: '<p class="fg2" style="margin:0">' + (decision === 'approved' ? 'Every retention purge of their conversations, memories and files is suspended at once.' : 'The request ends; the requester is told.') + ' Audited legal_hold.' + decision + '.</p>', ok: decision === 'approved' ? 'Approve' : 'Reject' }); if (!ok) return; try { await App.post('/api/compliance/holds/' + encodeURIComponent(id) + '/decide', { decision }); reload(); ctx.toast('Hold ' + (decision === 'approved' ? 'active' : 'rejected') + '.', 'ok'); } catch (err) { fail(err, 'Not decided'); } });
+    ctx.on('click', '[data-holdwithdraw]', async (e, t) => { try { await App.post('/api/compliance/holds/' + encodeURIComponent(t.dataset.holdwithdraw) + '/withdraw'); reload(); ctx.toast('Request withdrawn. Audited legal_hold.withdrawn.', 'ok'); } catch (err) { fail(err, 'Not withdrawn'); } });
+    ctx.on('click', '[data-holdrelease]', async (e, t) => { const h = c.holds.holds.find((x) => x.id === t.dataset.holdrelease); if (!h) return; const ok = await ctx.confirm({ title: 'Release the hold on ' + h.subject, tone: 'danger', body: '<p class="fg2" style="margin:0">The next retention purge treats their content as before. Audited legal_hold.released.</p>', ok: 'Release' }); if (!ok) return; try { await App.post('/api/compliance/holds/' + encodeURIComponent(h.id) + '/release', {}); reload(); ctx.toast('Hold released.', 'ok'); } catch (err) { fail(err, 'Not released'); } });
+    // ----- evidence exports (B-9504) -----
+    ctx.on('click', '[data-holdexport]', (e, t) => {
+      const h = c.holds.holds.find((x) => x.id === t.dataset.holdexport); if (!h) return;
+      const approvers = (c.holds && c.holds.approvers) || [];
+      ctx.modal({
+        title: 'Export what the hold on ' + esc(h.subject) + ' keeps',
+        body: UI.notice('Nothing is read until the approver, another compliance manager, approves. The file is sealed and only you can download it.', 'info')
+          + '<div class="formgrid">' + UI.field('Reason', UI.textarea('', { placeholder: 'Who the export is for and why.', attrs: 'data-exreason aria-label="Reason"', rows: 3 }))
+          + UI.field('Approver', UI.select(approvers.map((a) => ({ value: a.userId, label: a.displayName + ' (' + a.username + ')' })), approvers[0] ? approvers[0].userId : '', 'data-exapprover aria-label="Approver"'), 'Another holder of compliance:manage.') + '</div>',
+        actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Ask for approval', { kind: 'primary', attrs: 'data-exsave', disabled: !approvers.length }),
+        onMount(m) {
+          m.querySelector('[data-exsave]').addEventListener('click', async () => {
+            const reason = m.querySelector('[data-exreason]').value.trim(); const approverId = m.querySelector('[data-exapprover]').value;
+            if (reason.length < 3) { ctx.toast('Give a reason.', 'warn'); return; }
+            try { await App.post('/api/compliance/holds/' + encodeURIComponent(h.id) + '/exports', { reason, approverId }); App.closeOverlay(); reload(); ctx.toast('Export requested; the approver was asked. Audited evidence.export.requested.', 'ok'); } catch (err) { fail(err, 'Export not requested'); }
+          });
+        }
+      });
+    });
+    ctx.on('click', '[data-evxdecide]', async (e, t) => { const i = t.dataset.evxdecide.lastIndexOf(':'); const id = t.dataset.evxdecide.slice(0, i), decision = t.dataset.evxdecide.slice(i + 1); const ok = await ctx.confirm({ title: (decision === 'approved' ? 'Approve' : 'Reject') + ' the evidence export', tone: decision === 'approved' ? 'info' : 'danger', body: '<p class="fg2" style="margin:0">' + (decision === 'approved' ? 'The export is written as a job and the requester is told when it is ready.' : 'The request ends; the requester is told.') + ' Audited evidence.export.' + decision + '.</p>', ok: decision === 'approved' ? 'Approve' : 'Reject' }); if (!ok) return; try { await App.post('/api/compliance/evidence-exports/' + encodeURIComponent(id) + '/decide', { decision }); reload(); ctx.toast('Export ' + decision + '.', 'ok'); } catch (err) { fail(err, 'Not decided'); } });
+    ctx.on('click', '[data-evxwithdraw]', async (e, t) => { try { await App.post('/api/compliance/evidence-exports/' + encodeURIComponent(t.dataset.evxwithdraw) + '/withdraw'); reload(); ctx.toast('Request withdrawn.', 'ok'); } catch (err) { fail(err, 'Not withdrawn'); } });
+    // ----- compliance exports -----
+    ctx.on('click', '[data-cxnew]', () => ctx.modal({
+      title: 'Request a compliance export',
+      body: '<div class="formgrid">' + UI.field('User id', UI.input('', { placeholder: 'optional', attrs: 'data-cxuser aria-label="User id"' })) + UI.field('Workspace', UI.select([{ value: '', label: 'none' }].concat(((App.me && App.me.workspaces) || []).map((w) => ({ value: w.id, label: w.name }))), '', 'data-cxws aria-label="Workspace"'), 'One or both.')
+        + UI.field('From', UI.input(new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10), { type: 'date', attrs: 'data-cxfrom aria-label="From"' })) + UI.field('To', UI.input(new Date().toISOString().slice(0, 10), { type: 'date', attrs: 'data-cxto aria-label="To"' }))
+        + UI.field('Contents', '<div class="hstack gap6 wrap">' + ['conversations', 'files', 'memories', 'runs', 'users'].map((k) => '<label class="hstack gap4" style="font-size:13px"><input type="checkbox" data-cxkind="' + k + '" checked> ' + k + '</label>').join('') + '</div>') + '</div>'
+        + UI.notice('Rows above your clearance are left out and counted. An eDiscovery tool requests and downloads the same way with an API key scoped to compliance:export.', 'info'),
+      actions: UI.btn('Cancel', { kind: 'ghost', attrs: 'data-close' }) + UI.btn('Request export', { kind: 'primary', attrs: 'data-cxsave' }),
+      onMount(m) {
+        m.querySelector('[data-cxsave]').addEventListener('click', async () => {
+          const userId = m.querySelector('[data-cxuser]').value.trim() || null; const workspaceId = m.querySelector('[data-cxws]').value || null;
+          if (!userId && !workspaceId) { ctx.toast('Name a user, a workspace, or both.', 'warn'); return; }
+          const kinds = [...m.querySelectorAll('[data-cxkind]:checked')].map((el) => el.dataset.cxkind); if (!kinds.length) { ctx.toast('Pick what to export.', 'warn'); return; }
+          const from = Date.parse(m.querySelector('[data-cxfrom]').value + 'T00:00:00Z'); const to = Date.parse(m.querySelector('[data-cxto]').value + 'T23:59:59.999Z');
+          if (isNaN(from) || isNaN(to)) { ctx.toast('Give both dates.', 'warn'); return; }
+          const body = { from, to, kinds }; if (userId) body.userId = userId; if (workspaceId) body.workspaceId = workspaceId;
+          try { const x = await App.post('/api/compliance/exports', body); App.closeOverlay(); reload(); ctx.toast('Export ' + esc(x.file) + ' queued. Audited compliance.export.requested.', 'ok'); setTimeout(() => { if (App.state.route === 'usage-audit' && st.tab === 'compliance') reload(); }, 2500); } catch (err) { fail(err, 'Export not requested'); }
+        });
+      }
+    }));
+    ctx.on('click', '[data-cxdl]', async (e, t) => {
+      const x = c.exports.find((r) => r.id === t.dataset.cxdl); if (!x) return;
+      try {
+        const res = await fetch('/api/compliance/exports/' + encodeURIComponent(x.id) + '/download', { credentials: 'same-origin' });
+        if (!res.ok) { let p = null; try { p = await res.json(); } catch (e2) { /* not JSON */ } throw new App.ApiError(p || { status: res.status, title: res.statusText }); }
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement('a'); a.href = url; a.download = x.file; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        ctx.toast('Downloaded ' + esc(x.file) + '. Audited compliance.export.downloaded.', 'ok');
+      } catch (err) { fail(err, 'Download refused'); }
+    });
+  }
+
+  App.register({
+    id: 'usage-audit', title: 'Usage and audit', section: 'admin', crumb: ['Admin', 'Usage and audit'], live: true,
+    summary: 'Metering per tenant, user and model, quotas, hash-chained audit log, exports',
+    commands: [
+      { label: 'Verify the audit chain', sub: 'Usage and audit', run(app) { app.stateFor('usage-audit').runVerify = true; app.render(); } },
+      { label: 'Export audit events as CSV', sub: 'Usage and audit', run(app) { app.stateFor('usage-audit').openExport = 'audit'; app.render(); } }
+    ],
+    states: [
+      { title: 'Verification failed', tone: 'danger', text: 'Runs verification now. When the chain breaks it shows the sequence, the reason, the last good checkpoint and who was notified. Nothing is auto-repaired.', apply(ctx) { ctx.state.tab = 'audit'; ctx.state.runVerify = true; ctx.rerender(); } },
+      { title: 'Export blocked', tone: 'warn', text: 'A selection that includes events above your clearance is refused. The export dialog then offers a filtered export at your clearance and below.', apply(ctx) { ctx.state.openExport = 'audit'; ctx.rerender(); } },
+      { title: 'Corrections', tone: 'neutral', text: 'A correction is a new row linked to the row it corrects. The original is never edited.', apply(ctx) { ctx.state.tab = 'audit'; ctx.state.kind = 'correction'; ctx.state.q = ''; ctx.state.events = null; ctx.state.selectFirst = true; ctx.rerender(); } },
+      { title: 'Bar hover', tone: 'neutral', text: 'Hovering a bar shows the day and exact token count. The table view carries the same values.', apply(ctx) { ctx.state.chartTable = false; ctx.state.hover = Math.max(0, (ctx.state.daily || []).length - 1); ctx.rerender(); } }
+    ],
+    render(root, ctx) {
+      const st = ctx.state;
+      const canUsage = App.can('usage:read');
+      st.tab = st.tab || (canUsage ? 'usage' : 'audit'); st.by = st.by || 'user'; st.period = st.period || 'today'; st.kind = st.kind || 'all';
+      if (st.q == null) st.q = '';
+      st.details = st.details || {};
+      if (st.by === 'tenant' && !isSysAdmin()) st.by = 'user';
+      if (location.hash !== st.paramsHash) {
+        st.paramsHash = location.hash;
+        if (ctx.params.event) { st.sel = ctx.params.event; st.inspect = 'event'; st.tab = 'audit'; }
+        if (ctx.params.tab) st.tab = ctx.params.tab;
+      }
+      const tenantName = App.me.tenant ? App.me.tenant.name : 'This tenant';
+      const canSiem = App.can('tenant:manage'); // 1.6.0, Sprint 38a (B-7501)
+      const clearance = App.me.user.clearance;
+
+      // ---------- loading ----------
+      // Async results re-render only while this screen is showing and no dialog is open (a re-render closes dialogs).
+      const refresh = () => {
+        if (App.state.route !== 'usage-audit') return;
+        if (document.getElementById('overlay')) { st.dirty = true; return; }
+        const focused = document.activeElement && document.activeElement.hasAttribute && document.activeElement.hasAttribute('data-q');
+        ctx.rerender();
+        if (focused) { const i = document.querySelector('#main [data-q]'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+      };
+      const onClose = () => { if (st.dirty) { st.dirty = false; refresh(); } };
+      const auditQuery = () => {
+        const p = [];
+        if (st.kind !== 'all') p.push('kind=' + encodeURIComponent(st.kind));
+        const q = st.q.trim();
+        if (q.charAt(0) === '@') { if (q.length > 1) p.push('actor=' + encodeURIComponent(q.slice(1))); } else if (q) p.push((ACTION_RE.test(q) ? 'action=' : 'actor=') + encodeURIComponent(q));
+        return p;
+      };
+      const usageQuery = () => {
+        if (st.period === 'month') { const now = new Date(); return 'from=' + ymd(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))) + '&to=' + ymd(now); }
+        return 'days=' + (st.period === 'today' ? 1 : st.period);
+      };
+      const getEvents = (before) => App.get('/api/admin/audit?' + auditQuery().concat(['limit=100']).concat(before ? ['before=' + before] : []).join('&'));
+      const getUsage = () => App.get('/api/admin/usage/summary?by=' + st.by + '&' + usageQuery());
+      const load = () => {
+        if (st.loading) return;
+        st.loading = true;
+        Promise.all([App.get('/api/admin/audit/summary'), getEvents(), App.get('/api/admin/exports'), App.get('/api/admin/audit/siem').catch(() => null),
+          canUsage ? App.get('/api/admin/usage/daily?days=14') : null, canUsage ? getUsage() : null, canUsage ? App.get('/api/admin/quotas') : null])
+          .then(([summary, events, exports, siemDest, daily, usage, quotas]) => {
+            Object.assign(st, { summary, events, eventsEnd: events.length < 100, exports, siemDest, daily: daily || [], usage, quotas, loaded: true, loadError: null });
+            if (st.selectFirst) { st.selectFirst = false; if (events[0]) { st.sel = events[0].id; st.inspect = 'event'; } }
+            watchExports();
+          })
+          .catch((err) => { st.loadError = err; })
+          .finally(() => { st.loading = false; refresh(); });
+      };
+      if (!st.loaded && !st.loadError) load();
+      const reload = () => { st.loaded = false; st.loadError = null; ctx.rerender(); };
+      const reloadEvents = () => {
+        const seq = (st.eventsSeq = (st.eventsSeq || 0) + 1);
+        getEvents().then((events) => {
+          if (seq !== st.eventsSeq) return;
+          st.events = events; st.eventsEnd = events.length < 100;
+          if (st.selectFirst) { st.selectFirst = false; if (events[0]) { st.sel = events[0].id; st.inspect = 'event'; } }
+          refresh();
+        }).catch((err) => App.fail(err, 'Audit events could not be loaded'));
+      };
+      const reloadSummary = () => App.get('/api/admin/audit/summary').then((s) => { st.summary = s; refresh(); }).catch((err) => App.fail(err));
+      const reloadExports = () => App.get('/api/admin/exports').then((x) => { st.exports = x; watchExports(); refresh(); }).catch((err) => App.fail(err));
+      const reloadSiem = () => App.get('/api/admin/audit/siem').then((x) => { st.siemDest = x; refresh(); }).catch((err) => App.fail(err, 'SIEM destinations could not be loaded'));
+      const reloadUsage = () => getUsage().then((u) => { st.usage = u; refresh(); }).catch((err) => App.fail(err, 'Usage could not be loaded'));
+      const loadDetail = (id) => { st.details[id] = { pending: true }; return App.get('/api/admin/audit/' + encodeURIComponent(id)).then((d) => { st.details[id] = d; refresh(); }).catch((err) => { st.details[id] = { error: err }; refresh(); }); };
+
+      // Exports still being prepared: follow their jobs over the socket, with a polling fallback.
+      function watchExports() {
+        const pending = (st.exports || []).filter((x) => x.state === 'queued' || x.state === 'running');
+        if (!pending.length) { stopJobs(); st.polls = 0; return; }
+        if (App.socket && (jobSocket !== App.socket || !jobHandler)) {
+          stopJobs();
+          jobSocket = App.socket;
+          jobHandler = (e) => {
+            if (App.state.route !== 'usage-audit') { stopJobs(); return; }
+            const x = (st.exports || []).find((r) => r.jobId === e.id); if (!x) return;
+            st.progress = st.progress || {}; st.progress[e.id] = e.progress;
+            if (e.state === 'succeeded' || e.state === 'failed' || e.state === 'cancelled') reloadExports();
+            else { if (e.state === 'running') x.state = 'running'; if (st.tab === 'exports') refresh(); }
+          };
+          jobSocket.on('job.progress', jobHandler);
+        }
+        if (!st.pollTimer && (st.polls || 0) < 6) {
+          st.polls = (st.polls || 0) + 1;
+          st.pollTimer = setTimeout(() => { st.pollTimer = null; if (App.state.route === 'usage-audit') reloadExports(); else stopJobs(); }, 2000 * st.polls);
+        }
+      }
+
+      // ---------- data for this render ----------
+      const summary = st.summary || {};
+      const events = st.events || [];
+      const daily = st.daily || [];
+      const exportsList = st.exports || [];
+      const usageRows = (st.usage && st.usage.rows) || [];
+      const verify = st.verify || (summary.lastVerification ? { status: summary.lastVerification.status, checked: summary.lastVerification.checked, brokenAt: summary.lastVerification.brokenAt, notified: summary.lastVerification.notified, ts: summary.lastVerification.ts, fromLog: true } : null);
+      const broken = verify && verify.status === 'broken' ? verify : null;
+      const correctedIds = {}; events.forEach((e) => { if (e.corrects) correctedIds[e.corrects] = true; });
+
+      // ----- top row -----
+      const siem = summary.siem || null;
+      const siemText = !siem ? '' : !siem.enabled ? '<span class="muted">not configured</span>'
+        : UI.pill(siem.state) + ' <span class="mono">' + esc(siem.url || '') + '</span>';
+      const pill = st.chain === 'verifying' ? UI.pill('verifying', 'info')
+        : broken ? UI.pill('broken at sequence ' + (broken.brokenAt ? broken.brokenAt.seq : '?'), 'danger')
+        : verify ? UI.pill('verified', 'ok') : UI.pill('not verified yet', 'outline');
+      const cp = summary.checkpoint;
+      const lastGood = st.verify && st.verify.lastGoodCheckpoint;
+      const chainCard = UI.panel('Audit chain', '<div class="hstack" style="justify-content:space-between;gap:8px"><b>' + esc(tenantName) + ' chain</b>' + pill + '</div>'
+        + UI.kv([
+          ['Last signed checkpoint', cp ? esc(when(cp.ts)) + ', sequence ' + esc(cp.seq) + (cp.store ? ', ' + esc(cp.store) + ' store' : '') : '<span class="muted">none yet</span>'],
+          ['Events today', esc(fmt(summary.eventsToday))],
+          ['Head', summary.head ? 'sequence ' + esc(summary.head.seq) + ' <span class="mono">' + esc(short(summary.head.hash)) + '</span>' : '<span class="muted">empty</span>'],
+          ['Last verified', verify && verify.ts ? esc(when(verify.ts)) + (verify.checked != null ? ', ' + esc(fmt(verify.checked)) + ' events' : '') : verify && verify.checked != null ? esc(fmt(verify.checked)) + ' events' : '<span class="muted">never</span>'],
+          ['Stream', siem ? siemText : '<span class="muted">unknown</span>']
+        ], 1)
+        + (broken ? UI.notice('<b>Verification failed at sequence ' + esc(broken.brokenAt ? broken.brokenAt.seq : '?') + '.</b> ' + esc(broken.brokenAt ? broken.brokenAt.reason : '')
+          + (st.verify ? ' Last good checkpoint: ' + (lastGood ? 'sequence ' + esc(lastGood.seq) + ', ' + esc(when(lastGood.ts)) : 'none') + '.' : '')
+          + ' Notified: ' + esc(broken.notified && broken.notified.length ? broken.notified.join(', ') : 'nobody') + '. Nothing is auto-repaired; the store keeps every row.', 'danger',
+        broken.brokenAt && broken.brokenAt.id ? UI.btn('Open event', { size: 'sm', attrs: 'data-sel="' + esc(broken.brokenAt.id) + '"' }) : '') : ''),
+      { actions: UI.btn('Sign checkpoint', { size: 'sm', kind: 'ghost', attrs: 'data-checkpoint title="Sign the current head now"' }) });
+
+      const chartPanel = !canUsage ? UI.panel('Tokens per day', UI.notice('Usage needs the usage:read permission, which none of your roles grant.', 'info'))
+        : UI.panel('Tokens per day, ' + tenantName + ', last ' + daily.length + ' days', st.chartTable
+          ? UI.table(['Day', { label: 'Tokens', right: true }, { label: 'GPU-seconds', right: true }], daily.slice().reverse().map((d) => [esc(dayLabel(d.day)), fmt(d.tokens), fmt(d.gpuSeconds)]), { clickable: false, cls: 'bare', minWidth: '0' })
+          : '<div class="ua-chart">' + chart(st, daily) + '</div><div class="muted" style="font-size:12px">Prompt and output tokens metered on the final stream chunk. The last bar is today, so far.</div>',
+        { actions: UI.btn(st.chartTable ? 'View as chart' : 'View as table', { size: 'sm', kind: 'ghost', attrs: 'data-charttable' }) });
+
+      // ----- tabs -----
+      const tabItems = (canUsage ? [{ id: 'usage', label: 'Usage' }, { id: 'quotas', label: 'Quotas' }] : []).concat([{ id: 'audit', label: 'Audit log', count: events.length + (st.eventsEnd ? '' : '+') }, { id: 'exports', label: 'Exports', count: exportsList.length }]).concat(App.can('billing:read') ? [{ id: 'billing', label: 'Statements' }] : []).concat(canCompliance() ? [{ id: 'compliance', label: 'Compliance', count: st.cmpLoaded && st.cmp && st.cmp.holds ? st.cmp.holds.holds.filter((h) => h.state === 'pending' || h.state === 'active').length : null }] : []);
+      if (!canUsage && (st.tab === 'usage' || st.tab === 'quotas')) st.tab = 'audit';
+      if (st.tab === 'billing' && !App.can('billing:read')) st.tab = 'audit';
+      if (st.tab === 'compliance' && !canCompliance()) st.tab = 'audit';
+
+      let body = '';
+      if (st.loadError) body = UI.problem('Usage and audit could not be loaded', st.loadError.message, st.loadError.problem && st.loadError.problem.trace_id) + '<div>' + UI.btn('Try again', { size: 'sm', attrs: 'data-reload' }) + '</div>';
+      else if (!st.loaded) body = UI.notice('Loading…', 'info');
+      else if (st.tab === 'usage') {
+        const segs = [{ id: 'user', label: 'Per user' }, { id: 'model', label: 'Per model' }, { id: 'workspace', label: 'Per workspace' }, { id: 'profile', label: 'Per profile' }].concat(isSysAdmin() ? [{ id: 'tenant', label: 'Per tenant' }] : []);
+        const range = st.usage ? (st.usage.from === st.usage.to ? dayLabel(st.usage.from) : dayLabel(st.usage.from) + ' to ' + dayLabel(st.usage.to)) : '';
+        body = '<div class="hstack wrap"><div class="eyebrow">Usage, ' + esc(range) + '</div>' + UI.seg(segs, st.by, 'data-byseg') + '<span class="right">' + UI.select(PERIODS, st.period, 'data-period aria-label="Period" style="width:150px"') + '</span></div>'
+          + UI.table([BY_LABEL[st.by], { label: 'Requests', right: true }, { label: 'Prompt tok.', right: true }, { label: 'Output tok.', right: true }, { label: 'GPU-s', right: true }, 'Thinking / doing · calc'],
+            usageRows.map((r, i) => ({ cells: ['<b>' + esc(r.name) + '</b>' + (st.by === 'model' || !r.key ? '' : ' <span class="mono muted" style="font-size:11px">' + esc(short(r.key)) + '</span>'), fmt(r.requests), fmt(r.prompt), fmt(r.output), fmt(Math.round(r.gpuMs / 1000)), '<span class="num">' + esc(mix(r)) + '</span>'], attrs: 'data-usage="' + i + '"', selected: st.inspect === 'usage' && st.usageBy === st.by && st.usageSel === i })),
+            { minWidth: '640px', emptyTitle: 'No usage in this period', emptyText: 'Usage is recorded when a model answers. Pick a longer period.' })
+          + '<div class="muted" style="font-size:12px">Thinking and doing split the output tokens between reasoning and answer text; calc counts calculator and tool calls.</div>';
+      } else if (st.tab === 'quotas') {
+        const q = st.quotas || { workspaces: [] };
+        const meters = (v) => {
+          const m = (label, used, max, unit) => UI.meter(label, max == null ? fmt(used) + unit + ', no limit' : fmt(used) + ' of ' + fmt(max) + unit, max ? (used / max) * 100 : 0, max != null && used >= max * 0.9 ? 'danger' : max != null && used >= max * 0.6 ? 'warn' : '');
+          return m('Tokens today', v.used.tokensToday, v.tokensPerDay, '') + m('GPU-seconds, month', v.used.gpuSecondsMonth, v.gpuSecondsPerMonth, '') + m('Training GPU-hours, month', v.used.trainingGpuHoursMonth, v.trainingGpuHoursPerMonth, '');
+        };
+        const hit = (v) => (v.tokensPerDay != null && v.used.tokensToday >= v.tokensPerDay ? 'token' : v.gpuSecondsPerMonth != null && v.used.gpuSecondsMonth >= v.gpuSecondsPerMonth ? 'GPU-second' : null);
+        const hits = [];
+        if (q.tenant && hit(q.tenant)) hits.push({ name: tenantName + ' tenant', what: hit(q.tenant), v: q.tenant, raise: 'A system admin', tenant: true });
+        q.workspaces.forEach((w) => { if (hit(w)) hits.push({ name: w.name, what: hit(w), v: w, raise: 'A tenant admin', id: w.id }); });
+        const editBtn = (w) => (w.tenant ? (isSysAdmin() ? UI.btn('Edit limits', { size: 'sm', kind: 'ghost', attrs: 'data-editquota=""' }) : '') : App.can('tenant:manage') ? UI.btn('Edit limits', { size: 'sm', kind: 'ghost', attrs: 'data-editquota="' + esc(w.id) + '"' }) : '');
+        body = '<div class="eyebrow">Quotas, ' + esc(tenantName) + ' and its workspaces</div>'
+          + hits.map((h) => UI.notice('<b>' + esc(h.name) + ' reached its ' + h.what + ' quota.</b> Requests return 429 with Retry-After until ' + esc(when(h.what === 'token' ? h.v.resets.daily : h.v.resets.monthly)) + '. ' + h.raise + ' can raise the limit.', 'warn', editBtn(h))).join('')
+          + '<div class="grid2">'
+          + (q.tenant ? UI.panel(tenantName + ' tenant, total', meters(q.tenant) + '<div class="muted" style="font-size:12px">Caps every workspace below. Raised by: a system admin. Daily reset ' + esc(when(q.tenant.resets.daily)) + ', monthly ' + esc(when(q.tenant.resets.monthly)) + '.</div>', { actions: editBtn({ tenant: true }) }) : '')
+          + q.workspaces.map((w) => UI.panel(w.name, meters(w) + '<div class="hstack gap6">' + UI.label(w.label, { sm: true }) + '<span class="muted" style="font-size:12px">Raised by: a tenant admin. Over quota returns 429 with a reset time.</span></div>', { actions: editBtn(w) })).join('')
+          + '</div>' + (q.workspaces.length ? '' : UI.empty('No workspaces', 'Workspace quotas appear once a tenant admin creates a workspace.'));
+      } else if (st.tab === 'audit') {
+        body = '<div class="hstack wrap"><div class="eyebrow">Audit events</div>' + UI.search('Action prefix, or @user for an actor', 'data-q', st.q) + '<span class="hstack gap6 wrap">' + KINDS.map((k) => UI.chip(k[1], st.kind === k[0], 'data-kind="' + k[0] + '"')).join('') + '</span></div>'
+          + (st.kind === 'correction' ? UI.notice('<b>Corrections.</b> Each row here corrects an earlier row. The original is unchanged and its hash still chains; readers see both.', 'info') : '')
+          + UI.table(['Time', 'Actor', 'Action', 'Target', 'Label', 'Hash', ''], events.map((e) => {
+            const isBreak = broken && broken.brokenAt && broken.brokenAt.id === e.id;
+            return {
+              cells: ['<span class="mono ua-nowrap" title="' + esc(whenFull(e.ts)) + '">' + esc(whenRow(e.ts)) + '</span>', e.redacted ? '<span class="muted">withheld</span>' : esc(actorName(e.actor)), '<span class="mono">' + esc(e.action) + '</span>',
+                e.corrects ? 'corrects <a href="#" data-sel="' + esc(e.corrects) + '" class="mono">' + esc(e.target && e.target.seq ? 'sequence ' + e.target.seq : short(e.corrects)) + '</a>' : e.redacted ? '<span class="muted">withheld</span>' : '<span class="ua-clip">' + esc(oneLine(e.target)) + '</span>',
+                UI.label(e.label, { sm: true }),
+                '<span class="mono" style="' + (isBreak ? 'color:var(--danger-fg);font-weight:600' : '') + '">' + esc(e.seq) + ' ' + esc(String(e.hash).slice(0, 8)) + '</span>' + (isBreak ? ' ' + UI.pill('break', 'danger') : '') + (correctedIds[e.id] ? ' ' + UI.pill('corrected', 'outline') : ''),
+                UI.btn('JSON', { size: 'xs', kind: 'ghost', attrs: 'data-json="' + esc(e.id) + '"' })],
+              attrs: 'data-sel="' + esc(e.id) + '"', selected: st.inspect !== 'usage' && st.sel === e.id
+            };
+          }), { minWidth: '760px', emptyTitle: 'No events match', emptyText: 'Clear the search or pick another kind.' })
+          + (st.eventsEnd ? '' : '<div>' + UI.btn(st.olderBusy ? 'Loading…' : 'Load older', { size: 'sm', attrs: 'data-older' + (st.olderBusy ? ' disabled' : '') }) + '</div>')
+          + '<div class="muted" style="font-size:12px">Append-only. Each hash covers the previous row. Corrections are new rows; nothing is edited or deleted. Rows above your ' + esc(clearance) + ' clearance keep their place in the chain but their content is withheld.</div>';
+      } else if (st.tab === 'billing') {
+        billingLoad(st, refresh);
+        body = billingHtml(st, refresh) + (App.BillingPlans ? App.BillingPlans.html(st, refresh) : ''); // 1.9.0 (B-162, B-166): plans, subscription, discounts
+      } else if (st.tab === 'compliance') {
+        complianceLoad(st, refresh);
+        body = complianceHtml(st);
+      } else {
+        const rows = exportsList.map((x) => {
+          const prog = (x.state === 'queued' || x.state === 'running') && st.progress && x.jobId && st.progress[x.jobId] != null ? ' ' + st.progress[x.jobId] + '%' : '';
+          return ['<span class="mono">' + esc(x.file) + '</span>', esc(x.scope), x.rows == null ? '<span class="muted">-</span>' : fmt(x.rows) + (x.omitted ? ' <span class="muted">(' + fmt(x.omitted) + ' omitted)</span>' : ''), esc(x.createdByName || '') + '<div class="muted" style="font-size:12px">' + esc(when(x.createdAt)) + '</div>', UI.pill(x.state + prog, x.state === 'queued' || x.state === 'running' ? 'info' : ''), x.state === 'ready' ? UI.btn('Download', { size: 'xs', kind: 'ghost', icon: 'download', attrs: 'data-dl="' + esc(x.id) + '"' }) : ''];
+        });
+        if (siem) rows.push(['<span class="mono">SIEM stream</span>', siem.enabled ? 'Every audit event, continuous, to ' + esc(siem.url || 'the configured endpoint') : 'Not configured. Set SIEM_URL on the server to stream audit events.', siem.enabled ? fmt(siem.delivered) + ' sent' + (siem.pending ? ', ' + fmt(siem.pending) + ' pending' : '') + (siem.dropped ? ', ' + fmt(siem.dropped) + ' dropped' : '') : '<span class="muted">-</span>', 'platform' + (siem.lastDeliveredAt ? '<div class="muted" style="font-size:12px">last ' + esc(when(siem.lastDeliveredAt)) + '</div>' : ''), UI.pill(siem.state) + (siem.lastError ? '<div class="muted" style="font-size:12px">' + esc(siem.lastError) + '</div>' : ''), '']);
+        body = '<div class="hstack"><div class="eyebrow">Exports</div><span class="right hstack gap6">' + UI.btn('Refresh', { size: 'sm', kind: 'ghost', icon: 'refresh', attrs: 'data-xrefresh' }) + UI.btn('New export', { size: 'sm', icon: 'download', attrs: 'data-export' }) + '</span></div>'
+          + UI.table(['File', 'Scope', { label: 'Rows', right: true }, 'Requested by', 'State', ''], rows, { clickable: false, minWidth: '640px', emptyTitle: 'No exports yet', emptyText: 'Exports you and other admins request appear here.' })
+          + UI.notice('Audit exports hold rows up to your clearance, <b>' + esc(clearance) + '</b>. A selection with rows above it is blocked unless you choose a filtered export. Every download is written to the audit chain.', 'info')
+          + siemSection();
+      }
+
+      // ----- 1.6.0, Sprint 38a (B-7501): audit streaming per tenant, under dual control -----
+      function siemSection() {
+        const d = st.siemDest;
+        if (!d) return '';
+        const me = App.me.user.id;
+        return '<div class="hstack" style="margin-top:12px"><div class="eyebrow">Streaming to a SIEM</div><span class="right hstack gap6">' + UI.iconbtn('refresh', 'Refresh destinations', { attrs: 'data-siemrefresh', cls: 'sm ghost' }) + (canSiem ? UI.btn('Propose destination', { size: 'sm', icon: 'plus', attrs: 'data-siempropose' }) : '') + '</span></div>'
+          + UI.table(['Destination', 'Kind', 'Address', 'State', { label: 'Delivered', right: true }, 'Last', ''], d.destinations.map((x) => ({ cells: ['<b>' + esc(x.name) + '</b>' + (x.hasToken ? '<div class="muted" style="font-size:11px">bearer token sealed</div>' : '') + '<div class="muted" style="font-size:11px">proposed by ' + esc(x.proposedByName || x.proposedBy) + (x.approvedByName ? ', approved by ' + esc(x.approvedByName) : '') + '</div>', esc(x.kind === 'https' ? 'HTTPS, NDJSON' : 'syslog over TLS'), '<span class="mono" style="overflow-wrap:anywhere">' + esc(x.url) + '</span>',
+              UI.pill(x.state === 'proposed' ? 'awaits a second admin' : x.state, x.state === 'active' ? 'ok' : x.state === 'proposed' ? 'warn' : 'neutral') + (x.state === 'active' ? ' ' + UI.pill(x.connection, x.connection === 'connected' ? 'ok' : x.connection === 'failing' ? 'danger' : 'neutral') : ''),
+              fmt(x.delivered) + (x.dropped ? ' <span class="muted">(' + fmt(x.dropped) + ' dropped)</span>' : ''), esc(x.lastDeliveredAt ? whenRow(x.lastDeliveredAt) : '-') + (x.lastError ? '<div class="muted" style="font-size:11px">' + esc(x.lastError) + '</div>' : ''),
+              '<span class="hstack gap6" style="justify-content:flex-end">' + (canSiem && x.state === 'proposed' ? UI.btn('Approve', { size: 'xs', kind: 'primary', attrs: 'data-siemapprove="' + esc(x.id) + '"' + (x.proposedBy === me ? ' title="Dual control: someone else must approve what you proposed"' : '') }) + UI.btn('Reject', { size: 'xs', kind: 'ghost', attrs: 'data-siemreject="' + esc(x.id) + '"' }) : '') + (canSiem && x.state !== 'rejected' ? UI.btn('Test', { size: 'xs', kind: 'ghost', attrs: 'data-siemtest="' + esc(x.id) + '"' }) : '') + (canSiem && (x.state === 'active' || x.state === 'proposed') ? UI.btn(x.state === 'active' ? 'Disable' : 'Withdraw', { size: 'xs', kind: 'ghost', attrs: 'data-siemdisable="' + esc(x.id) + '"' }) : '') + '</span>'],
+            attrs: 'data-siemrow="' + esc(x.id) + '"' })), { clickable: false, minWidth: '760px', emptyTitle: 'No destinations', emptyText: canSiem ? 'Propose an HTTPS or syslog-over-TLS destination; a second tenant admin approves it before anything is sent.' : 'A tenant admin proposes destinations; a second one approves them.' })
+          + UI.notice('<b>Dual control.</b> A destination streams this tenant\'s audit events only after a second tenant admin approves it; the proposer cannot. Tokens are sealed and never shown again; every decision and test is on the chain. ' + (d.platform && d.platform.enabled ? 'The platform stream (SIEM_URL) also carries every event.' : 'The platform stream (SIEM_URL) is not configured.') + ' At most ' + esc(d.max) + ' proposed or active destinations per tenant.', 'info');
+      }
+      function siemProposeModal() {
+        ctx.modal({
+          title: 'Propose a SIEM destination', onClose,
+          body: '<div class="formgrid">' + UI.field('Name', UI.input('', { attrs: 'data-sname', placeholder: 'Splunk HEC (SOC)' })) + UI.field('Kind', UI.select([{ value: 'https', label: 'HTTPS, NDJSON batches' }, { value: 'syslog', label: 'syslog over TLS (RFC 5424)' }], 'https', 'data-skind')) + UI.field('Address', UI.input('', { attrs: 'data-surl', placeholder: 'https://host/path, or host:port' }), 'https://host/path for HTTPS, host:port for syslog. Cloud metadata and unlisted internal addresses are refused.') + UI.field('Bearer token', UI.input('', { type: 'password', attrs: 'data-stoken' }), 'HTTPS only. Sealed with the tenant key, never shown again.') + UI.field('Private CA (PEM)', UI.textarea('', { attrs: 'data-sca', placeholder: 'Optional: the CA that signed the receiver\'s certificate' })) + UI.field('Note', UI.input('', { attrs: 'data-snote' })) + '</div>'
+            + UI.notice('Nothing is sent until another tenant admin approves. Audited audit.siem.proposed.', 'info') + '<div data-err></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Propose', { kind: 'primary', attrs: 'data-sgo' }),
+          onMount(m) {
+            m.querySelector('[data-sgo]').addEventListener('click', () => {
+              const v = (q) => m.querySelector(q).value;
+              App.post('/api/admin/audit/siem', { name: v('[data-sname]').trim(), kind: v('[data-skind]'), url: v('[data-surl]').trim(), token: v('[data-stoken]') || null, caPem: v('[data-sca]').trim() || null, note: v('[data-snote]').trim() || null })
+                .then((x) => { App.closeOverlay(); st.dirty = false; ctx.toast('Proposed: ' + esc(x.name) + '. A second tenant admin can approve it now. Audited audit.siem.proposed.', 'ok'); reloadSiem(); reloadEvents(); })
+                .catch((err) => { const p = err.problem || {}; m.querySelector('[data-err]').innerHTML = UI.notice('<b>' + esc(p.title || 'Not proposed') + '.</b> ' + esc(p.detail || err.message), 'danger'); });
+            });
+          }
+        });
+      }
+
+      // ----- inspector -----
+      let insp = '';
+      const ur = st.inspect === 'usage' && st.usageBy === st.by ? usageRows[st.usageSel] : null;
+      if (ur) {
+        insp = '<div class="eyebrow">' + esc(BY_LABEL[st.by]) + '</div><div style="font-size:15px;font-weight:600;overflow-wrap:anywhere">' + esc(ur.name) + '</div>'
+          + UI.kv([['Requests', fmt(ur.requests)], ['Prompt tokens', fmt(ur.prompt)], ['Output tokens', fmt(ur.output)], ['Thinking tokens', fmt(ur.thinking)], ['Calc calls', fmt(ur.calc)], ['GPU-seconds', fmt(Math.round(ur.gpuMs / 1000))], ['Thinking / doing · calc', esc(mix(ur))], ['Period', esc(st.usage.from + ' to ' + st.usage.to)]], 2)
+          + '<div class="vstack gap6">' + (st.by === 'user' && ur.key ? UI.btn('Show their audit events', { size: 'sm', attrs: 'data-actor="' + esc(ur.key) + '"' }) : '')
+          + (st.by === 'workspace' && ur.key && App.can('tenant:manage') ? UI.btn('Open workspace', { size: 'sm', attrs: 'data-openws="' + esc(ur.key) + '"' }) : '') + '</div>';
+      } else if (st.sel) {
+        const d = st.details[st.sel];
+        const e = d && !d.error && !d.pending ? d : events.find((x) => x.id === st.sel);
+        if (!d) loadDetail(st.sel);
+        if (d && d.error) insp = UI.problem('Event could not be loaded', d.error.message, d.error.problem && d.error.problem.trace_id);
+        else if (!e) insp = UI.notice('Loading event…', 'info');
+        else {
+          const isBreak = broken && broken.brokenAt && broken.brokenAt.id === e.id;
+          const canCorrect = !e.redacted && e.kind !== 'correction' && ((e.actor && e.actor.user === App.me.user.id) || App.can('tenant:manage'));
+          const corr = e.kind === 'correction' && e.detail ? e.detail : null;
+          insp = '<div class="eyebrow">Event, sequence ' + esc(e.seq) + '</div>'
+            + (e.redacted ? UI.notice('Above your ' + esc(clearance) + ' clearance: the actor, target and detail are withheld. Its place in the chain still verifies.', 'warn') : '')
+            + UI.kv([['Time', esc(whenFull(e.ts))], ['Action', '<span class="mono">' + esc(e.action) + '</span>'], ['Kind', esc(e.kind)]]
+              .concat(e.redacted ? [] : [['Actor', esc(actorName(e.actor)) + (e.actor && e.actor.username && e.actor.name ? ' <span class="mono muted">' + esc(e.actor.username) + '</span>' : '')], ['Target', '<span class="ua-wrap">' + esc(oneLine(e.target) || '-') + '</span>']])
+              .concat([['Label', UI.label(e.label, { sm: true })]])
+              .concat(!e.redacted && e.decision ? [['Decision', '<span class="ua-wrap">' + esc(oneLine(e.decision)) + '</span>']] : [])
+              .concat(corr ? [['Reason', esc(corr.reason || '')], ['Corrected fields', '<span class="ua-wrap mono">' + esc(JSON.stringify(corr.correction || {})) + '</span>']] : [])
+              .concat([['Hash', '<span class="mono ua-wrap">' + esc(e.hash) + '</span>'], ['Previous hash', '<span class="mono ua-wrap">' + esc(e.prev_hash) + '</span>']])
+              .concat(e.trace_id ? [['Trace', '<span class="mono">' + esc(String(e.trace_id).slice(0, 16)) + '</span> ' + UI.btn('Copy', { kind: 'ghost', size: 'xs', attrs: 'data-uacopy="' + esc(e.trace_id) + '"' })]] : [])
+              .concat(e.corrects ? [['Corrects', '<a href="#" data-sel="' + esc(e.corrects) + '" class="mono">' + esc(e.target && e.target.seq ? 'sequence ' + e.target.seq : short(e.corrects)) + '</a>']] : [])
+              .concat(d && d.correctedBy && d.correctedBy.length ? [['Corrected by', d.correctedBy.map((c) => '<a href="#" data-sel="' + esc(c.id) + '" class="mono">sequence ' + esc(c.seq) + '</a> <span class="muted">' + esc(when(c.ts)) + '</span>').join('<br>')]] : []), 1)
+            + (isBreak ? UI.notice('Verification stopped at this row: ' + esc(broken.brokenAt.reason) + '.', 'danger') : '')
+            + '<div class="vstack gap6">' + UI.btn('Open full event', { size: 'sm', icon: 'eye', attrs: 'data-json="' + esc(e.id) + '"' })
+            + (canCorrect ? UI.btn('Correct this event', { size: 'sm', icon: 'edit', attrs: 'data-correct="' + esc(e.id) + '"' }) : '')
+            + (!e.redacted && e.actor && e.actor.user ? UI.btn('Show events by this actor', { size: 'sm', kind: 'ghost', attrs: 'data-actor="' + esc(e.actor.username || e.actor.user) + '"' }) : '') + '</div>';
+        }
+      } else insp = '<div class="eyebrow">Inspector</div><div class="muted" style="font-size:13px">Select an audit event or a usage row to see it here.</div>';
+      if (canUsage && st.quotas) {
+        const wsId = App.DATA.tenant && App.DATA.tenant.workspaceId;
+        const w = st.quotas.workspaces.find((x) => x.id === wsId) || null;
+        const v = w || st.quotas.tenant;
+        if (v) {
+          const m = (label, used, max) => UI.meter(label, max == null ? fmt(used) + ', no limit' : fmt(used) + ' of ' + fmt(max), max ? (used / max) * 100 : 0, max != null && used >= max * 0.9 ? 'warn' : '');
+          insp += '<div class="divider"></div><div class="eyebrow">Quota, ' + esc(w ? w.name : tenantName + ' tenant') + '</div>' + m('Tokens today', v.used.tokensToday, v.tokensPerDay) + m('GPU-seconds this month', v.used.gpuSecondsMonth, v.gpuSecondsPerMonth) + m('Training GPU-hours', v.used.trainingGpuHoursMonth, v.trainingGpuHoursPerMonth);
+        }
+      }
+
+      root.innerHTML = '<style>.main > .page > .tablewrap,.main > .page > .panel,.main > .page > .notice{flex-shrink:0}'
+        + '.ua-chart svg .ua-bar{cursor:pointer}.ua-chart svg .ua-bar:hover path,.ua-chart svg .ua-bar:focus path{fill:var(--accent)}.ua-chart svg .ua-bar:focus{outline:none}'
+        + '.ua-top{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}@media (max-width:1100px){.ua-top{grid-template-columns:1fr}}'
+        + '.ua-clip{display:inline-block;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}.ua-wrap{overflow-wrap:anywhere}.ua-nowrap{white-space:nowrap}'
+        + '</style>'
+        + '<div class="page">' + UI.pagehead('Usage and audit', 'Metering per tenant, user, model and workspace; a hash-chained audit log for ' + esc(tenantName), UI.btn('Refresh', { kind: 'ghost', icon: 'refresh', attrs: 'data-reload' }) + UI.btn('Export CSV', { icon: 'download', attrs: 'data-export' }) + UI.btn(st.chain === 'verifying' ? 'Verifying…' : 'Verify chain', { kind: 'primary', attrs: 'data-verify' + (st.chain === 'verifying' ? ' disabled' : '') }))
+        + (st.loaded ? '<div class="ua-top">' + chartPanel + chainCard + '</div>' : '')
+        + UI.tabs(tabItems, st.tab) + body
+        + '</div>'
+        + '<aside class="inspector w300">' + insp + '</aside>';
+
+      // ----- actions -----
+      function runVerify() {
+        const head = summary.head;
+        ctx.confirm({ title: 'Verify the ' + tenantName + ' chain', tag: 'read only', tone: 'info', body: '<p style="margin:0" class="fg2">Recomputes every hash from the first event to the head and checks each signed checkpoint. Nothing is changed. If the chain is broken, tenant admins and auditors are notified.</p>',
+          kv: [['Events in the chain', head ? fmt(head.seq) : '0'], ['Last checkpoint', cp ? 'sequence ' + esc(cp.seq) + ', ' + esc(when(cp.ts)) : 'none yet']], ok: 'Verify' }).then(async (ok) => {
+          if (!ok) return;
+          st.chain = 'verifying'; ctx.rerender();
+          try {
+            const r = await App.post('/api/admin/audit/verify');
+            st.verify = Object.assign({ ts: Date.now() }, r);
+            if (r.status === 'broken') { st.tab = 'audit'; if (r.brokenAt && r.brokenAt.id) { st.sel = r.brokenAt.id; st.inspect = 'event'; } ctx.toast('<b>Verification failed</b> at sequence ' + esc(r.brokenAt ? r.brokenAt.seq : '?') + '. ' + esc(r.notified.length ? 'Notified ' + r.notified.join(', ') + '.' : ''), 'danger', 8000); }
+            else ctx.toast(esc(tenantName) + ' chain verified: ' + esc(fmt(r.checked)) + ' events, ' + esc(fmt(r.checkpoints.checked)) + ' checkpoints, head ' + esc(short(r.head)) + '.', 'ok', 6000);
+          } catch (err) { App.fail(err, 'Verification did not run'); }
+          st.chain = null; reloadSummary(); reloadEvents();
+        });
+      }
+      function signCheckpoint() {
+        const head = summary.head;
+        ctx.confirm({ title: 'Sign a checkpoint now', tag: 'write-once', tone: 'info', body: '<p style="margin:0" class="fg2">Signs the current head with the tenant key and stores it in the write-once store. Later verification checks the chain against it.</p>', kv: [['Head', head ? 'sequence ' + esc(head.seq) : 'empty'], ['Previous checkpoint', cp ? 'sequence ' + esc(cp.seq) : 'none']], ok: 'Sign checkpoint' }).then(async (ok) => {
+          if (!ok) return;
+          try {
+            const r = await App.post('/api/admin/audit/checkpoints');
+            if (r.skipped) ctx.toast(esc(r.skipped), 'warn'); else ctx.toast('Checkpoint signed at sequence ' + esc(r.seq) + '. Audit entry written.', 'ok');
+            reloadSummary(); reloadEvents();
+          } catch (err) { App.fail(err, 'Checkpoint not signed'); }
+        });
+      }
+      const dateToMs = (v, end) => { if (!v) return undefined; const t = new Date(v + 'T00:00:00').getTime(); return end ? t + 86400000 : t; };
+      function exportModal(content) {
+        const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        const today = new Date(), monthAgo = new Date(Date.now() - 29 * 86400000);
+        const contents = [{ value: 'audit', label: 'Audit events (CSV)' }, { value: 'jsonl', label: 'Audit events as JSONL with chain proof' }].concat(canUsage ? [{ value: 'usage', label: 'Usage per day, user and model' }] : []);
+        const wsOpts = [{ value: '', label: 'All workspaces' }].concat(((st.quotas && st.quotas.workspaces) || []).map((w) => ({ value: w.id, label: w.name })));
+        ctx.modal({
+          title: 'Export CSV', onClose,
+          body: '<div class="formgrid">' + UI.field('Content', UI.select(contents, content || (canUsage && (st.tab === 'usage' || st.tab === 'quotas') ? 'usage' : 'audit'), 'data-xcontent'))
+            + '<div data-xaudit>' + UI.field('Kind', UI.select([{ value: '', label: 'All kinds' }].concat(KINDS.slice(1).map((k) => ({ value: k[0], label: k[1] }))), st.kind === 'all' ? '' : st.kind, 'data-xkind')) + '</div>'
+            + '<div data-xusage>' + UI.field('Scope', UI.select(wsOpts, '', 'data-xws')) + '</div>'
+            + UI.field('From', UI.input(iso(monthAgo), { type: 'date', attrs: 'data-xfrom' })) + UI.field('To', UI.input(iso(today), { type: 'date', attrs: 'data-xto' })) + '</div>'
+            + '<div data-xmsg>' + UI.notice('Audit exports include rows up to your ' + esc(clearance) + ' clearance. Leave a date empty for no bound. The request is written to the audit chain.', 'info') + '</div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Export', { kind: 'primary', attrs: 'data-xgo' }) + UI.btn('Export ' + clearance + ' and below', { kind: 'primary', attrs: 'data-xfiltered style="display:none"' }),
+          onMount(m) {
+            const $m = (s) => m.querySelector(s);
+            const show = (s, on) => { $m(s).style.display = on ? '' : 'none'; };
+            const sync = () => {
+              const c = $m('[data-xcontent]').value;
+              show('[data-xaudit]', c === 'audit'); show('[data-xusage]', c === 'usage'); show('[data-xfiltered]', false); show('[data-xgo]', true);
+              $m('[data-xmsg]').innerHTML = c === 'jsonl'
+                ? UI.notice('Every event of the window, one JSON document per line, with its hashes; a checkpoint is signed at the window\'s end. Rows above your ' + esc(clearance) + ' clearance are redacted to their hashes, so the chain still verifies offline: <span class="mono">exprsn-ai audit:verify-export file.jsonl</span>.', 'info')
+                : UI.notice('Audit exports include rows up to your ' + esc(clearance) + ' clearance. Leave a date empty for no bound. The request is written to the audit chain.', 'info');
+            };
+            $m('[data-xcontent]').addEventListener('change', sync); sync();
+            const done = (x, extra) => {
+              App.closeOverlay(); st.dirty = false; st.tab = 'exports'; st.polls = 0;
+              ctx.toast('Export queued: ' + esc(x.scope) + '.' + (extra || '') + ' It appears under Exports when it is ready.', 'ok', 6000);
+              reloadExports(); reloadEvents(); ctx.rerender();
+            };
+            const send = async (filtered) => {
+              const from = $m('[data-xfrom]').value, to = $m('[data-xto]').value;
+              try {
+                if ($m('[data-xcontent]').value === 'jsonl') {
+                  const b = {}; if (from) b.from = dateToMs(from); if (to) b.to = dateToMs(to, true);
+                  const x = await App.post('/api/admin/audit/exports/jsonl', b);
+                  done(x, x.redacted ? ' ' + fmt(x.redacted) + ' events above your clearance are redacted to their hashes.' : '');
+                } else if ($m('[data-xcontent]').value === 'usage') {
+                  const b = {}; if (from) b.from = +from.replace(/-/g, ''); if (to) b.to = +to.replace(/-/g, ''); if ($m('[data-xws]').value) b.workspaceId = $m('[data-xws]').value;
+                  done(await App.post('/api/admin/usage/exports', b));
+                } else {
+                  const b = { filtered: !!filtered }; if ($m('[data-xkind]').value) b.kind = $m('[data-xkind]').value; if (from) b.from = dateToMs(from); if (to) b.to = dateToMs(to, true);
+                  const x = await App.post('/api/admin/audit/exports', b);
+                  done(x, x.omitted ? ' ' + fmt(x.omitted) + ' events above your clearance were left out.' : '');
+                }
+              } catch (err) {
+                const p = err.problem || {};
+                if (err.status === 403 && p.title === 'Export blocked') {
+                  $m('[data-xmsg]').innerHTML = UI.notice('<b>Export blocked.</b> The selection includes ' + esc(fmt(p.above)) + ' of ' + esc(fmt(p.total)) + ' events above your ' + esc(p.clearance) + ' clearance. You can export ' + esc(p.clearance) + ' and below, or ask someone cleared for them. The refusal is written to the audit chain.', 'warn');
+                  show('[data-xgo]', false); show('[data-xfiltered]', true); const f = $m('[data-xfiltered]'); f.textContent = 'Export ' + p.clearance + ' and below'; f.focus();
+                } else $m('[data-xmsg]').innerHTML = UI.notice('<b>' + esc(p.title || 'Export not queued') + '.</b> ' + esc(p.detail || err.message), 'danger');
+              }
+            };
+            $m('[data-xgo]').addEventListener('click', () => send(false));
+            $m('[data-xfiltered]').addEventListener('click', () => send(true));
+          }
+        });
+      }
+      function jsonDrawer(id) {
+        const show = (e) => {
+          const text = JSON.stringify(e, null, 2);
+          ctx.drawer({ title: 'Event, sequence ' + esc(e.seq) + ' ' + UI.label(e.label, { sm: true }), onClose,
+            body: '<div class="fg2" style="font-size:12px">Stored row from audit_events. The hash covers every field below except correctedBy, including prev_hash.</div>' + (e.redacted ? UI.notice('Content withheld: this row is above your ' + esc(clearance) + ' clearance.', 'warn') : '') + UI.code(text, 'json'),
+            actions: UI.btn('Copy JSON', { attrs: 'data-cjson' }) + (e.trace_id ? UI.btn('Copy trace ID', { kind: 'ghost', attrs: 'data-ctrace' }) : '') + UI.btn('Close', { kind: 'ghost', attrs: 'data-close' }),
+            onMount(d) {
+              d.querySelector('[data-cjson]').addEventListener('click', () => copy(text, 'Event JSON'));
+              const t = d.querySelector('[data-ctrace]'); if (t) t.addEventListener('click', () => copy(e.trace_id, 'Trace ID'));
+            } });
+        };
+        App.get('/api/admin/audit/' + encodeURIComponent(id)).then((e) => { st.details[id] = e; show(e); }).catch((err) => App.fail(err, 'Event could not be loaded'));
+      }
+      function copy(text, what) {
+        const ok = () => ctx.toast(esc(what) + ' copied.');
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, () => ctx.toast('The browser refused clipboard access.', 'warn'));
+        else ctx.toast('The browser refused clipboard access.', 'warn');
+      }
+      function correctModal(id) {
+        const e = st.details[id] && !st.details[id].error && !st.details[id].pending ? st.details[id] : events.find((x) => x.id === id);
+        if (!e) return;
+        ctx.modal({ title: 'Correct event, sequence ' + esc(e.seq), onClose,
+          body: UI.notice('A correction is a new row that references this one. The original is never edited and its hash still chains.', 'info')
+            + UI.kv([['Action', '<span class="mono">' + esc(e.action) + '</span>'], ['Time', esc(whenFull(e.ts))], ['Target', '<span class="ua-wrap">' + esc(oneLine(e.target) || '-') + '</span>'], ['Label', UI.label(e.label, { sm: true })]], 2)
+            + UI.field('Reason', UI.input('', { attrs: 'data-creason maxlength="500"', placeholder: 'for example Rule version recorded as 3; the saved version is 4' }), 'At least 5 characters. Shown to everyone who reads the log.')
+            + UI.field('Corrected fields (JSON)', UI.textarea('{\n  "target": ' + JSON.stringify(e.target || {}) + '\n}', { attrs: 'data-cjson spellcheck="false" style="font-family:var(--mono);font-size:12px"', rows: 6 }), 'A JSON object with the fields as they should read.')
+            + '<div data-cerr></div>',
+          actions: UI.btn('Cancel', { attrs: 'data-close' }) + UI.btn('Append correction', { kind: 'primary', attrs: 'data-csave' }),
+          onMount(m) {
+            m.querySelector('[data-csave]').addEventListener('click', async () => {
+              const errBox = m.querySelector('[data-cerr]'); errBox.innerHTML = '';
+              const reason = m.querySelector('[data-creason]').value.trim();
+              if (reason.length < 5) { errBox.innerHTML = UI.notice('Give a reason of at least 5 characters.', 'danger'); return; }
+              let correction; try { correction = JSON.parse(m.querySelector('[data-cjson]').value || '{}'); } catch (x) { errBox.innerHTML = UI.notice('The corrected fields are not valid JSON: ' + esc(x.message), 'danger'); return; }
+              if (!correction || typeof correction !== 'object' || Array.isArray(correction)) { errBox.innerHTML = UI.notice('The corrected fields must be a JSON object.', 'danger'); return; }
+              try {
+                const row = await App.post('/api/admin/audit/' + encodeURIComponent(e.id) + '/corrections', { reason, correction });
+                App.closeOverlay(); st.dirty = false;
+                delete st.details[e.id]; st.sel = e.id; st.inspect = 'event';
+                ctx.toast('Correction appended at sequence ' + esc(row.seq) + '. The original row is unchanged.', 'ok', 6000);
+                ctx.rerender(); reloadEvents(); reloadSummary();
+              } catch (err) { const p = err.problem || {}; errBox.innerHTML = UI.notice('<b>' + esc(p.title || 'Not saved') + '.</b> ' + esc(p.detail || err.message), 'danger'); }
+            });
+          } });
+      }
+      async function download(id) {
+        const x = exportsList.find((r) => r.id === id); if (!x) return;
+        try {
+          const res = await fetch('/api/admin/exports/' + encodeURIComponent(id) + '/download', { credentials: 'same-origin' });
+          if (!res.ok) { let p = null; try { p = await res.json(); } catch (e2) { /* not JSON */ } throw new App.ApiError(p || { status: res.status, title: res.statusText }); }
+          const url = URL.createObjectURL(await res.blob());
+          const a = document.createElement('a'); a.href = url; a.download = x.file; a.style.display = 'none';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          ctx.toast('Downloaded ' + esc(x.file) + '. The download is written to the audit chain.', 'ok');
+          reloadSummary(); reloadEvents();
+        } catch (err) { App.fail(err, 'Download failed'); }
+      }
+      const selectEvent = (id) => { st.sel = id; st.inspect = 'event'; if (st.tab !== 'audit') st.tab = 'audit'; delete st.details[id]; ctx.rerender(); };
+      const filterActor = (who) => { st.tab = 'audit'; st.kind = 'all'; st.q = '@' + who; st.inspect = 'event'; ctx.rerender(); reloadEvents(); };
+
+      // ----- deferred actions from commands and states -----
+      if (st.loaded) {
+        if (st.runVerify) { st.runVerify = false; setTimeout(runVerify, 50); }
+        if (st.openExport) { const c = st.openExport; st.openExport = null; setTimeout(() => exportModal(c), 50); }
+        if (st.events === null) { st.events = []; reloadEvents(); }
+      }
+
+      // ----- handlers -----
+      ctx.on('click', '[data-tab]', (e, t) => { st.tab = t.dataset.tab; ctx.rerender(); });
+      if (st.tab === 'compliance' && st.cmpLoaded) complianceWire(st, ctx, refresh);
+      ctx.on('click', '[data-reload]', () => { st.details = {}; reload(); });
+      ctx.on('click', '[data-byseg] [data-seg]', (e, t) => { if (st.by === t.dataset.seg) return; st.by = t.dataset.seg; st.inspect = 'event'; reloadUsage(); });
+      ctx.on('change', '[data-period]', (e, t) => { st.period = t.value; st.inspect = 'event'; reloadUsage(); });
+      ctx.on('click', '[data-charttable]', () => { st.chartTable = !st.chartTable; st.hover = null; ctx.rerender(); });
+      ctx.on('mouseover', '.ua-bar', (e, t) => { const i = +t.dataset.bar; if (st.hover !== i) { st.hover = i; ctx.rerender(); } });
+      ctx.on('mouseout', '.ua-chart', (e, t) => { if (st.hover != null && !(e.relatedTarget && t.contains(e.relatedTarget))) { st.hover = null; ctx.rerender(); } });
+      ctx.on('focusin', '.ua-bar', (e, t) => { const i = +t.dataset.bar; if (st.hover !== i) { st.hover = i; ctx.rerender(); const b = ctx.$('.ua-bar[data-bar="' + i + '"]'); if (b) b.focus(); } });
+      ctx.on('click', 'tr[data-usage]', (e, t) => { st.inspect = 'usage'; st.usageSel = +t.dataset.usage; st.usageBy = st.by; ctx.rerender(); });
+      ctx.on('click', '[data-sel]', (e, t) => { e.preventDefault(); e.stopPropagation(); if (e.target.closest('[data-json]')) return; if (e.target.closest('a[data-sel]') && e.target.closest('a[data-sel]') !== t) return; selectEvent(t.dataset.sel); });
+      ctx.on('click', '[data-json]', (e, t) => { e.stopPropagation(); st.sel = t.dataset.json; st.inspect = 'event'; jsonDrawer(t.dataset.json); });
+      let qTimer = null;
+      ctx.on('input', '[data-q]', (e, t) => { st.q = t.value; clearTimeout(qTimer); qTimer = setTimeout(reloadEvents, 400); });
+      ctx.on('keydown', '[data-q]', (e, t) => { if (e.key === 'Enter') { clearTimeout(qTimer); st.q = t.value; reloadEvents(); } });
+      ctx.on('click', '[data-kind]', (e, t) => { st.kind = t.dataset.kind; ctx.rerender(); reloadEvents(); });
+      ctx.on('click', '[data-older]', () => {
+        const last = events[events.length - 1]; if (!last) return;
+        st.olderBusy = true; ctx.rerender();
+        getEvents(last.seq).then((more) => { st.events = events.concat(more); st.eventsEnd = more.length < 100; }).catch((err) => App.fail(err, 'Older events could not be loaded')).finally(() => { st.olderBusy = false; refresh(); });
+      });
+      ctx.on('click', '[data-actor]', (e, t) => filterActor(t.dataset.actor));
+      ctx.on('click', '[data-correct]', (e, t) => correctModal(t.dataset.correct));
+      ctx.on('click', '[data-uacopy]', (e, t) => copy(t.dataset.uacopy, 'Trace ID'));
+      ctx.on('click', '[data-verify]', () => runVerify());
+      ctx.on('click', '[data-checkpoint]', () => signCheckpoint());
+      ctx.on('click', '[data-export]', () => exportModal());
+      ctx.on('click', '[data-xrefresh]', () => { st.polls = 0; reloadExports(); });
+      ctx.on('click', '[data-siemrefresh]', () => reloadSiem());
+      ctx.on('click', '[data-siempropose]', () => siemProposeModal());
+      const siemAct = (id, action, note) => App.post('/api/admin/audit/siem/' + encodeURIComponent(id) + '/' + action, note === undefined ? {} : { note })
+        .then((x) => { ctx.toast(action === 'approve' ? 'Approved: ' + esc(x.name) + ' now receives this tenant\'s audit events. Audited audit.siem.approved.' : action === 'reject' ? 'Rejected. Audited audit.siem.rejected.' : 'Disabled: nothing more is sent to ' + esc(x.name) + '. Audited audit.siem.disabled.', 'ok'); reloadSiem(); reloadEvents(); })
+        .catch((err) => App.fail(err, action === 'approve' ? 'Not approved' : action === 'reject' ? 'Not rejected' : 'Not disabled'));
+      ctx.on('click', '[data-siemapprove]', (e, t) => siemAct(t.dataset.siemapprove, 'approve'));
+      ctx.on('click', '[data-siemreject]', (e, t) => siemAct(t.dataset.siemreject, 'reject'));
+      ctx.on('click', '[data-siemdisable]', (e, t) => {
+        const id = t.dataset.siemdisable;
+        ctx.confirm({ title: 'Stop this destination', tone: 'danger', body: '<p class="fg2" style="margin:0">No more audit events are sent to it. Propose it again to resume; a second admin approves it again.</p>', ok: 'Stop' }).then((ok) => { if (ok) siemAct(id, 'disable'); });
+      });
+      ctx.on('click', '[data-siemtest]', (e, t) => App.post('/api/admin/audit/siem/' + encodeURIComponent(t.dataset.siemtest) + '/test', {}).then((r) => { ctx.toast(r.ok ? 'Test event delivered. Audited audit.siem.tested.' : 'Test failed: ' + esc(r.error || 'unknown error') + '. Audited audit.siem.tested.', r.ok ? 'ok' : 'danger', 6000); reloadSiem(); }).catch((err) => App.fail(err, 'Test not sent')));
+      ctx.on('click', '[data-dl]', (e, t) => download(t.dataset.dl));
+      ctx.on('click', '[data-openws]', (e, t) => ctx.navigate('tenants', { workspace: t.dataset.openws }));
+      ctx.on('click', '[data-editquota]', (e, t) => (t.dataset.editquota ? ctx.navigate('tenants', { workspace: t.dataset.editquota, tab: 'quotas' }) : ctx.navigate('tenants', { tab: 'quotas' })));
+      billingWire(st, ctx, refresh);
+      if (App.BillingPlans) App.BillingPlans.wire(st, ctx, refresh);
+    }
+  });
+})();

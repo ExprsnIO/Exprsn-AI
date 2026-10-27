@@ -1,0 +1,39 @@
+# Behind a Cloudflare Tunnel (1.9.99-final, B-10902), on top of compose.yml:
+#
+#   exprsn-ai cloud:tunnel-token --edge <name> --out secrets/cloudflared_token.txt   # from Exprsn-AI's vault
+#   chown 65532 secrets/cloudflared_token.txt && chmod 0400 secrets/cloudflared_token.txt   # the connector's user
+#   docker compose -f compose.yml -f compose.tunnel.yml up -d
+#
+# The connector dials out to Cloudflare and forwards the front door's name to http://app:8080; the app publishes no
+# port at all (`ports: !reset []`, Compose 2.24 or later), so nothing listens for the internet or the host. Exprsn-AI
+# made the tunnel and manages its ingress (the name, WebSocket upgrades for /socket.io/) through the Cloudflare API;
+# the token is a Compose secret file, never an environment variable. The client address comes from CF-Connecting-IP,
+# believed only from the connector (CLOUDFLARE_TUNNEL_PEERS: the `edge` network below holds only it and the app).
+services:
+  app:
+    environment:
+      TRUST_PROXY: uniquelocal,cloudflare
+      CLOUDFLARE_TUNNEL_PEERS: ${CLOUDFLARE_TUNNEL_PEERS:-uniquelocal}
+    ports: !reset []
+    networks: [app, data, inference, edge]
+
+  cloudflared:
+    # Cloudflare's release 2025.8.1 (2025-08-21; `--token-file` needs 2025.4.0 or later), pinned by its multi-arch
+    # index digest from Docker Hub (checked 2026-10-21). Set CLOUDFLARED_IMAGE to move on (tag and digest together).
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.8.1@sha256:b77d84e8704db38db22c22661cf7e56468c526e3a6a5fe9c8b7c151452fa1472}
+    restart: unless-stopped
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secrets/cloudflared_token"]
+    secrets: [cloudflared_token]
+    depends_on:
+      app: { condition: service_started }
+    networks: [edge]
+
+networks:
+  # The app and the connector only; the connector reaches the internet through it (not internal).
+  edge: {}
+
+secrets:
+  cloudflared_token: { file: ./secrets/cloudflared_token.txt }

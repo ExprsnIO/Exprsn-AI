@@ -1,0 +1,34 @@
+{{- if .Values.zonesApply.enabled }}
+{{- range $ns := .Values.zonesApply.namespaces }}
+# Sprint 22 (B-1405): the server applies the {{ $ns }} zone's NetworkPolicy with server-side apply and reads it back
+# for the drift check. Nothing else in the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "exprsn-ai.fullname" $ }}-zones
+  namespace: {{ $ns }}
+  labels:
+    {{- include "exprsn-ai.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "exprsn-ai.fullname" $ }}-zones
+  namespace: {{ $ns }}
+  labels:
+    {{- include "exprsn-ai.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "exprsn-ai.fullname" $ }}-zones
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "exprsn-ai.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
+{{- end }}

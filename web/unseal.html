@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Unseal the vault · Exprsn-AI</title>
+<!-- 1.8.0 (B-145): the one page that works while the vault is sealed. It needs no session: escrow shares are the
+     credential. No inline script (CSP); the console's stylesheet gives the tokens and the controls. -->
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  body.unseal-body{min-height:100vh;margin:0;background:var(--bg);color:var(--fg);display:flex;justify-content:center;align-items:flex-start;overflow-x:hidden}
+  .unseal-page{box-sizing:border-box;width:100%;max-width:640px;padding:40px 16px 64px;display:flex;flex-direction:column;gap:16px}
+  .unseal-page h1{margin:0;font-size:22px}
+  .unseal-page h2{margin:0;font-size:15px}
+  .unseal-card{box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+  .unseal-page .textarea{width:100%;box-sizing:border-box;font-family:var(--mono, ui-monospace, monospace);font-size:13px;min-height:84px;word-break:break-all}
+  .unseal-page .input{width:100%;box-sizing:border-box}
+  .unseal-card[hidden]{display:none}
+  .unseal-actions{display:flex;flex-wrap:wrap;gap:8px}
+  .unseal-progress{font-size:14px}
+  .unseal-dots{display:flex;gap:6px;flex-wrap:wrap}
+  .unseal-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--accent)}
+  .unseal-dot.on{background:var(--accent)}
+  .unseal-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+  .unseal-page p{margin:0;overflow-wrap:anywhere}
+</style>
+</head>
+<body class="unseal-body">
+<main class="unseal-page" id="main" tabindex="-1">
+  <h1 id="unseal-title">Vault seal</h1>
+  <div id="unseal-status" role="status" aria-live="polite"><p class="muted">Reading the seal state…</p></div>
+  <section class="unseal-card" id="unseal-shares" hidden aria-labelledby="unseal-shares-h">
+    <h2 id="unseal-shares-h">Submit your share</h2>
+    <p class="muted">Each share holder submits their own share, one at a time, on this page. The shares are checked here, kept only in this server's memory until enough have arrived, and never stored. Use the same server for every share (the instance is named above), or unseal with <span class="mono">exprsn-ai vault:unseal</span>.</p>
+    <form id="unseal-form" class="vstack" novalidate>
+      <div class="field"><label for="unseal-share">Escrow share</label><textarea class="textarea" id="unseal-share" name="share" autocomplete="off" spellcheck="false" placeholder="exprsn-share:v1:…" aria-describedby="unseal-share-hint"></textarea><div class="hint" id="unseal-share-hint">The full text of one share as kms:escrow printed it.</div></div>
+      <div class="unseal-actions"><button type="submit" class="btn primary" id="unseal-submit">Submit share</button><button type="button" class="btn ghost" id="unseal-reset">Discard the shares given so far</button></div>
+    </form>
+    <div id="unseal-result" aria-live="assertive"></div>
+  </section>
+  <section class="unseal-card" id="unseal-breakglass" hidden aria-labelledby="unseal-bg-h">
+    <h2 id="unseal-bg-h">Break-glass seal</h2>
+    <p class="muted">Holders of enough escrow shares can seal the vault at once, without signing in, when the admin accounts cannot be trusted or a second platform admin cannot be reached. Every instance drops its keys and refuses anything that needs one until the shares unseal it again. Otherwise ask two platform admins to seal it from the Platform screen.</p>
+    <form id="unseal-bg-form" class="vstack" novalidate>
+      <div class="field"><label for="unseal-bg-shares">Escrow shares, one per line</label><textarea class="textarea" id="unseal-bg-shares" autocomplete="off" spellcheck="false" placeholder="exprsn-share:v1:…" aria-describedby="unseal-bg-hint"></textarea><div class="hint" id="unseal-bg-hint">At least as many as the escrow's threshold.</div></div>
+      <div class="field"><label for="unseal-bg-reason">Reason</label><input class="input" id="unseal-bg-reason" type="text" autocomplete="off" maxlength="1000"></div>
+      <div class="unseal-actions"><button type="submit" class="btn danger" id="unseal-bg-submit">Seal the vault now</button></div>
+    </form>
+    <div id="unseal-bg-result" aria-live="assertive"></div>
+  </section>
+  <p class="unseal-meta"><a href="/">Back to the console</a></p>
+</main>
+<script src="/js/unseal.js"></script>
+</body>
+</html>

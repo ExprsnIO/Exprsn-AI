@@ -1,0 +1,126 @@
+{
+  "description": "Shared canonical JSON vectors for Exprsn token signatures (sigVersion 2). The same file lives in exprsn-platform services/ca/tests/fixtures/ and Exprsn-AI server/test/fixtures/; both implementations must produce `expected` byte for byte. `token` is a v2 token payload (the object minus checksum/signature); `tokenCanonical` its canonical form, `tokenChecksum` sha256 hex of it, `tokenSignature` an RSA-PSS SHA-256 (salt 32) signature of it by the throwaway key whose public half is `tokenPublicKey`.",
+  "vectors": [
+    {
+      "name": "scalars",
+      "input": [
+        null,
+        true,
+        false,
+        0,
+        0,
+        1,
+        -1,
+        0.1,
+        1e+21,
+        1.5e-7,
+        123456789012345,
+        "",
+        "a"
+      ],
+      "expected": "[null,true,false,0,0,1,-1,0.1,1e+21,1.5e-7,123456789012345,\"\",\"a\"]"
+    },
+    {
+      "name": "top-level keys sorted",
+      "input": {
+        "b": 1,
+        "a": 2,
+        "c": 3
+      },
+      "expected": "{\"a\":2,\"b\":1,\"c\":3}"
+    },
+    {
+      "name": "nested keys sorted at every depth",
+      "input": {
+        "z": {
+          "y": {
+            "b": 1,
+            "a": [
+              {
+                "d": 1,
+                "c": 2
+              }
+            ]
+          },
+          "x": {}
+        },
+        "a": []
+      },
+      "expected": "{\"a\":[],\"z\":{\"x\":{},\"y\":{\"a\":[{\"c\":2,\"d\":1}],\"b\":1}}}"
+    },
+    {
+      "name": "keys sort by UTF-16 code units",
+      "input": {
+        "€": 1,
+        "😀": 2,
+        "z": 3,
+        "Z": 4,
+        "é": 5,
+        "aa": 6,
+        "a": 7,
+        "": 8
+      },
+      "expected": "{\"\":8,\"Z\":4,\"a\":7,\"aa\":6,\"z\":3,\"é\":5,\"€\":1,\"😀\":2}"
+    },
+    {
+      "name": "string escapes",
+      "input": {
+        "s": "quote\" backslash\\ nl\n tab\t ctrl\u0001 slash/ unié"
+      },
+      "expected": "{\"s\":\"quote\\\" backslash\\\\ nl\\n tab\\t ctrl\\u0001 slash/ unié\"}"
+    },
+    {
+      "name": "nested objects are not emptied",
+      "input": {
+        "issuer": {
+          "domain": "ca.example",
+          "certificateSerial": "0A1B"
+        },
+        "permissions": {
+          "read": true,
+          "write": false
+        }
+      },
+      "expected": "{\"issuer\":{\"certificateSerial\":\"0A1B\",\"domain\":\"ca.example\"},\"permissions\":{\"read\":true,\"write\":false}}"
+    }
+  ],
+  "token": {
+    "sigVersion": 2,
+    "id": "6f1c2a9e-3b4d-4e5f-8a7b-1c2d3e4f5a6b",
+    "version": "1.1",
+    "userId": "0b7e1d2c-5a4f-4c3b-9e8d-7f6a5b4c3d2e",
+    "issuer": {
+      "domain": "ca.platform.test",
+      "certificateSerial": "5d2f9a7c1e3b4d6f8a0c2e4f6a8b0c1d"
+    },
+    "permissions": {
+      "read": true,
+      "write": true,
+      "append": false,
+      "delete": false,
+      "update": true
+    },
+    "resource": {
+      "url": "http://localhost:8080/api"
+    },
+    "data": {
+      "userId": "plat-pat",
+      "email": "pat@platform.test",
+      "roles": [
+        "member"
+      ],
+      "nested": {
+        "b": 2,
+        "a": 1
+      }
+    },
+    "issuedAt": 1760000000000,
+    "notBefore": 1760000000000,
+    "expiresAt": 1760003600000,
+    "expiryType": "time"
+  },
+  "tokenCanonical": "{\"data\":{\"email\":\"pat@platform.test\",\"nested\":{\"a\":1,\"b\":2},\"roles\":[\"member\"],\"userId\":\"plat-pat\"},\"expiresAt\":1760003600000,\"expiryType\":\"time\",\"id\":\"6f1c2a9e-3b4d-4e5f-8a7b-1c2d3e4f5a6b\",\"issuedAt\":1760000000000,\"issuer\":{\"certificateSerial\":\"5d2f9a7c1e3b4d6f8a0c2e4f6a8b0c1d\",\"domain\":\"ca.platform.test\"},\"notBefore\":1760000000000,\"permissions\":{\"append\":false,\"delete\":false,\"read\":true,\"update\":true,\"write\":true},\"resource\":{\"url\":\"http://localhost:8080/api\"},\"sigVersion\":2,\"userId\":\"0b7e1d2c-5a4f-4c3b-9e8d-7f6a5b4c3d2e\",\"version\":\"1.1\"}",
+  "tokenChecksum": "12d73bd5b67c1b018260e3029db857128ceb57a9b7e1f5415c9d1e534c6d5255",
+  "tokenSignature": "PrdmKNVO0JGVBJUmWYaO4FZrlnY2Fb5Yi6xeo2DOAlihHI+lJQqBubn2p/8DeztVtGpuhkVeliZUN9OG3VnNvRhYqoj0741NmuYuo3Yha0n2kAORjCPDKp8D5HS9pU4NCuOeOE+trO1oiFfeW0Axj1C3w8IVc3tcz9XZ2LXKh0Y19YOIp2H0wYFoQA7ccsTm1K6HZZC/foF/jTN9zAEBJshgoNz+LOVC+d2jIwf7lSnlnqG/+OIueUZm7AQZXbod88loFBwtRFvcUelNbGLGn3aPfDQevf0mcGgjiYWQMoVYdHPQlWQ+0tsYEqfzXPeKZ2OZfR0QqVGKvpsoU2/b7w==",
+  "tokenPublicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAowxSPJczrnJCrkroTLPE\nr5Q9JQ4Yl8SZtaBaftJw/9BjjfG2ihkNXCSZy7LWbF4w9gNh/vcns1R23CHCgzc9\nMV4+xTcqUukGxgdqVeZ66genBblOGJBa7eF5bexntn/jFJRFObLuZcHdPWpm9qqN\n/RZ2js5j4cvV6YnG05ncXJKh1xGvu+eR8dwT0pTfCS8w3W+ZlHIBglBNaalD346u\n8rSPb5z41Cb6ntGAVE4D20/QZ7zNRxK4bwjQr/8TcuqOPVMPiVcmqjM/UFtaTo6j\nf6qRh9+3FQKpBjKPbpv7DPdDlMylrfjvuj9yyTHDzDkgBoUquMoqsuhCHKQT25nv\nNQIDAQAB\n-----END PUBLIC KEY-----\n"
+}

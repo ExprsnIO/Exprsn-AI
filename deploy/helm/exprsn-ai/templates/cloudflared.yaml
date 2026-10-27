@@ -1,0 +1,113 @@
+{{- if .Values.cloudflared.enabled }}
+{{- $cf := .Values.cloudflared }}
+{{- if not $cf.tokenSecret.name }}
+{{- fail "cloudflared.tokenSecret.name is required when cloudflared.enabled (a Secret holding the tunnel token: exprsn-ai cloud:tunnel-token writes it from the vault)" }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+{{- fail "cloudflared.enabled puts the release behind a Cloudflare Tunnel with no inbound port: set ingress.enabled=false" }}
+{{- end }}
+{{- if ne .Values.service.type "ClusterIP" }}
+{{- fail "cloudflared.enabled needs service.type=ClusterIP (nothing is published outside the cluster behind a tunnel)" }}
+{{- end }}
+# 1.9.99-final, Sprint 61 (B-10902): the Cloudflare Tunnel connector beside the app. It dials out to Cloudflare
+# (TCP and UDP 7844, HTTPS 443) and forwards the front door's name to the release's Service; nothing listens for the
+# internet. The tunnel's ingress (the name, the Service, WebSocket upgrades for /socket.io/) is managed remotely by
+# Exprsn-AI through the Cloudflare API, so the connector only needs its token, mounted as a file from the Secret
+# (never a value, never an environment variable).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-cloudflared
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflared
+spec:
+  replicas: {{ $cf.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "exprsn-ai.cloudflaredSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exprsn-ai.cloudflaredSelectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cloudflared
+          image: {{ $cf.image.repository }}:{{ $cf.image.tag }}{{ with $cf.image.digest }}@{{ . }}{{ end }}
+          imagePullPolicy: IfNotPresent
+          args: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run", "--token-file", "/run/secrets/cloudflared/token"]
+          ports:
+            - { name: metrics, containerPort: 2000, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            privileged: false
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml $cf.resources | nindent 12 }}
+          volumeMounts:
+            - { name: token, mountPath: /run/secrets/cloudflared, readOnly: true }
+      volumes:
+        - name: token
+          secret:
+            secretName: {{ $cf.tokenSecret.name }}
+            defaultMode: 0440
+            items:
+              - { key: {{ $cf.tokenSecret.key }}, path: token }
+{{- if .Values.networkPolicy.enabled }}
+---
+# The connector: nothing comes in; out only DNS, the release's server pods and Cloudflare's tunnel edge.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-cloudflared
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflared
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "exprsn-ai.cloudflaredSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- with .Values.networkPolicy.egress.dns.to }}
+    - to:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        {{- toYaml $.Values.networkPolicy.egress.dns.ports | nindent 8 }}
+    {{- end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "exprsn-ai.serverSelectorLabels" . | nindent 14 }}
+      ports:
+        - { port: http, protocol: TCP }
+    - to:
+        {{- toYaml $cf.edge | nindent 8 }}
+      ports:
+        - { port: 7844, protocol: TCP }
+        - { port: 7844, protocol: UDP }
+        - { port: 443, protocol: TCP }
+{{- end }}
+{{- end }}

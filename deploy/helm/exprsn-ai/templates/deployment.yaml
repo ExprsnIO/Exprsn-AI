@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    {{- if include "exprsn-ai.hasSecret" (dict "root" . "name" "REDIS_URL") }}
+    type: RollingUpdate
+    rollingUpdate:
+      # Bring a new pod to ready before draining an old one: streams on the old pod finish or end where they were.
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- else }}
+    # One replica without Redis (B-9001): a surge pod would find the old pod's heartbeat and refuse to start as a
+    # second process, so the old pod stops first.
+    type: Recreate
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "exprsn-ai.serverSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exprsn-ai.serverSelectorLabels" . | nindent 8 }}
+        {{- if .Values.networkPolicy.enabled }}
+        exprsn.ai/zone: {{ .Values.networkPolicy.zoneLabel | quote }}
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "exprsn-ai.configData" . | sha256sum }}
+        checksum/identity: {{ .Values.identity.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "exprsn-ai.serviceAccountName" . }}
+      automountServiceAccountToken: {{ or .Values.serviceAccount.automountServiceAccountToken .Values.zonesApply.enabled }}
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if or (eq .Values.migrations.mode "initContainer") .Values.signer.enabled }}
+      initContainers:
+      {{- end }}
+      {{- if .Values.signer.enabled }}
+        # Sprint 20 (B-1201): the signer, a native sidecar (restartPolicy: Always), started and answering before the
+        # server starts. It alone mounts the key-encryption key; the server shares only the socket's emptyDir.
+        - name: signer
+          image: {{ include "exprsn-ai.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          restartPolicy: Always
+          command: ["/usr/bin/tini", "--", "node", "server/dist/cli.js", "signer"]
+          env:
+            - name: SIGNER_SOCKET
+              value: /run/exprsn-signer/s/signer.sock
+            - name: SIGNER_SOCKET_MODE
+              value: "0660"
+            - name: SIGNER_KEY_FILE
+              value: /run/signer/data_key
+            - name: SIGNER_TOKEN_FILE
+              value: /run/signer/signer_token
+            # Secret volumes are group-readable by the pod's fsGroup; this one is mounted into this container only.
+            - name: SIGNER_ALLOW_GROUP_READ
+              value: "true"
+          securityContext:
+            {{- toYaml (merge (dict "runAsUser" (int .Values.signer.runAsUser)) (deepCopy .Values.securityContext)) | nindent 12 }}
+          volumeMounts:
+            - name: signer-socket
+              mountPath: /run/exprsn-signer
+            - name: signer-keys
+              mountPath: /run/signer
+              readOnly: true
+          startupProbe:
+            exec:
+              command: ["node", "-e", "require('net').connect(process.argv[1]).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))", "/run/exprsn-signer/s/signer.sock"]
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.signer.resources | nindent 12 }}
+      {{- end }}
+      {{- if eq .Values.migrations.mode "initContainer" }}
+        - name: migrate
+          image: {{ include "exprsn-ai.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/bin/tini", "--", "node", "server/dist/cli.js", "migrate"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          envFrom:
+            {{- include "exprsn-ai.envFrom" (dict "root" . "configMap" (include "exprsn-ai.fullname" .)) | nindent 12 }}
+          env:
+            {{- include "exprsn-ai.env" . | trim | nindent 12 }}
+          volumeMounts:
+            {{- include "exprsn-ai.volumeMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "exprsn-ai.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            {{- include "exprsn-ai.envFrom" (dict "root" . "configMap" (include "exprsn-ai.fullname" .)) | nindent 12 }}
+          env:
+            {{- include "exprsn-ai.env" . | trim | nindent 12 }}
+          volumeMounts:
+            {{- include "exprsn-ai.volumeMounts" . | nindent 12 }}
+          startupProbe:
+            httpGet: { path: {{ .Values.probes.startup.path }}, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet: { path: {{ .Values.probes.liveness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet: { path: {{ .Values.probes.readiness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          {{- if .Values.preStopSleepSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        {{- include "exprsn-ai.volumes" . | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

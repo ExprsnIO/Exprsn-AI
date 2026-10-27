@@ -1,0 +1,78 @@
+name: Cloud nightly (sandbox accounts)
+
+# 1.9.99-final, Sprint 62 (B-10804): the nightly cycle on the dedicated AWS, Azure, DigitalOcean and Cloudflare
+# sandbox accounts (open decision 18): deploy small, verify, introduce drift, revert, upgrade, destroy, and a sweeper
+# that deletes what is tagged exprsn:managed for the account and older than a day. `exprsn-ai cloud:sandbox-run`
+# refuses any account not marked sandbox, without a budget, or at or past its budget, and never touches untagged
+# resources (docs/runbooks/sandbox-nightly.md).
+#
+# Disabled until the owner's sandbox accounts exist: the job runs only when the repository variable
+# CLOUD_SANDBOX_ENABLED is "true", and it needs these secrets of the `cloud-sandbox` environment:
+#   SANDBOX_DATABASE_URL   the sandbox control plane's own database (never production's)
+#   SANDBOX_DATA_KEY       that control plane's DATA_KEY (the vaulted sandbox credentials are sealed under it)
+#   SANDBOX_SESSION_SECRET that control plane's SESSION_SECRET
+# and these variables: CLOUD_SANDBOX_ACCOUNTS (comma-separated cloud account ids, each marked with
+# `cloud:sandbox-run --mark`) and CLOUD_SANDBOX_AS (the username the cycle acts as, a Cloud admin with platform:manage).
+# Done when seven consecutive nightly runs pass with nothing left in the accounts (`cloud:sandbox-run --history`).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only check the accounts and list what the sweeper would delete"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-nightly
+  cancel-in-progress: false
+
+jobs:
+  sandbox:
+    name: Sandbox cycle
+    if: ${{ vars.CLOUD_SANDBOX_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: cloud-sandbox
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - name: Secrets as files (never in the environment)
+        env:
+          SANDBOX_DATABASE_URL: ${{ secrets.SANDBOX_DATABASE_URL }}
+          SANDBOX_DATA_KEY: ${{ secrets.SANDBOX_DATA_KEY }}
+          SANDBOX_SESSION_SECRET: ${{ secrets.SANDBOX_SESSION_SECRET }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/sbx"
+          printf '%s' "$SANDBOX_DATABASE_URL" > "$RUNNER_TEMP/sbx/database_url"
+          printf '%s' "$SANDBOX_DATA_KEY" > "$RUNNER_TEMP/sbx/data_key"
+          printf '%s' "$SANDBOX_SESSION_SECRET" > "$RUNNER_TEMP/sbx/session_secret"
+      - name: Run the cycle
+        env:
+          NODE_ENV: production
+          DATABASE_URL_FILE: ${{ runner.temp }}/sbx/database_url
+          DATA_KEY_FILE: ${{ runner.temp }}/sbx/data_key
+          SESSION_SECRET_FILE: ${{ runner.temp }}/sbx/session_secret
+          ACCOUNTS: ${{ vars.CLOUD_SANDBOX_ACCOUNTS }}
+          RUN_AS: ${{ vars.CLOUD_SANDBOX_AS }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+        run: node server/dist/cli.js cloud:sandbox-run --accounts "$ACCOUNTS" --as "$RUN_AS" --json $DRY_RUN > "$RUNNER_TEMP/sandbox-report.json"
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sandbox-report
+          path: ${{ runner.temp }}/sandbox-report.json
+          retention-days: 30
+      - name: Remove the secret files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/sbx"

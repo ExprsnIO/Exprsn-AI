@@ -1,0 +1,26 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "exprsn-ai.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      # /metrics needs METRICS_TOKEN as a bearer token; Prometheus reads it from the same Secret as the server.
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.METRICS_TOKEN.name }}
+          key: {{ .Values.secrets.METRICS_TOKEN.key }}
+{{- end }}

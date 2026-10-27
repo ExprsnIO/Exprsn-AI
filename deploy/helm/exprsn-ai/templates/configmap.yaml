@@ -1,0 +1,21 @@
+{{- include "exprsn-ai.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+data:
+  {{- include "exprsn-ai.configData" . | trim | nindent 2 }}
+{{- if .Values.identity.config }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-identity
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+data:
+  identity.yaml: |
+    {{- .Values.identity.config | nindent 4 }}
+{{- end }}

@@ -1,0 +1,338 @@
+import { Router, type Request } from 'express';
+import { z, ZodError } from 'zod';
+import { actorFrom } from '../../audit/chain.js';
+import { clears, highest, LABELS, type Label } from '../../authz/labels.js';
+import { canGrant, isRole } from '../../authz/permissions.js';
+import { LoginThrottle } from '../../identity/lockout.js';
+import { isFederatedKind, PROVIDER_KINDS, parseProviderConfig, type GitHubConfig, type ScimConfig, type Step } from '../../identity/providers/types.js';
+import { vaultRefsIn } from '../../identity/secrets.js';
+import { assertStoreServiceUrls } from '../../identity/providers/store-kinds.js';
+import { resolveMappings } from '../../repos/users.js';
+import type { ProviderRow } from '../../repos/providers.js';
+import { ip, noStore, parseBody, principalOf, requireAuth, requirePermission, requireRecentAuth } from '../../http/middleware.js';
+import { badRequest, conflict, forbidden, notFound, tooManyRequests } from '../../http/problem.js';
+import { isUniqueViolation } from '../../audit/chain.js';
+import type { Services } from '../../services.js';
+import { storeAdminFor } from '../../identity/store-admin.js';
+import { governanceFor } from '../../identity/store-governance.js';
+import { canonicalJson } from '../../crypto/index.js';
+import { assertKindAllowed, identityStoreRoutes, storeView, testBeforeSave } from './identity-stores.js';
+import { actorOf as govActor, purgeOrPropose } from './identity-store-governance.js';
+import { directoryImportRoutes } from './directory-import.js';
+
+// Secrets are references (env:/file:/vault:), never values. 1.9.0 (B-185): with the store's state.
+const providerView = (p: ProviderRow) => storeView(p);
+
+const createSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  kind: z.enum(PROVIDER_KINDS),
+  position: z.number().int().min(0).max(10000).default(100),
+  enabled: z.boolean().default(true),
+  config: z.record(z.string(), z.unknown()).default({}),
+  // 1.9.0 (B-181): why (kept with the version), and "test before save" with a real account (never stored).
+  reason: z.string().trim().max(500).optional(),
+  test: z.object({ username: z.string().trim().min(1).max(190), password: z.string().min(1).max(1024).optional() }).strict().optional()
+});
+
+const patchSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  position: z.number().int().min(0).max(10000).optional(),
+  enabled: z.boolean().optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+  reason: z.string().trim().max(500).optional()
+});
+
+const configProblem = (err: unknown) => {
+  if (err instanceof ZodError) return badRequest('The store configuration did not validate.', { errors: err.issues.map((i) => ({ path: ['config', ...i.path].join('.'), message: i.message })) });
+  return err;
+};
+
+/** User stores (identity providers), group → role mappings, and the "Test a login" tool. */
+export function identityAdminRoutes(s: Services): Router {
+  const r = Router();
+  // Scoped to this router's paths: the /admin mount is shared with other admin routers.
+  r.use(['/identity-providers', '/test-login', '/group-mappings'], noStore, requireAuth(), requirePermission(s, 'identity:manage'));
+  // 1.9.0, Sprint 54: the wizard, versions, archive and backups (each route has its own permission).
+  r.use(identityStoreRoutes(s));
+  // 1.9.9-qa (QA-1): the full import of a cloud directory before first sign-in.
+  r.use(directoryImportRoutes(s));
+  const stores = storeAdminFor(s);
+  const governance = governanceFor(s); // QA-1: dual control and purge rules (migration 142)
+  const recentAuth = requireRecentAuth(s);
+
+  const audit = (req: Request, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>) => {
+    const p = principalOf(req);
+    return s.audit.append({ tenantId: p.tenantId, action, kind: 'admin', actor: actorFrom(p, ip(req)), target, ...(detail ? { detail } : {}), traceId: req.traceId });
+  };
+
+  const load = async (req: Request) => {
+    const row = await s.providers.get(principalOf(req).tenantId, String(req.params.id));
+    if (!row) throw notFound('User store');
+    return row;
+  };
+
+  const assertAnotherEnabled = async (tenantId: string, exceptId: string) => {
+    const others = (await s.providers.list(tenantId)).filter((p) => p.enabled && p.id !== exceptId);
+    if (!others.length) throw conflict('This is the only enabled user store; nobody could sign in without it.');
+  };
+
+  /** 1.6.0 (B-7201): a SCIM store's sign-in stores are upstream stores (OIDC, SAML, GitHub) of the same tenant. */
+  const checkScim = async (tenantId: string, config: Record<string, unknown>) => {
+    let cfg: ScimConfig;
+    try {
+      cfg = parseProviderConfig('scim', config) as ScimConfig;
+    } catch (err) {
+      throw configProblem(err);
+    }
+    const stores = await s.providers.list(tenantId);
+    for (const id of cfg.signInStores) {
+      const row = stores.find((x) => x.id === id);
+      if (!row || !isFederatedKind(row.kind)) throw badRequest(`${id} is not an OIDC, SAML or GitHub store of this tenant; SCIM users sign in through one of those.`, { errors: [{ path: 'config.signInStores', message: 'Name upstream stores' }] });
+    }
+  };
+
+  r.get('/identity-providers', async (req, res) => {
+    res.json((await s.providers.list(principalOf(req).tenantId)).map(providerView));
+  });
+
+  r.post('/identity-providers', async (req, res) => {
+    const p = principalOf(req);
+    const { reason, test, ...body } = parseBody(createSchema, req.body);
+    assertKindAllowed(p, body.kind);
+    try {
+      const parsed = parseProviderConfig(body.kind, body.config);
+      // Sprint 26a (B-1804): GitHub's endpoints pass the service URL checks before they are saved.
+      if (body.kind === 'github') await s.federation.github.checkConfig(parsed as GitHubConfig).catch((err: Error) => {
+        throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
+      });
+      // 1.9.0 (B-183, B-184): a cloud directory's and the Exprsn platform's addresses pass the same checks.
+      await assertStoreServiceUrls(s.cfg, body.kind, parsed);
+      if (body.kind === 'local' && (await s.providers.list(p.tenantId)).some((x) => x.kind === 'local')) throw conflict('A tenant has one local user store.');
+      if (body.kind === 'scim') await checkScim(p.tenantId, body.config);
+      // Sprint 25 (B-1705): vault references must be readable by the admin saving them; they resolve as that admin.
+      const refs = vaultRefsIn(body.config);
+      await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
+      // 1.9.0 (B-181): refused (409) when the configuration cannot connect or find the test account.
+      const tested = test ? await testBeforeSave(s, req, body.kind, body.config, test) : null;
+      const row = await s.providers.create(p.tenantId, { ...body, vaultOwner: refs.length ? p.userId : null });
+      const version = await stores.recordVersion(row, reason ?? 'created', p.userId ?? null);
+      await audit(req, 'identity.provider.created', { provider: row.id, name: row.name, kind: row.kind }, { config: row.config, version, ...(reason ? { reason } : {}), ...(tested ? { tested: { username: test!.username.toLowerCase(), result: tested.result } } : {}) });
+      res.status(201).json(providerView(row));
+    } catch (err) {
+      if (isUniqueViolation(err)) throw conflict('A user store with that name exists.');
+      throw configProblem(err);
+    }
+  });
+
+  r.get('/identity-providers/:id', async (req, res) => {
+    res.json(providerView(await load(req)));
+  });
+
+  r.patch('/identity-providers/:id', async (req, res) => {
+    const p = principalOf(req);
+    const current = await load(req);
+    const { reason, ...body } = parseBody(patchSchema, req.body);
+    assertKindAllowed(p, current.kind);
+    // 1.9.0 (B-185): an archived store is kept read-only until it is restored.
+    if (current.state === 'archived' && (body.enabled === true || body.config !== undefined || body.name !== undefined)) throw conflict('This store is archived; restore it first. Its configuration is kept read-only.');
+    if (current.managed_by === 'config' && (body.config !== undefined || body.name !== undefined)) throw conflict('This store is managed by the configuration file; change it there.');
+    if (body.enabled === false && current.enabled) await assertAnotherEnabled(p.tenantId, current.id);
+    let vaultOwner: string | null | undefined;
+    if (body.config !== undefined && current.kind === 'github') {
+      let parsed: GitHubConfig;
+      try {
+        parsed = parseProviderConfig('github', body.config) as GitHubConfig;
+      } catch (err) {
+        throw configProblem(err);
+      }
+      await s.federation.github.checkConfig(parsed).catch((err: Error) => {
+        throw badRequest(`The GitHub address was refused: ${err.message}`, { reason: 'service_url' });
+      });
+    }
+    if (body.config !== undefined && current.kind === 'scim') await checkScim(p.tenantId, body.config);
+    if (body.config !== undefined && (current.kind === 'oidc' || current.kind === 'exprsn-platform')) {
+      let parsed: unknown;
+      try {
+        parsed = parseProviderConfig(current.kind, body.config);
+      } catch (err) {
+        throw configProblem(err);
+      }
+      await assertStoreServiceUrls(s.cfg, current.kind, parsed); // 1.9.0 (B-183, B-184)
+    }
+    if (body.config !== undefined) {
+      const refs = vaultRefsIn(body.config);
+      await s.vault.assertRefsReadable(p, refs, { ip: ip(req), traceId: req.traceId });
+      vaultOwner = refs.length ? p.userId : null;
+    }
+    // QA-1 (B-181): under dual control a changed connection or attribute configuration becomes a proposal another
+    // identity admin approves; the name, order and enabled flag in the same request apply at once.
+    let proposal: unknown = null;
+    if (body.config !== undefined && canonicalJson(body.config) !== canonicalJson(current.config) && (await governance.dualControl(p.tenantId)).on) {
+      const proposed = await governance.propose(govActor(req), { kind: 'store.config', providerId: current.id, name: current.name, payload: { before: current.config, config: body.config, vaultOwner: vaultOwner ?? null, ...(reason ? { reason } : {}) }, summary: `Change the configuration of ${current.name} (${current.kind}).${reason ? ` Reason: ${reason}` : ''}` });
+      proposal = governance.view(proposed, p.userId ?? null);
+      delete body.config;
+      vaultOwner = undefined;
+    } else if (body.config !== undefined && canonicalJson(body.config) === canonicalJson(current.config) && (await governance.dualControl(p.tenantId)).on) {
+      delete body.config; // unchanged: nothing to approve
+    }
+    try {
+      const row = Object.keys(body).length || vaultOwner !== undefined ? await s.providers.update(p.tenantId, current.id, { ...body, ...(vaultOwner !== undefined ? { vaultOwner } : {}) }) : current;
+      const version = Object.keys(body).length ? await stores.recordVersion(row!, reason ?? null, p.userId ?? null) : null;
+      if (Object.keys(body).length) await audit(req, 'identity.provider.updated', { provider: current.id, name: current.name }, { before: { position: current.position, enabled: current.enabled, config: current.config }, after: body, version, ...(reason ? { reason } : {}) });
+      if (proposal) return void res.status(202).json({ ...providerView(row!), proposal });
+      res.json(providerView(row!));
+    } catch (err) {
+      if (isUniqueViolation(err)) throw conflict('A user store with that name exists.');
+      throw configProblem(err);
+    }
+  });
+
+  r.delete('/identity-providers/:id', async (req, res) => {
+    const p = principalOf(req);
+    const current = await load(req);
+    assertKindAllowed(p, current.kind);
+    if (current.managed_by === 'config') throw conflict('This store is managed by the configuration file; remove it there.');
+    // QA-1 (B-185): with migration 142 a store is removed only archived and past the retention period (a purge,
+    // under dual control and with a recent sign-in); before that, 409 with the date. Without it, as before.
+    if (await governance.installed()) {
+      if (current.state === 'archived') await recentAuth(req, res, () => undefined); // throws 401 step_up when stale
+      const out = await purgeOrPropose(governance, req, current);
+      return void (out.status === 200 ? res.status(204).end() : res.status(out.status).json(out.body));
+    }
+    if (current.enabled) await assertAnotherEnabled(p.tenantId, current.id);
+    await s.providers.remove(p.tenantId, current.id);
+    // 1.6.0 (B-7201): a SCIM store's records and tokens go with it.
+    if (current.kind === 'scim') await s.scim.forget(p.tenantId, current.id);
+    await audit(req, 'identity.provider.deleted', { provider: current.id, name: current.name, kind: current.kind });
+    res.status(204).end();
+  });
+
+  r.post('/identity-providers/:id/test', async (req, res) => {
+    const row = await load(req);
+    const steps: Step[] = [];
+    let ok = false;
+    try {
+      ok = await s.chain.build(row).test(steps);
+    } catch (err) {
+      steps.push({ title: 'Configuration', ok: false, detail: (err as Error).message });
+    }
+    await audit(req, 'identity.provider.tested', { provider: row.id, name: row.name }, { ok });
+    res.json({ ok, steps });
+  });
+
+  /**
+   * Runs the real sign-in chain for a username and password without creating a session or provisioning anyone,
+   * and shows which store answered, the groups it returned, and the roles and clearance they map to.
+   */
+  r.post('/test-login', async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(z.object({ username: z.string().trim().min(1).max(190), password: z.string().min(1).max(1024) }), req.body);
+    const keys = LoginThrottle.keys(p.tenantId, body.username, null);
+    const state = await s.throttle.check([keys.account]);
+    if (state.locked) throw tooManyRequests('This account is locked after failed attempts.', state.retryAfterSeconds);
+    // Reserved before the check runs, so parallel test logins cannot be used to guess past the lockout.
+    const reserved = await s.throttle.reserve([keys.account]);
+    if (reserved.locked) throw tooManyRequests('This account is locked after failed attempts.', reserved.retryAfterSeconds);
+    const steps: Step[] = [];
+    const result = await s.chain.authenticate(p.tenantId, body.username, body.password, steps);
+    let mapping: { roles: string[]; clearance: string | null } | null = null;
+    if (result.status === 'ok') {
+      mapping = resolveMappings(await s.users.mappings(p.tenantId), result.provider.id, result.user.groups);
+      if (!mapping.roles.length) {
+        const cfg = parseProviderConfig(result.provider.kind, result.provider.config);
+        mapping = { roles: cfg.defaultRoles, clearance: cfg.defaultRoles.length ? cfg.defaultClearance : null };
+      }
+      // Roles and clearance granted directly to the account the sign-in would link to also count, as at sign-in.
+      const link = await s.users.identity(result.provider.id, result.user.externalId);
+      const linked = link ? await s.users.get(p.tenantId, link.user_id) : await s.users.byUsername(p.tenantId, result.user.username);
+      if (linked) {
+        const direct = (await s.users.roles(linked.id)).filter((x) => x.source === 'direct').map((x) => x.role);
+        const clearance = linked.clearance_direct ? (mapping.clearance ? highest(mapping.clearance as Label, linked.clearance_direct) : linked.clearance_direct) : mapping.clearance;
+        mapping = { roles: [...new Set([...mapping.roles, ...direct])].sort(), clearance };
+      }
+      await s.throttle.release([keys.account]);
+    } else {
+      await s.throttle.failed([keys.account]);
+    }
+    await audit(req, 'identity.test_login', { username: body.username.toLowerCase() }, { result: result.status, provider: 'provider' in result ? result.provider.name : null });
+    res.json({
+      result: result.status,
+      provider: 'provider' in result ? { id: result.provider.id, name: result.provider.name, kind: result.provider.kind } : null,
+      user: result.status === 'ok' ? { externalId: result.user.externalId, username: result.user.username, displayName: result.user.displayName, email: result.user.email, groups: result.user.groups } : null,
+      mapping,
+      steps,
+      errors: result.status === 'not_found' ? result.errors : []
+    });
+  });
+
+  // ---------- group mappings ----------
+
+  /** Runs directory sync for one store now (it also runs on a schedule). */
+  r.post('/identity-providers/:id/sync', async (req, res) => {
+    const p = principalOf(req);
+    const row = await load(req);
+    if (row.kind === 'local') throw conflict('Local accounts have no directory to sync with.');
+    if (row.state === 'archived') throw conflict('This store is archived; restore it to sync.');
+    const job = await s.jobs.enqueue({ tenantId: p.tenantId, type: 'directory.sync', payload: { tenantId: p.tenantId, providerId: row.id }, createdBy: p.userId, maxAttempts: 1 });
+    await audit(req, 'identity.sync.requested', { provider: row.id, name: row.name }, { job: job.id });
+    res.status(202).json({ jobId: job.id });
+  });
+
+  r.get('/group-mappings', async (req, res) => {
+    res.json(await s.users.mappings(principalOf(req).tenantId));
+  });
+
+  r.post('/group-mappings', async (req, res) => {
+    const p = principalOf(req);
+    const body = parseBody(
+      z.object({
+        providerId: z.string().length(26).nullable().default(null),
+        group: z.string().trim().min(1).max(512),
+        role: z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role'),
+        clearance: z.enum(LABELS),
+        workspaceId: z.string().length(26).nullable().default(null)
+      }),
+      req.body
+    );
+    if (!canGrant(p.roles, body.role, p.tenantId)) throw forbidden(`Your roles cannot grant ${body.role}.`, { step: 'role' });
+    if (!clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
+    if (body.providerId && !(await s.providers.get(p.tenantId, body.providerId))) throw notFound('User store');
+    if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
+    const row = await s.users.addMapping(p.tenantId, body);
+    await audit(req, 'identity.mapping.created', { mapping: row.id, group: row.group_name, role: row.role, clearance: row.clearance, workspace: row.workspace_id });
+    res.status(201).json(row);
+  });
+
+  r.patch('/group-mappings/:id', async (req, res) => {
+    const p = principalOf(req);
+    const existing = (await s.users.mappings(p.tenantId)).find((m) => m.id === req.params.id);
+    if (!existing) throw notFound('Group mapping');
+    const body = parseBody(
+      z.object({
+        group: z.string().trim().min(1).max(512).optional(),
+        role: z.string().refine((x) => isRole(x, p.tenantId), 'Unknown role').optional(),
+        clearance: z.enum(LABELS).optional(),
+        workspaceId: z.string().length(26).nullable().optional()
+      }),
+      req.body
+    );
+    if (!canGrant(p.roles, existing.role, p.tenantId) || (body.role && !canGrant(p.roles, body.role, p.tenantId))) throw forbidden('Your roles cannot grant this role.', { step: 'role' });
+    if (body.clearance && !clears(p.clearance, body.clearance)) throw forbidden('You cannot map a clearance above your own.', { step: 'clearance' });
+    if (body.workspaceId && !(await s.tenants.workspace(p.tenantId, body.workspaceId))) throw notFound('Workspace');
+    await s.users.updateMapping(p.tenantId, existing.id, body);
+    await audit(req, 'identity.mapping.updated', { mapping: existing.id, group: existing.group_name }, { before: { role: existing.role, clearance: existing.clearance, workspace: existing.workspace_id, group: existing.group_name }, after: body });
+    res.json((await s.users.mappings(p.tenantId)).find((m) => m.id === existing.id));
+  });
+
+  r.delete('/group-mappings/:id', async (req, res) => {
+    const p = principalOf(req);
+    const existing = (await s.users.mappings(p.tenantId)).find((m) => m.id === req.params.id);
+    if (!existing) throw notFound('Group mapping');
+    if (!canGrant(p.roles, existing.role, p.tenantId)) throw forbidden(`Your roles cannot change mappings for ${existing.role}.`, { step: 'role' });
+    await s.users.removeMapping(p.tenantId, existing.id);
+    await audit(req, 'identity.mapping.deleted', { mapping: existing.id, group: existing.group_name, role: existing.role }, { note: 'Takes effect at each user\'s next sign-in.' });
+    res.status(204).end();
+  });
+
+  return r;
+}

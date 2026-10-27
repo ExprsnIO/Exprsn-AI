@@ -1,0 +1,39 @@
+# Values used by CI (Sprint 22): the defaults plus zones applied in-cluster, with the RBAC for the zone namespaces and
+# egress to the Kubernetes API server.
+config:
+  publicUrl: https://ai.example.internal
+  blobStore:
+    type: s3
+    s3: { endpoint: "https://minio.data.svc:9000", bucket: exprsn-ai, accessKeyId: exprsn-ai }
+identity:
+  config: |
+    tenants:
+      - slug: northwind
+        name: Northwind
+extraSecretFiles:
+  - { name: exprsn-ai-ldap, key: bind_password, path: ldap_bind_password }
+secrets:
+  METRICS_TOKEN: { name: exprsn-ai, key: metrics_token }
+serviceMonitor: { enabled: true }
+autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 4 }
+networkPolicy:
+  egress:
+    database:
+      to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }, podSelector: { matchLabels: { app.kubernetes.io/name: postgresql } } }]
+      ports: [{ port: 5432, protocol: TCP }]
+    redis:
+      to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }, podSelector: { matchLabels: { app.kubernetes.io/name: redis } } }]
+    objectStorage:
+      to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: data } }, podSelector: { matchLabels: { app.kubernetes.io/name: minio } } }]
+    directory:
+      to: [{ ipBlock: { cidr: 10.31.0.0/24 } }]
+    inference:
+      to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: inference } } }, { ipBlock: { cidr: 10.40.0.0/16 } }]
+    sandbox:
+      to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: sandbox } } }]
+      ports: [{ port: 3310, protocol: TCP }, { port: 8080, protocol: TCP }]
+    kubernetesApi:
+      to: [{ ipBlock: { cidr: 10.96.0.1/32 } }]
+zonesApply:
+  enabled: true
+  namespaces: [edge, app, data, directory, inference, sandbox, training]

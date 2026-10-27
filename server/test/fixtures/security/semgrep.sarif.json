@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.90.0",
+          "rules": [
+            { "id": "javascript.lang.security.eval-injection", "shortDescription": { "text": "eval with user input" }, "defaultConfiguration": { "level": "error" }, "properties": { "security-severity": "9.1", "tags": ["security"] } },
+            { "id": "javascript.lang.security.weak-hash", "shortDescription": { "text": "MD5 used" }, "defaultConfiguration": { "level": "warning" }, "properties": { "security-severity": "5.3" } },
+            { "id": "generic.style.todo", "defaultConfiguration": { "level": "note" } }
+          ]
+        }
+      },
+      "invocations": [ { "executionSuccessful": true, "endTimeUtc": "2026-10-11T12:00:00Z" } ],
+      "results": [
+        { "ruleId": "javascript.lang.security.eval-injection", "level": "error", "message": { "text": "User input reaches eval()" }, "locations": [ { "physicalLocation": { "artifactLocation": { "uri": "src/handler.js" }, "region": { "startLine": 42 } } } ] },
+        { "ruleId": "javascript.lang.security.weak-hash", "message": { "text": "MD5 is weak" }, "locations": [ { "physicalLocation": { "artifactLocation": { "uri": "src/hash.js" }, "region": { "startLine": 7 } } } ] },
+        { "ruleId": "generic.style.todo", "message": { "text": "TODO left" } }
+      ]
+    }
+  ]
+}

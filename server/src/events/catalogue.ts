@@ -1,0 +1,303 @@
+import { Ajv, type ValidateFunction } from 'ajv';
+import client from 'prom-client';
+import type { Registry } from 'prom-client';
+import { LABELS } from '../authz/labels.js';
+
+/*
+ * The event catalogue (B-2001). Every event Exprsn-AI emits to webhooks (and, from B-2003, to plugins) has a type, an
+ * envelope and a data schema. Types come in two kinds:
+ *
+ * - named events: job states, flags, approvals, plugin lifecycle and, reserved for the domains of B-22 to B-27,
+ *   records, files, groups, messages and posts. Each has its own data schema and version.
+ * - audit actions: every append to a tenant's audit chain is also an event whose type is the action name
+ *   (`user.created`, `webhook.updated`…). They share one data schema, the audit entry.
+ *
+ * The catalogue is versioned: `CATALOGUE_VERSION` moves when a type is added or a schema changes, and each type
+ * carries its own `version`, which only moves when its data schema changes incompatibly (a new optional field does not
+ * move it). Reserved types are published so receivers can prepare; they are not emitted until their domain ships.
+ */
+
+export const CATALOGUE_VERSION = 10; // 10: channel.session.assigned (Sprint 46, B-134)
+
+export type JsonSchema = Record<string, unknown>;
+
+export interface EventGroup {
+  pattern: string;
+  description: string;
+}
+
+export interface EventType {
+  type: string;
+  group: string;
+  version: number;
+  /** The release that first emitted (or reserved) the type. */
+  since: string;
+  /** `emitted` today, or `reserved` for a domain that has not shipped yet. */
+  status: 'emitted' | 'reserved';
+  description: string;
+  data: JsonSchema;
+}
+
+/** The groups a webhook or plugin subscribes to (a name, a prefix ending in `.*`, or `*`). */
+export const EVENT_GROUPS: EventGroup[] = [
+  { pattern: '*', description: 'Every event below' },
+  { pattern: 'job.*', description: 'Job states: job.succeeded, job.failed, job.cancelled' },
+  { pattern: 'flag.*', description: 'Guardrail flags: created, confirmed, dismissed, approved, rejected, escalated, reassigned, breached, reopened, withdrawn' },
+  { pattern: 'approval.*', description: 'Approvals requested by agent runs and workflows' },
+  { pattern: 'workflow.*', description: 'Workflow runs and approvals; since 1.5.0 also triggers set, removed, updated, fired, skipped and throttled (workflow.trigger.*), runs dead-lettered and redriven, and bundles exported, imported and refused (audit actions)' },
+  { pattern: 'agent.*', description: 'Agent runs and tool-call approvals (audit actions)' },
+  // 1.5.0, Sprint 32 (B-4101)
+  { pattern: 'chain.*', description: 'The chain context: invocations the chain rules refused (chain.refused: depth, per-kind depth, principal, budget) and chains stopped at their root\'s budget (chain.stopped) (audit actions)' },
+  { pattern: 'user.*', description: 'Accounts created, synced and disabled (audit actions)' },
+  { pattern: 'auth.*', description: 'Sign-ins and second factors (audit actions)' },
+  { pattern: 'authz.*', description: 'Authorisation denials; since 1.5.0 also custom roles created, proposed, approved, rejected, withdrawn, updated and retired (authz.role.*) and access reviews created, opened, confirmed, revoked, escalated, closed and cancelled (authz.review.*) (audit actions)' },
+  { pattern: 'chat.*', description: 'Chat failures and shares (audit actions)' },
+  { pattern: 'conversation.*', description: 'Conversation shares, exports and deletions (audit actions)' },
+  { pattern: 'billing.*', description: 'Statements and price books (audit actions)' },
+  { pattern: 'webhook.*', description: 'Changes to webhooks themselves (audit actions)' },
+  // 1.4.0 (B-2001)
+  { pattern: 'plugin.*', description: 'Plugin installs, lifecycle transitions and grants; since Sprint 25 also plugin.audited, plugin.action.refused, plugin.call.refused and plugin.throttled (audit actions)' },
+  // 1.4.0, Sprint 25 (B-1608 to B-1611)
+  { pattern: 'atproto.*', description: 'AT-Protocol identities, key rotations, labels published and withdrawn, trusted labelers and rejected inbound labels; since Sprint 27 firehose subscriptions created, updated, started, stopped and deleted (atproto.firehose.*); since 1.5.0 relay commits rejected (atproto.firehose.commit.rejected), feed generators created, updated, deleted, published and unpublished (atproto.feed.*) and DID services added (atproto.identity.service-added) (audit actions)' },
+  { pattern: 'record.*', description: 'Low-code app records (Sprint 27): created, updated, deleted, transitioned' },
+  // 1.4.0, Sprint 27 (B-2201 to B-2208)
+  { pattern: 'app.*', description: 'Low-code apps: apps, entities, record changes, imports and exports, forms and public submissions, triggers fired and skipped, AI fields, bundles and drafts (audit actions; never record values)' },
+  { pattern: 'file.*', description: 'File store (Sprint 26d): uploaded, updated, deleted (to the trash), restored, shared; and audit actions for uploads received, versions ready or rejected, downloads, shares, trash, purges and quotas' },
+  { pattern: 'group.*', description: 'Groups (Sprint 27c): created, updated, deleted; members added and removed; posts created and deleted; events created, updated and cancelled; and audit actions for requests, invitations, roles, RSVPs, check-ins and reminders' },
+  // 1.4.0, Sprint 28a (B-2301 to B-2304)
+  { pattern: 'channel.*', description: 'Customer-service channels: sessions started, escalated, closed and purged; customer messages received; replies held, sent and rejected; bounces; and audit actions for channels, secrets, held-reply decisions, exports and mail failures (never customer text)' },
+  { pattern: 'message.*', description: 'Messaging (Sprint 28b): sent, edited, deleted (ids only, never the text)' },
+  { pattern: 'messaging.*', description: 'Messaging (Sprint 28b): conversations created, changed and deleted; members added, removed and their roles and settings; messages sent, forwarded, edited, deleted, pinned; reactions; summaries (audit actions; never the text)' },
+  { pattern: 'post.*', description: 'Workspace feed posts (Sprint 28c): published, edited, deleted, held for review' },
+  // 1.4.0, Sprint 28c (B-2701 to B-2705)
+  { pattern: 'feed.*', description: 'Workspace feed: posts created, held, approved, rejected, updated and deleted; comments, reactions and bookmarks; digest settings, requests and digests written (audit actions; never the content)' },
+  // 1.4.0, Sprint 28b (B-2606 with B-2702)
+  { pattern: 'social.*', description: 'Social relations: blocks, mutes, follows, lists and contact rules made or removed, and admin views of a user’s relations (audit actions)' },
+  // 1.4.0, Sprint 26 (B-1901 to B-1907)
+  { pattern: 'moderation.*', description: 'Moderation checks, reports, actions on objects, appeals, sanctions, review queues, providers and dead letters (audit actions; never the content)' },
+  // 1.4.0, Sprint 25c (B-1704 to B-1706)
+  { pattern: 'vault.*', description: 'Secrets vault: secrets, transit keys, policies, database leases and rotation notices (audit actions; never values)' },
+  // 1.5.0, Sprint 30 (B-3101 to B-3103)
+  { pattern: 'dav.*', description: 'CalDAV and CardDAV: app passwords created and revoked; personal calendars and address books created, changed and deleted; objects created, updated, copied, moved and deleted; properties changed (audit actions; never the content)' },
+  // 1.5.0, Sprint 30 (B-3701 to B-3703)
+  { pattern: 'memory.*', description: 'Memory: added, edited, proposed, accepted, rejected, merged, forgotten and exported; proposals refused by the memory checkpoint, extraction fallbacks to the rules, consolidation runs, merge and expiry proposals and their decisions, settings changes and reindexes (audit actions; never the text)' },
+  // 1.5.0, Sprint 31 (B-2901 to B-2905, B-3004)
+  { pattern: 'pds.*', description: 'The AT-Protocol PDS: hosting enabled, disabled and its settings; accounts created, deactivated, activated, taken down, restored and their handles; app passwords, sessions, invite codes and service tokens; repo commits and imports (counts, never record content); blobs stored and rejected by the scan; PLC operations signed and submitted; relays asked to crawl; feed generator records published and withdrawn (audit actions)' },
+  // 1.5.0, Sprint 30 (B-3801 to B-3803)
+  { pattern: 'import.*', description: 'Imports: repositories proposed, confirmed, rejected, updated, enabled, disabled, deleted and harvested; gates accepted; imports requested, refused, completed, failed, cancelled and retried; licence exceptions requested, granted and refused; the licence allow-list and the import quota (audit actions; never credentials)' },
+  // 1.9.99-final, Sprints 56 to 58 (B-10701, B-10602)
+  { pattern: 'cloud.*', description: 'Cloud accounts, credentials, proposals, deployments, plans, applies, resources, drift, destroys and orphans; since Sprint 58 budgets set and removed, budget alerts at 50, 80 and 100 % of actual and forecast spend (cloud.budget.alert) and budget overrides proposed, approved, rejected, withdrawn, revoked and expired (audit actions; never a credential)' }
+];
+
+const id26 = { type: 'string', pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' };
+const str = (max = 200) => ({ type: 'string', maxLength: max });
+const nullable = (s: JsonSchema) => ({ anyOf: [s, { type: 'null' }] });
+const obj = (properties: Record<string, JsonSchema>, required: string[] = Object.keys(properties), extra = false): JsonSchema => ({ type: 'object', properties, required, additionalProperties: extra });
+const label = { type: 'string', enum: [...LABELS] };
+const ms = { type: 'integer', minimum: 0 };
+const isoTime = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$' };
+
+const job = obj({ id: str(64), type: str(120), state: { type: 'string', enum: ['succeeded', 'failed', 'cancelled'] }, error: nullable({ type: 'string' }) });
+const flag = obj({ flag: { type: 'string', pattern: '^F-\\d+$' }, id: str(64), action: str(40), severity: str(40), checkpoint: str(60) });
+const approval = {
+  oneOf: [
+    obj({ kind: { const: 'workflow' }, workflow: str(64), run: str(64), step: str(120), role: str(60), dueAt: nullable(ms) }),
+    obj({ kind: { const: 'agent' }, run: str(64), agent: str(200) })
+  ]
+};
+// Domain events (files emitted since Sprint 26d, records and groups since Sprint 27, messages since Sprint 28b, posts since Sprint 28c, the others reserved): ids and names only; content stays in the
+// tenant, sealed, and is fetched through the API.
+const record = (extra: Record<string, JsonSchema> = {}) => obj({ app: id26, entity: str(120), record: id26, workspace: nullable(id26), actor: nullable(id26), ...extra });
+const file = (extra: Record<string, JsonSchema> = {}) => obj({ file: id26, folder: nullable(id26), workspace: id26, version: { type: 'integer', minimum: 1 }, actor: nullable(id26), ...extra });
+const group = (extra: Record<string, JsonSchema> = {}) => obj({ group: id26, workspace: id26, actor: nullable(id26), ...extra });
+const channel = (extra: Record<string, JsonSchema> = {}) => obj({ channel: id26, session: id26, workspace: id26, ...extra });
+const message = (extra: Record<string, JsonSchema> = {}) => obj({ conversation: id26, message: id26, actor: nullable(id26), ...extra });
+const POST_BASE = ['post', 'feed', 'workspace', 'group', 'actor'];
+/** 1.6.0 (B-4901): `visibility` and `quoteOf` are optional (added in 1.6.0; older consumers ignore them). */
+const post = (extra: Record<string, JsonSchema> = {}) => obj({ post: id26, feed: { type: 'string', enum: ['workspace', 'group', 'user'] }, workspace: id26, group: nullable(id26), actor: nullable(id26), visibility: { type: 'string', enum: ['public', 'workspace', 'unlisted'] }, quoteOf: id26, ...extra }, [...POST_BASE, ...Object.keys(extra)]);
+
+const flagActions: [string, string][] = [
+  ['created', 'A rule, a fail-open decision or a report raised a flag'],
+  ['confirmed', 'A reviewer confirmed a flag'],
+  ['dismissed', 'A reviewer dismissed a flag'],
+  ['approved', 'A reviewer approved a held prompt or answer'],
+  ['rejected', 'A reviewer rejected a held prompt or answer'],
+  ['escalated', 'A flag moved up a review level'],
+  ['reassigned', 'A flag was handed to another reviewer'],
+  ['breached', 'A flag passed its review deadline'],
+  ['eval', 'A flag was added to an evaluation set'],
+  // 1.4.0, Sprint 26 (B-1903)
+  ['reopened', 'An upheld appeal put a decided flag back in the queue'],
+  // 1.7.0, Sprint 41 (B-9401)
+  ['withdrawn', 'A hold flag was closed without a reviewer: its sender withdrew what waited, or it went away']
+];
+
+export const EVENT_TYPES: EventType[] = [
+  ...(['succeeded', 'failed', 'cancelled'] as const).map((st) => ({ type: `job.${st}`, group: 'job.*', version: 1, since: '1.1.0', status: 'emitted' as const, description: `A job ${st}`, data: job })),
+  ...flagActions.map(([a, d]) => ({ type: `flag.${a}`, group: 'flag.*', version: 1, since: '1.1.0', status: 'emitted' as const, description: d, data: flag })),
+  { type: 'approval.requested', group: 'approval.*', version: 1, since: '1.1.0', status: 'emitted', description: 'An agent run or a workflow waits for an approval', data: approval },
+  { type: 'record.created', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was created', data: record() },
+  { type: 'record.updated', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was updated', data: record({ fields: { type: 'array', items: str(120), maxItems: 500 } }) },
+  { type: 'record.deleted', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A record was deleted', data: record() },
+  { type: 'record.transitioned', group: 'record.*', version: 1, since: '1.4.0', status: 'emitted', description: "A record moved through its entity's state machine", data: record({ from: str(60), to: str(60) }) },
+  { type: 'file.uploaded', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file passed quarantine and was stored', data: file() },
+  { type: 'file.updated', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A new version of a file was stored', data: file() },
+  { type: 'file.deleted', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file went to the trash', data: file() },
+  { type: 'file.restored', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file version was restored (and scanned again)', data: file({ from: { type: 'integer', minimum: 1 } }) },
+  { type: 'file.shared', group: 'file.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A file was shared with a user, group, workspace or link', data: file({ with: { type: 'string', enum: ['user', 'group', 'workspace', 'link'] } }) },
+  { type: 'group.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was created', data: group() },
+  { type: 'group.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was changed', data: group() },
+  { type: 'group.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group was deleted', data: group() },
+  { type: 'group.member.added', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A user joined a group', data: group({ user: id26, role: str(40) }) },
+  { type: 'group.member.removed', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A user left or was removed from a group', data: group({ user: id26 }) },
+  // Sprint 27c (B-2502, B-2505)
+  { type: 'group.post.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was written in a group', data: group({ post: id26 }) },
+  { type: 'group.post.deleted', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group post was deleted by its author or a moderator', data: group({ post: id26 }) },
+  { type: 'group.event.created', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An event was planned in a group', data: group({ event: id26, startsAt: isoTime }) },
+  { type: 'group.event.updated', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was changed', data: group({ event: id26, startsAt: isoTime }) },
+  { type: 'group.event.cancelled', group: 'group.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A group event was cancelled and its attendees told', data: group({ event: id26, attendees: { type: 'integer', minimum: 0 } }) },
+  { type: 'channel.session.started', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A customer session started (chat, or a new email thread)', data: channel({ customer: { type: 'string', enum: ['anonymous', 'identified', 'email'] } }) },
+  { type: 'channel.session.escalated', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A session went to the reviewers (the customer asked for a person, a guardrail asked for review, or the model failed)', data: channel({ reason: str(200) }) },
+  { type: 'channel.session.closed', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A session was closed by the customer or a reviewer', data: channel() },
+  { type: 'channel.session.assigned', group: 'channel.*', version: 1, since: '1.8.0', status: 'emitted', description: 'A session was handed to a person (by a reviewer, or by SLA routing), or back to nobody', data: channel({ assignee: nullable(id26) }) },
+  { type: 'channel.session.purged', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: "Sessions past their channel's retention period were deleted", data: obj({ channel: id26, workspace: id26, sessions: { type: 'integer', minimum: 1 } }) },
+  { type: 'channel.message.received', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A customer message was taken into a session', data: channel({ message: id26, via: { type: 'string', enum: ['web', 'email'] } }) },
+  { type: 'channel.reply.held', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An answer waits for a reviewer before the customer sees it', data: channel({ message: id26, flag: { type: 'string', pattern: '^F-\\d+$' } }) },
+  { type: 'channel.reply.sent', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'An answer reached the customer (as written, as edited by a reviewer, or from a person)', data: channel({ message: id26, edited: { type: 'boolean' } }) },
+  { type: 'channel.reply.rejected', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A reviewer withdrew a held answer', data: channel({ message: id26 }) },
+  { type: 'channel.bounce.recorded', group: 'channel.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A reply bounced or drew a complaint', data: obj({ channel: id26, session: nullable(id26), workspace: id26, kind: { type: 'string', enum: ['hard', 'soft', 'complaint'] } }) },
+  { type: 'message.sent', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was sent', data: message({ thread: nullable(id26) }) },
+  { type: 'message.edited', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was edited', data: message() },
+  { type: 'message.deleted', group: 'message.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A message was deleted', data: message() },
+  { type: 'post.created', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was published', data: post() },
+  { type: 'post.updated', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was edited', data: post() },
+  { type: 'post.deleted', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post was deleted', data: post() },
+  { type: 'post.held', group: 'post.*', version: 1, since: '1.4.0', status: 'emitted', description: 'A post waits in the flag queue before publishing', data: post({ flag: { type: 'string', pattern: '^F-\\d+$' } }) }
+];
+
+/** Audit actions: the data is the audit entry (without the tenant's content, which audit entries never carry). */
+export const AUDIT_EVENT: Omit<EventType, 'type' | 'group'> & { pattern: string } = {
+  pattern: '<audit action>',
+  version: 1,
+  since: '1.1.0',
+  status: 'emitted',
+  description: "Every other type is an audit action: the event is the tenant's audit entry. A change audited under the name of a named type (a reviewer confirming a flag appends flag.confirmed) is delivered twice, once with each data shape; tell them apart by data.hash, which only audit entries carry",
+  data: obj(
+    {
+      seq: { type: 'integer', minimum: 1 },
+      action: str(200),
+      kind: str(40),
+      actor: obj({ user: nullable(str(64)), username: nullable(str(320)), service: nullable(str(120)) }),
+      target: { type: 'object' },
+      detail: nullable({ type: 'object' }),
+      decision: nullable({ type: 'object' }),
+      traceId: nullable(str(64)),
+      hash: { type: 'string', pattern: '^[0-9a-f]{64}$' }
+    },
+    ['seq', 'action', 'kind', 'actor', 'target', 'hash']
+  )
+};
+
+/** The body of every delivery: what `WebhookService.queue` sends. */
+export const ENVELOPE: JsonSchema = obj({
+  id: str(120),
+  type: { type: 'string', pattern: '^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)*$', maxLength: 120 },
+  tenant: str(64),
+  label,
+  createdAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$' },
+  data: { type: 'object' }
+});
+
+const byType = new Map(EVENT_TYPES.map((t) => [t.type, t]));
+
+/** The catalogue entry for a type: a named event, or the audit-action schema for anything else. */
+export function entryFor(type: string): { type: string; version: number; status: EventType['status']; data: JsonSchema; audit: boolean } {
+  const named = byType.get(type);
+  if (named) return { type, version: named.version, status: named.status, data: named.data, audit: false };
+  return { type, version: AUDIT_EVENT.version, status: 'emitted', data: AUDIT_EVENT.data, audit: true };
+}
+
+/** Does a subscription pattern name something in the catalogue (a group, a named type, or a prefix of one)? */
+export function knownPattern(pattern: string): boolean {
+  if (pattern === '*') return true;
+  if (EVENT_GROUPS.some((g) => g.pattern === pattern)) return true;
+  if (byType.has(pattern)) return true;
+  if (pattern.endsWith('.*')) {
+    const prefix = pattern.slice(0, -1);
+    return EVENT_TYPES.some((t) => t.type.startsWith(prefix)) || EVENT_GROUPS.some((g) => g.pattern !== '*' && prefix.startsWith(g.pattern.slice(0, -1)));
+  }
+  // An exact audit action under a known group (`webhook.created`).
+  return EVENT_GROUPS.some((g) => g.pattern.endsWith('.*') && pattern.startsWith(g.pattern.slice(0, -1)));
+}
+
+/** The catalogue as served at `GET /api/events/catalogue`. */
+export function catalogue() {
+  return {
+    version: CATALOGUE_VERSION,
+    envelope: ENVELOPE,
+    groups: EVENT_GROUPS,
+    types: EVENT_TYPES.map((t) => ({ type: t.type, group: t.group, version: t.version, since: t.since, status: t.status, description: t.description, schema: t.data })),
+    auditActions: { version: AUDIT_EVENT.version, since: AUDIT_EVENT.since, description: AUDIT_EVENT.description, schema: AUDIT_EVENT.data }
+  };
+}
+
+const ajv = new Ajv({ strict: false, allErrors: true });
+const compiled = new Map<JsonSchema, ValidateFunction>();
+const validator = (schema: JsonSchema): ValidateFunction => {
+  let v = compiled.get(schema);
+  if (!v) {
+    v = ajv.compile(schema);
+    compiled.set(schema, v);
+  }
+  return v;
+};
+
+export interface EventEnvelope {
+  id: string;
+  type: string;
+  tenant: string;
+  label: string;
+  createdAt: string;
+  data: Record<string, unknown>;
+}
+
+/** Validates an event (envelope and data) against the catalogue; returns the problems, empty when it conforms. */
+export function validateEvent(e: unknown): string[] {
+  const env = validator(ENVELOPE);
+  if (!env(e)) return (env.errors ?? []).map((x) => `envelope${x.instancePath} ${x.message ?? 'is invalid'}`);
+  const ev = e as EventEnvelope;
+  const entry = entryFor(ev.type);
+  const v = validator(entry.data);
+  if (v(ev.data)) return [];
+  const problems = (v.errors ?? []).map((x) => `${ev.type} data${x.instancePath} ${x.message ?? 'is invalid'}`);
+  // A change that is audited under the same name as a named event (a reviewer confirming a flag appends
+  // `flag.confirmed`) is also delivered as an audit action: the audit entry is valid data for that type too.
+  if (!entry.audit && validator(AUDIT_EVENT.data)(ev.data)) return [];
+  return problems;
+}
+
+/**
+ * The catalogue at run time: every event the webhook fan-out sees is checked. A mismatch never stops a delivery (the
+ * receiver still gets what happened); it is counted in `exprsn_event_schema_violations_total` and logged, so a schema
+ * that drifted from the code shows up in the dashboards and the test suite.
+ */
+export class EventCatalogue {
+  readonly violations: client.Counter<'type'>;
+  readonly checked: client.Counter<'kind'>;
+
+  constructor(registry: Registry, private readonly onViolation: (type: string, problems: string[]) => void = () => undefined) {
+    const existing = registry.getSingleMetric('exprsn_event_schema_violations_total') as client.Counter<'type'> | undefined;
+    this.violations = existing ?? new client.Counter({ name: 'exprsn_event_schema_violations_total', help: 'Emitted events that did not match their catalogue schema', labelNames: ['type'], registers: [registry] });
+    this.checked = (registry.getSingleMetric('exprsn_events_emitted_total') as client.Counter<'kind'> | undefined) ?? new client.Counter({ name: 'exprsn_events_emitted_total', help: 'Events checked against the catalogue, by kind', labelNames: ['kind'], registers: [registry] });
+  }
+
+  check(e: EventEnvelope): string[] {
+    const problems = validateEvent(e);
+    this.checked.inc({ kind: entryFor(e.type).audit ? 'audit' : 'named' });
+    if (problems.length) {
+      this.violations.inc({ type: e.type.slice(0, 120) });
+      this.onViolation(e.type, problems);
+    }
+    return problems;
+  }
+}

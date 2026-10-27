@@ -1,0 +1,440 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # Sprint 20 (B-1204): a version tag also publishes the signed image with provenance and attaches the SBOMs.
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Console scripts parse
+        run: for f in web/js/*.js web/js/screens/*.js; do node --check "$f"; done
+
+  e2e:
+    name: Console end-to-end (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            e2e/package-lock.json
+      # The suite starts the real server in-process (e2e/server.ts through tsx), so it needs the workspace's modules.
+      - run: npm ci
+      - name: Install the suite
+        working-directory: e2e
+        run: npm ci
+      # Twice on 2026-10-07 the combined install sat silent until the job's 40 minutes ran out. Each part now has its own
+      # time limit and up to three tries, so a stuck download fails fast and visibly instead of cancelling the job.
+      - name: Install Chromium's system packages
+        working-directory: e2e
+        timeout-minutes: 15
+        run: |
+          for i in 1 2 3; do timeout 300 npx playwright install-deps chromium && exit 0; echo "install-deps attempt $i failed or timed out"; sleep 10; done; exit 1
+      - name: Install Chromium
+        working-directory: e2e
+        timeout-minutes: 15
+        run: |
+          for i in 1 2 3; do timeout 300 npx playwright install chromium && exit 0; echo "browser download attempt $i failed or timed out"; sleep 10; done; exit 1
+      - name: Run
+        working-directory: e2e
+        run: npx playwright test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14
+
+  interop:
+    # 1.5.0, Sprint 31 (B-2906): the PDS against the reference AT-Protocol development environment (@atproto/dev-env:
+    # the PLC directory and the Bluesky AppView with its data plane). A post written to Exprsn-AI's PDS must appear in
+    # the AppView, which reads the PDS's subscribeRepos and verifies every commit.
+    name: AT-Protocol interop (reference PLC and AppView)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: interop
+          POSTGRES_PASSWORD: interop
+          POSTGRES_DB: interop
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U interop"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            interop/package-lock.json
+      # The run starts the real server in-process (interop/run.ts through tsx), so it needs the workspace's modules.
+      - run: npm ci
+      - name: Install the reference environment
+        working-directory: interop
+        run: npm ci
+      - name: Run
+        env:
+          INTEROP_PG_URL: postgres://interop:interop@127.0.0.1:5432/interop
+        run: npx --prefix interop tsx interop/run.ts --base-port 55601
+
+  integration:
+    name: Integration against PostgreSQL, MySQL, OpenLDAP and Redis
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_USER: exprsn, POSTGRES_PASSWORD: exprsn, POSTGRES_DB: exprsn_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U exprsn" --health-interval 3s --health-timeout 3s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: exprsn_test, MYSQL_USER: exprsn, MYSQL_PASSWORD: exprsn }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proot" --health-interval 3s --health-timeout 3s --health-retries 40
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-timeout 3s --health-retries 20
+      mongodb:
+        image: mongo:8
+        env: { MONGO_INITDB_ROOT_USERNAME: root, MONGO_INITDB_ROOT_PASSWORD: root }
+        ports: ["27017:27017"]
+        options: --health-cmd "mongosh --quiet -u root -p root --eval 'db.runCommand({ping:1}).ok'" --health-interval 3s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - name: Start OpenLDAP with the development seed
+        run: |
+          docker run -d --name openldap -p 389:389 \
+            -e LDAP_ORGANISATION=Northwind -e LDAP_DOMAIN=northwind.local -e LDAP_ADMIN_PASSWORD=dev-ldap-admin -e LDAP_TLS=false \
+            -v "$PWD/deploy/docker/ldap/seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-seed.ldif:ro" \
+            osixia/openldap:1.5.0 --copy-service
+          for i in $(seq 1 40); do
+            docker exec openldap ldapsearch -x -H ldap://localhost -b ou=people,dc=northwind,dc=local -D cn=admin,dc=northwind,dc=local -w dev-ldap-admin uid=mokafor >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker logs openldap; exit 1
+      - name: Turn on logical replication in PostgreSQL (knowledge replication test)
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U exprsn -d exprsn_test -c "ALTER SYSTEM SET wal_level = logical"
+          docker restart ${{ job.services.postgres.id }}
+          for i in $(seq 1 40); do docker exec ${{ job.services.postgres.id }} pg_isready -U exprsn >/dev/null 2>&1 && exit 0; sleep 1; done
+          exit 1
+      # B-3605: GreenMail as the email channel's IMAP server, with a throwaway CA and a certificate for localhost
+      # (the adapter requires TLS and verifies the host name); mail is delivered to it by SMTP during the test.
+      - name: Start GreenMail (IMAP) with a test certificate
+        run: server/test/integration/greenmail.sh "$RUNNER_TEMP/greenmail" greenmail
+      - run: npm ci
+      - run: npm run test:integration -w server
+        env:
+          TEST_IMAP_URL: imaps://help%40shop.example:imap-pw@127.0.0.1:3993/INBOX
+          TEST_IMAP_SMTP_URL: smtp://127.0.0.1:3025
+          NODE_EXTRA_CA_CERTS: ${{ runner.temp }}/greenmail/ca.pem
+          TEST_PG_URL: postgres://exprsn:exprsn@127.0.0.1:5432/exprsn_test
+          TEST_MYSQL_URL: mysql://exprsn:exprsn@127.0.0.1:3306/exprsn_test
+          TEST_MYSQL_ADMIN_URL: mysql://root:root@127.0.0.1:3306/exprsn_test
+          TEST_LDAP_URL: ldap://127.0.0.1:389
+          TEST_LDAP_INSECURE: "true"
+          TEST_LDAP_BIND_PW: dev-ldap-admin
+          TEST_REDIS_URL: redis://127.0.0.1:6379
+          TEST_MONGODB_URL: mongodb://root:root@127.0.0.1:27017/?authSource=admin
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:ci .
+      - name: Starts and answers health checks
+        run: |
+          docker run -d --name app -p 8080:8080 \
+            -e NODE_ENV=development -e PUBLIC_URL=http://localhost:8080 -e DB_CLIENT=sqlite \
+            -e SESSION_SECRET="$(openssl rand -hex 32)" -e DATA_KEY="$(openssl rand -base64 32)" exprsn-ai:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 1; done
+          docker logs app; exit 1
+
+  supply-chain:
+    name: Dependency audit and SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      # Production dependencies only; high and critical advisories fail the build.
+      - name: npm audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Install (no install scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      # Sprint 20 (B-1204): every installed package's registry signature (and provenance attestation, where the
+      # package has one) must verify against the registry's keys; an invalid signature fails the build.
+      - name: npm audit signatures
+        run: npm audit signatures
+      - name: CycloneDX SBOM of the npm workspace
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file sbom.cdx.json
+          node -e "const s=require('./sbom.cdx.json'); console.log('CycloneDX', s.specVersion, (s.components||[]).length, 'top-level components')"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-npm
+          path: sbom.cdx.json
+          retention-days: 90
+
+  image-scan:
+    name: Container image scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f deploy/docker/Dockerfile -t exprsn-ai:scan .
+      # Fixed CRITICAL and HIGH findings in the OS packages or the bundled npm modules fail the build.
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: exprsn-ai:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: CycloneDX SBOM of the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: always()
+        with:
+          image-ref: exprsn-ai:scan
+          scan-type: image
+          format: cyclonedx
+          output: sbom-image.cdx.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sbom-image
+          path: sbom-image.cdx.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # Sprint 20 (B-1204): on pushes to main and on version tags, the image is pushed to GHCR, given a SLSA build
+  # provenance attestation and a keyless cosign signature (Sigstore, through the workflow's OIDC token), and both are
+  # verified before the job passes. Pull requests (no OIDC token, no registry access) skip this job.
+  publish-image:
+    name: Publish, attest and sign the image
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [check, image, image-scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: push
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="${GITHUB_REF_NAME//\//-}"
+          docker build -f deploy/docker/Dockerfile -t "$image:$tag" -t "$image:sha-${GITHUB_SHA::12}" .
+          docker push "$image:$tag"
+          docker push "$image:sha-${GITHUB_SHA::12}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$tag" | cut -d@ -f2)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: SLSA build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image (keyless)
+        run: cosign sign --yes "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+      # The signature must have been made by this workflow on this repository, through GitHub's OIDC issuer.
+      - name: Verify the signature and the provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cosign verify "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}" \
+            --certificate-identity "https://github.com/${{ github.workflow_ref }}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          gh attestation verify "oci://${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}" \
+            --repo "${{ github.repository }}" --signer-workflow "${{ github.repository }}/.github/workflows/ci.yml"
+
+  # Sprint 20 (B-1204): a version tag gets a GitHub release with both CycloneDX SBOMs attached.
+  release-sboms:
+    name: Attach the SBOMs to the release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [supply-chain, image-scan, publish-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sbom-*
+          merge-multiple: true
+          path: sboms
+      - name: Create the release if needed and upload the SBOMs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l sboms
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" sboms/sbom.cdx.json sboms/sbom-image.cdx.json --clobber
+
+  helm:
+    name: Helm chart lint and render
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.6.7
+      # From the release's CHECKSUMS file (kubeconform-linux-amd64.tar.gz); update together with the version.
+      KUBECONFORM_SHA256: 95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.16.4 }
+      - name: Install kubeconform
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/kubeconform.tar.gz" "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$RUNNER_TEMP/bin" kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Lint, render and validate every CI values file
+        run: |
+          chart=deploy/helm/exprsn-ai
+          for f in "$chart"/ci/*.yaml; do
+            echo "::group::$f"
+            helm lint "$chart" -f "$f" --strict
+            helm template ci "$chart" -f "$f" | kubeconform -strict -summary -kubernetes-version 1.30.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            echo "::endgroup::"
+          done
+      - name: Refuses unsafe values
+        run: |
+          chart=deploy/helm/exprsn-ai
+          # Several replicas without Redis, SQLite, and a plain http:// address in production must not render.
+          for bad in secrets.REDIS_URL.name= config.database.client=sqlite config.publicUrl=http://ai.example.internal; do
+            if helm template ci "$chart" -f "$chart/ci/default-values.yaml" --set "$bad" >/dev/null 2>&1; then
+              echo "The chart rendered with --set $bad"; exit 1
+            fi
+          done
+
+  observability:
+    name: Alert rules and dashboards
+    runs-on: ubuntu-latest
+    env:
+      # prom/prometheus v3.5.0 (LTS), pinned by digest; update the tag and the digest together.
+      PROMETHEUS_IMAGE: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Runs only when the rules exist (deploy/observability/prometheus); promtool comes from the official image.
+      - name: promtool check rules and rule unit tests
+        if: hashFiles('deploy/observability/prometheus/*.rules.yml') != ''
+        run: |
+          docker run --rm --network none -v "$PWD/deploy/observability/prometheus:/rules:ro" -w /rules \
+            --entrypoint /bin/promtool "$PROMETHEUS_IMAGE" check rules exprsn-ai.rules.yml exprsn-ai-cloud.rules.yml
+          docker run --rm --network none -v "$PWD/deploy/observability/prometheus:/rules:ro" -w /rules \
+            --entrypoint /bin/promtool "$PROMETHEUS_IMAGE" test rules exprsn-ai.rules.test.yml exprsn-ai-cloud.rules.test.yml
+      - name: Dashboards are valid JSON
+        if: hashFiles('deploy/observability/grafana/*.json') != ''
+        run: for f in deploy/observability/grafana/*.json; do jq -e '.uid and .title and (.panels | length > 0)' "$f" >/dev/null || { echo "$f"; exit 1; }; done
+
+  litmus:
+    name: WebDAV litmus (file store)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      # B-3203: litmus 0.17 from its release tarball (pinned by digest), built with its bundled neon and expat.
+      - name: Build litmus
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libexpat1-dev
+          curl -fsSL -o /tmp/litmus.tar.gz https://notroj.github.io/litmus/litmus-0.17.tar.gz
+          echo "686c272ce757cc9d9e83f07ae16ecc83393172b1205559765528d9755eb0221c  /tmp/litmus.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/litmus.tar.gz -C /tmp
+          cd /tmp/litmus-0.17 && ./configure --prefix=/tmp/litmus --with-included-neon --without-ssl && make && make install
+      # basic, copymove and locks are the done-when of B-3203; props and http run too.
+      - name: Run litmus against /dav/files
+        working-directory: server
+        run: npx tsx test/dav-litmus.ts --litmus /tmp/litmus/bin/litmus --tests "basic copymove props locks http"
+
+  loadtest:
+    name: Load tests (in-process)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Lint the load test
+        working-directory: server
+        run: npx eslint loadtest
+      # 50 users on 64 fake slots; the thresholds are looser than the 1.0 targets in docs/loadtest.md because shared
+      # runners vary. The summary is kept as an artifact for comparison between runs. The fake answers end a sentence
+      # every 12 words: since 1.1.0 output is screened a sentence at a time, and an answer with no sentence ends is only
+      # released at the 240-character fallback, which measured the fake text's shape rather than the platform.
+      - name: Run
+        working-directory: server
+        shell: bash # -eo pipefail: the load test's exit code survives the tee
+        run: |
+          npx tsx loadtest/stream.ts --users 50 --messages 4 --parallel 16 --instances 4 --sentence-words 12 \
+            --max-error-rate 0 --max-p95-ttft-ms 500 --max-p99-ttft-ms 1000 --json | tee loadtest-summary.json
+      # B-2105: webhook fan-out, record writes, OCSP and firehose against the application in its own process (SQLite in
+      # memory, the signer as a process). The ci target set is the reference targets in docs/loadtest.md with latencies
+      # times three and rates divided by three, for shared runners.
+      - name: Run the platform scenarios
+        working-directory: server
+        shell: bash
+        run: |
+          npx tsx loadtest/platform.ts --duration 10 --posts 10000 --targets ci --json | tee loadtest-platform.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: loadtest-summary
+          path: |
+            server/loadtest-summary.json
+            server/loadtest-platform.json
+          if-no-files-found: ignore

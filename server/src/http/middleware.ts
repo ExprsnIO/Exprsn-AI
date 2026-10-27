@@ -1,0 +1,345 @@
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { parseCookie } from 'cookie';
+import type { z } from 'zod';
+import { isLabel } from '../authz/labels.js';
+import { authorize, effectivePermissions, type Principal, type Resource } from '../authz/policy.js';
+import type { Workspace } from '../repos/tenants.js';
+import { rolesRequireMfa, type Permission } from '../authz/permissions.js';
+import { actorFrom } from '../audit/chain.js';
+import type { SessionRow, SessionStage } from '../identity/sessions.js';
+import type { ApiKeyRow } from '../identity/apikeys.js';
+import { AppEmbeds, type EmbedSessionRow } from '../apps/embeds.js';
+import { underApps } from '../apps/key-scope.js';
+import type { Services } from '../services.js';
+import { badRequest, forbidden, HttpProblem, tooManyRequests, unauthorized } from './problem.js';
+import { Limiter } from '../platform/ratelimit.js';
+import { DpopNonceError } from '../federation/oidc.js';
+import { sanctionRefusal } from '../moderation/refusal.js';
+
+/** Failed bearer tokens and API keys allowed per address per minute before the address gets 429 (B-111). */
+export const BAD_BEARER_PER_MINUTE = 20;
+
+declare module 'express-serve-static-core' {
+  interface Request {
+    traceId: string;
+    principal?: Principal;
+    authSession?: SessionRow;
+    apiKey?: ApiKeyRow;
+    /** 1.6.0 (B-8702): the embedded session the request was made with (a bearer `exe_…` token). */
+    embedSession?: EmbedSessionRow;
+  }
+}
+
+/** 1.5.0 (B-3304): properties `requireAuth` and `requirePermission` set on the handlers they return. */
+export const AUTH_TAG = Symbol.for('exprsn.requiresAuth');
+export const PERMISSION_TAG = Symbol.for('exprsn.permission');
+export const ANY_PERMISSION_TAG = Symbol.for('exprsn.anyPermission');
+
+/** 1.5.0 (B-3304): marks a handler that passes when the caller holds any one of `perms` (as the registry declares it). */
+export const declaresAnyOf = <T extends RequestHandler>(handler: T, perms: readonly Permission[]): T => Object.assign(handler, { [ANY_PERMISSION_TAG]: [...perms] });
+
+export const cookieName = (secure: boolean): string => (secure ? '__Host-exai_sid' : 'exai_sid');
+
+export function setSessionCookie(res: Response, s: Services, token: string, expiresAt: number): void {
+  res.cookie(cookieName(s.cfg.COOKIE_SECURE), token, {
+    httpOnly: true,
+    secure: s.cfg.COOKIE_SECURE,
+    sameSite: 'strict',
+    path: '/',
+    expires: new Date(expiresAt)
+  });
+}
+
+export function clearSessionCookie(res: Response, s: Services): void {
+  res.clearCookie(cookieName(s.cfg.COOKIE_SECURE), { httpOnly: true, secure: s.cfg.COOKIE_SECURE, sameSite: 'strict', path: '/' });
+}
+
+export const sessionTokenFrom = (cookieHeader: string | undefined, secure: boolean): string | undefined =>
+  cookieHeader ? parseCookie(cookieHeader)[cookieName(secure)] : undefined;
+
+/** Builds the principal for a user, or null when the user or tenant is not active. */
+export async function loadPrincipal(
+  s: Services,
+  tenantId: string,
+  userId: string,
+  via: { session?: SessionRow; apiKey?: ApiKeyRow }
+): Promise<Principal | null> {
+  // 1.5.0 (B-3302): custom roles resolve like built-in ones only once the roles in force are loaded.
+  const [user, tenant] = await Promise.all([s.users.get(tenantId, userId), s.tenants.byId(tenantId), s.customRoles.ready]);
+  if (!user || user.state !== 'active' || !tenant || tenant.state !== 'active') return null;
+  // Sprint 26 (B-1904): work done as a sanctioned user in the background (schedules, plugins) stops too.
+  if (!via.session && !via.apiKey && (await s.moderation.blocking(tenantId, userId))) return null;
+  return {
+    kind: via.apiKey ? 'api_key' : 'user',
+    userId: user.id,
+    tenantId: tenant.id,
+    tenantSlug: tenant.slug,
+    username: user.username,
+    displayName: user.display_name,
+    roles: await s.users.roleIds(user.id),
+    clearance: isLabel(user.clearance) ? user.clearance : 'public',
+    scopes: via.apiKey ? via.apiKey.scopes : null,
+    sessionId: via.session?.id ?? null,
+    apiKeyId: via.apiKey?.id ?? null,
+    // API keys can only be created from an MFA-verified session when the owner needs MFA.
+    mfa: via.apiKey ? true : via.session?.mfa_verified_at != null
+  };
+}
+
+/** Workspaces the principal may act in: all of them for tenant admins, else tenant-wide ones and memberships. */
+export async function workspacesFor(s: Services, p: Principal): Promise<Workspace[]> {
+  if (effectivePermissions(p).has('tenant:manage')) return s.tenants.workspaces(p.tenantId);
+  return s.tenants.workspacesForUser(p.tenantId, p.userId);
+}
+
+/** Picks the requested workspace when the principal may use it, otherwise their first one (or none). */
+export async function resolveWorkspace(s: Services, p: Principal, requested: string | null | undefined): Promise<Workspace | null> {
+  const list = await workspacesFor(s, p);
+  return list.find((w) => w.id === requested) ?? list[0] ?? null;
+}
+
+/** Resolves the caller from a bearer API key or the session cookie. Never rejects: see requireAuth. */
+export function authenticate(s: Services): RequestHandler {
+  // Failed bearer attempts per address, in the shared counter store: guessing API keys or tokens gets 429 after 20.
+  const badBearer = new Limiter(s.counters, 'bearer-fail', BAD_BEARER_PER_MINUTE, 60_000);
+  const refuse = async (req: Request, problem: HttpProblem): Promise<never> => {
+    const r = await badBearer.consume(req.ip ?? 'unknown');
+    if (!r.allowed) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', r.resetMs / 1000);
+    throw problem;
+  };
+  // Sprint 26 (B-1904): a suspended or banned user is refused on every request, whatever the credential.
+  const sanctioned = async (req: Request): Promise<void> => {
+    const p = req.principal;
+    if (!p) return;
+    const b = await s.moderation.blocking(p.tenantId, p.userId);
+    if (b) throw sanctionRefusal(b);
+  };
+  return async (req, res, next) => {
+    // 1.7.0 (B-9202): sessions and API keys are keyed from the vault's platform scope; while it is closed after a
+    // failed start, no credential is looked at (fail closed).
+    const vault = s.sysKeys.status;
+    if (vault.state === 'failed') throw new HttpProblem(503, 'Vault unavailable', `The vault's platform scope is not open: ${vault.failure ?? 'unknown error'}.`, { extensions: { step: 'vault-system-scope' } });
+    const auth = req.headers.authorization;
+    if (auth) {
+      // An address over its limit is refused before the credential is even checked, so guessing stops paying off.
+      const held = await badBearer.blocked(req.ip ?? 'unknown');
+      if (held.blocked) throw tooManyRequests('Too many failed credentials from this address. Wait before trying again.', held.resetMs / 1000);
+      // Sprint 14: `DPoP <token>` with a DPoP proof header, for sender-constrained OAuth access tokens (RFC 9449).
+      const m = /^(Bearer|DPoP)\s+(\S+)$/i.exec(auth);
+      if (!m?.[2]) return refuse(req, unauthorized('Malformed Authorization header.'));
+      const scheme = m[1]!.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
+      m[1] = m[2];
+      if (scheme === 'dpop' && !m[1].startsWith('eyJ')) return refuse(req, unauthorized('The DPoP scheme is only for OAuth access tokens.'));
+      // 1.9.0 (B-184): an Exprsn platform CA token (base64url JSON, so `eyJ` without a JWT's dots). Accepted only by a
+      // tenant whose platform store opts in; an API credential like a key: no CSRF token, no step-up.
+      if (m[1].startsWith('eyJ') && !m[1].includes('.')) {
+        if (scheme === 'dpop') return refuse(req, unauthorized('The DPoP scheme is only for OAuth access tokens.'));
+        const r = await s.federation.platformTokens.authenticate(m[1], { tenant: req.header('x-exprsn-tenant') ?? null, ip: req.ip ?? null, traceId: req.traceId }, (tenantId, userId) => loadPrincipal(s, tenantId, userId, {}));
+        if (!r.ok) {
+          if (r.reason === 'platform_unavailable') throw r.problem;
+          return refuse(req, r.problem);
+        }
+        req.principal = r.principal;
+        r.principal.workspaceId = (await resolveWorkspace(s, r.principal, req.header('x-workspace')))?.id ?? null;
+        await sanctioned(req);
+        return next();
+      }
+      // OAuth access tokens from the OIDC provider (JWTs), narrowed to their scopes like API keys.
+      if (m[1].startsWith('eyJ')) {
+        // Sprint 17 (B-805): the proof's htu is checked against API_PUBLIC_URL when a proxy serves the API elsewhere,
+        // and with DPOP_NONCES every DPoP response carries the current nonce.
+        const apiBase = s.cfg.API_PUBLIC_URL ? s.cfg.API_PUBLIC_URL.replace(/\/+$/, '') : new URL(s.cfg.PUBLIC_URL).origin;
+        if (scheme === 'dpop' && s.cfg.DPOP_NONCES) res.setHeader('DPoP-Nonce', s.federation.oidc.dpopNonce());
+        const p = await s.federation.principalFromAccessToken(m[1], { scheme, dpop: { proof: req.header('dpop'), method: req.method, url: `${apiBase}${req.originalUrl}` } }).catch((err: unknown) => {
+          if (err instanceof DpopNonceError) throw new HttpProblem(401, 'Unauthorized', err.message, { extensions: { error: 'use_dpop_nonce' }, headers: { 'WWW-Authenticate': 'DPoP error="use_dpop_nonce", error_description="Resource server requires nonce in DPoP proof"', 'DPoP-Nonce': s.federation.oidc.dpopNonce() } });
+          throw err;
+        });
+        if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The access token is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+        req.principal = p;
+        p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+        await sanctioned(req);
+        return next();
+      }
+      // 1.6.0 (B-8702): an embedded session's token acts as the mapped user inside its app only.
+      if (m[1].startsWith('exe_')) {
+        const session = await s.apps.embeds.resolveSession(m[1]);
+        if (!session) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The embedded session is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+        if (!underApps(req.originalUrl)) throw forbidden('An embedded session acts inside its app only.', { step: 'scope' });
+        const p = await loadPrincipal(s, session.tenant_id, session.user_id, {});
+        if (!p) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The embedded session\'s user is disabled.', { extensions: { error: 'invalid_token' } }));
+        p.kind = 'api_key';
+        p.scopes = AppEmbeds.scopesFor(session);
+        p.mfa = false;
+        req.embedSession = session;
+        req.principal = p;
+        p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+        await sanctioned(req);
+        return next();
+      }
+      const key = await s.apiKeys.verify(m[1]);
+      if (!key) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The API key is invalid, expired or revoked.', { extensions: { error: 'invalid_token' } }));
+      // 1.6.0 (B-8601): a key limited to one app is accepted under /api/apps only; the apps routers check the app.
+      if (key.app_scope && !underApps(req.originalUrl)) throw forbidden('This API key is limited to one app and is accepted under /api/apps only.', { step: 'scope' });
+      // Sprint 20 (B-1203): a key that requires signed requests is checked by /v1 only, so it is accepted nowhere else.
+      if (key.signature_key && !/^\/v1(\/|$|\?)/.test(req.originalUrl)) return refuse(req, new HttpProblem(401, 'Unauthorized', 'This API key requires signed requests, which only /v1 checks; it is not accepted here.', { extensions: { error: 'invalid_token' } }));
+      let p = await loadPrincipal(s, key.tenant_id, key.user_id, { apiKey: key });
+      if (!p) throw unauthorized('The key owner is disabled.');
+      // 1.6.0 (B-7701): a key minted for an agent identity acts as the agent on the owner's behalf, within both grants.
+      if (key.agent_id) {
+        const identity = await s.agentIdentities.byId(key.agent_id);
+        if (!identity || !identity.enabled || identity.tenant_id !== key.tenant_id) return refuse(req, new HttpProblem(401, 'Unauthorized', 'The agent identity behind this key is off or gone.', { extensions: { error: 'invalid_token' } }));
+        p = s.agentIdentities.narrowTo(p, identity);
+      }
+      req.apiKey = key;
+      req.principal = p;
+      p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+      await sanctioned(req);
+      return next();
+    }
+    const token = sessionTokenFrom(req.headers.cookie, s.cfg.COOKIE_SECURE);
+    if (token) {
+      const session = await s.sessions.resolve(token);
+      if (session) {
+        const p = await loadPrincipal(s, session.tenant_id, session.user_id, { session });
+        if (p) {
+          req.authSession = session;
+          req.principal = p;
+          p.workspaceId = session.stage === 'active' ? ((await resolveWorkspace(s, p, session.workspace_id))?.id ?? null) : null;
+          await s.sessions.touch(session);
+        }
+      }
+    }
+    // 1.9.0 (B-189): mTLS for the API. A member certificate a trusted TLS proxy verified authenticates the request when
+    // the tenant allows it and the caller asks with X-Client-Cert-Auth: 1 (a header a cross-site page cannot send
+    // without a preflight, so a browser holding the certificate is not a CSRF vector).
+    if (!req.principal && req.header('x-client-cert-auth') === '1') {
+      const c = s.memberCerts.clientCertificate(req);
+      if (c.kind === 'refused') return refuse(req, new HttpProblem(401, 'Unauthorized', `The client certificate is not accepted: ${c.reason}.`, { extensions: { step: 'client-certificate' } }));
+      if (c.kind === 'cert') {
+        const m = await s.memberCerts.match(c.cert, 'mtls');
+        const p = m.ok ? await loadPrincipal(s, m.match.tenantId, m.match.userId, {}) : null;
+        if (!m.ok || !p) return refuse(req, new HttpProblem(401, 'Unauthorized', `The client certificate is not accepted: ${m.ok ? 'account disabled' : m.reason}.`, { extensions: { step: 'client-certificate' } }));
+        req.principal = p;
+        p.workspaceId = (await resolveWorkspace(s, p, req.header('x-workspace')))?.id ?? null;
+      }
+    }
+    await sanctioned(req);
+    next();
+  };
+}
+
+/**
+ * Rejects cross-site state changes. Unsafe methods must come from our own origin, and requests authenticated by
+ * the session cookie must also carry the session's CSRF token (double submit, HMAC-bound to the session).
+ */
+export function csrfProtection(s: Services): RequestHandler {
+  return (req, _res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    const origin = req.headers.origin;
+    if (origin && !s.cfg.ORIGINS.includes(origin)) throw forbidden('Cross-origin request refused.', { step: 'csrf' });
+    if (req.authSession && !req.apiKey) {
+      const presented = req.header('x-csrf-token') ?? '';
+      if (!presented || !s.sessions.csrfMatches(req.authSession.id, presented)) {
+        throw forbidden('Missing or invalid CSRF token.', { step: 'csrf' });
+      }
+    }
+    next();
+  };
+}
+
+/** Requires a signed-in caller whose session has finished sign-in (or is in one of `stages`). */
+export function requireAuth(opts: { stages?: SessionStage[]; sessionOnly?: boolean } = {}): RequestHandler {
+  const stages = opts.stages ?? ['active'];
+  const handler: RequestHandler = (req, _res, next) => {
+    if (!req.principal) throw unauthorized();
+    if (opts.sessionOnly && !req.authSession) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
+    if (req.authSession && !stages.includes(req.authSession.stage)) {
+      const detail = req.authSession.stage === 'mfa' ? 'Complete the second factor to continue.' : req.authSession.stage === 'password' ? 'Change your password to continue.' : 'Set up a second factor to continue.';
+      throw new HttpProblem(401, 'Unauthorized', detail, { extensions: { stage: req.authSession.stage } });
+    }
+    next();
+  };
+  // 1.5.0 (B-3304): tagged, so the route permission registry's test can tell an authenticated route from a public one.
+  return Object.assign(handler, { [AUTH_TAG]: true });
+}
+
+/**
+ * Sprint 11 (B-106): sensitive account changes need a password or factor check within STEPUP_WINDOW_SECONDS
+ * (ASVS 3.7.1). Signing in counts; so does POST /api/me/step-up. Use after requireAuth({ sessionOnly: true }).
+ */
+export function requireRecentAuth(s: Services): RequestHandler {
+  return async (req, _res, next) => {
+    const session = req.authSession;
+    if (!session) throw forbidden('This action needs a signed-in browser session, not an API key.', { step: 'credential' });
+    // 1.9.0 (B-190): the tenant's sign-in policy may shorten the window (never lengthen it).
+    const window = await s.account.policy.stepUpSeconds(session.tenant_id);
+    if (!s.account.isRecent(session, window)) {
+      throw new HttpProblem(401, 'Step-up required', 'Confirm your password or a second factor to continue.', {
+        extensions: { step_up: true, window_seconds: window }
+      });
+    }
+    next();
+  };
+}
+
+export const principalOf = (req: Request): Principal => {
+  if (!req.principal) throw unauthorized();
+  return req.principal;
+};
+
+/**
+ * Authorises the caller for `action` (optionally against a resource), writing the decision to the audit chain
+ * when it is a denial. Admin roles additionally need an MFA-verified session.
+ */
+export function requirePermission(s: Services, action: Permission, resourceOf?: (req: Request) => Resource): RequestHandler {
+  const handler: RequestHandler = async (req, _res, next) => {
+    const p = principalOf(req);
+    const decision = authorize(p, action, resourceOf ? resourceOf(req) : {});
+    if (decision.allow && p.kind === 'user' && !p.mfa && rolesRequireMfa(p.roles, p.tenantId)) {
+      Object.assign(decision, { allow: false, step: 'mfa', reason: 'Admin roles need a session verified with a second factor' });
+    }
+    if (!decision.allow) {
+      await s.denials.record(`${p.tenantId}:${p.userId ?? p.apiKeyId ?? 'anonymous'}`, {
+        tenantId: p.tenantId,
+        action: 'authz.denied',
+        kind: 'decision',
+        actor: actorFrom(p, req.ip),
+        target: { method: req.method, path: req.baseUrl + req.path },
+        decision: { ...decision, clearance: p.clearance, roles: p.roles },
+        traceId: req.traceId
+      });
+      throw forbidden(decision.reason, { step: decision.step, action, policy: decision.policy });
+    }
+    next();
+  };
+  // 1.5.0 (B-3304): tagged with its permission, which the route permission registry's test compares with the table.
+  return Object.assign(handler, { [PERMISSION_TAG]: action });
+}
+
+/**
+ * Passes when the caller holds any of the permissions: the first one held is checked as requirePermission checks it
+ * (MFA for admin roles, denials audited); when none is held, the denial names the first.
+ */
+export function requireAnyPermission(s: Services, perms: readonly Permission[]): RequestHandler {
+  return declaresAnyOf((req, res, next) => {
+    const held = effectivePermissions(principalOf(req));
+    return requirePermission(s, perms.find((x) => held.has(x)) ?? perms[0]!)(req, res, next);
+  }, perms);
+}
+
+export function parseBody<T extends z.ZodType>(schema: T, data: unknown): z.infer<T> {
+  const r = schema.safeParse(data);
+  if (!r.success) {
+    throw badRequest('The request did not validate.', { errors: r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
+  }
+  return r.data;
+}
+
+export const ip = (req: Request): string | null => req.ip ?? null;
+
+export const noStore: RequestHandler = (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+};
+
+export type Handler = (req: Request, res: Response, next: NextFunction) => unknown;

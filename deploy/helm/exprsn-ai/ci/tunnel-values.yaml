@@ -1,0 +1,16 @@
+# Values used by CI: behind a Cloudflare Tunnel (1.9.99-final, B-10902). No ingress, a ClusterIP Service, the
+# connector as its own Deployment with the token mounted from an existing Secret, the client address from
+# CF-Connecting-IP only from the connector.
+config:
+  publicUrl: https://ai.example.internal
+  trustProxy: uniquelocal,cloudflare
+  blobStore:
+    type: s3
+    s3: { endpoint: "https://minio.data.svc:9000", bucket: exprsn-ai, accessKeyId: exprsn-ai }
+  extra:
+    CLOUDFLARE_TUNNEL_PEERS: uniquelocal
+ingress:
+  enabled: false
+cloudflared:
+  enabled: true
+  tokenSecret: { name: exprsn-ai-cloudflared, key: token }

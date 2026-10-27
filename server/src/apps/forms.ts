@@ -1,0 +1,348 @@
+import { mac, macs } from '../vault/keyring.js';
+import { ulid } from 'ulid';
+import { z } from 'zod';
+import { actorFrom } from '../audit/chain.js';
+import type { Principal } from '../authz/policy.js';
+import { randomToken } from '../crypto/index.js';
+import { json } from '../db/knex.js';
+import { conflict, HttpProblem, notFound, tooManyRequests } from '../http/problem.js';
+import { Limiter } from '../platform/ratelimit.js';
+import type { Services } from '../services.js';
+import { isComputed, type Field, type Values } from './schema.js';
+import { HeldSubmissions, type HeldField } from './forms-held.js';
+import { conditionMatches, formFieldSchema, formLayoutSchema, layoutOf, layoutProblems, normalizeDefinition, planForm, type FormCondition } from './form-layout.js';
+import type { Actor, AppRow, AppService, EntityRow } from './service.js';
+
+/*
+ * Forms (B-2205): an ordered list of an entity's fields, each optionally shown only when an earlier field has a value
+ * (`visibleIf`). The server evaluates the conditions again on every submission and keeps only the fields the form
+ * lists and shows; anything else in the body is dropped (and counted), never written. Since the low-code port
+ * (follow-up 2, `form-layout.ts`) a form may also have sections and wizard steps, and `visibleIf` / `requiredIf`
+ * condition trees on fields, sections and steps, evaluated here in layout order on every submission.
+ *
+ * A form can be made public: a link token (shown once, stored as an HMAC) opens it without signing in at
+ * `/api/public/forms`. Public submissions are rate-limited per address and per form in the shared counters, every
+ * text value passes the `user-input` guardrail checkpoint (a block refuses the submission, a redaction is kept), and
+ * the record is written by no one (`source: form`). Since 1.6.0 (B-4701) a value the guardrail holds for review no
+ * longer refuses a public submission: the submission waits, sealed, as a held submission with a hold flag in the review
+ * queue (the Moderation and Flags screens), and a reviewer accepts it into a record or rejects it (forms-held.ts). Public forms cannot ask for files, references or
+ * lookups of users, workspaces or records: an anonymous visitor must not learn which ids exist.
+ */
+
+export { formConditionSchema, type FormCondition } from './form-layout.js';
+/** The one-leaf condition of a version 1 form, still accepted (a leaf of the flows condition model). */
+export type Condition = FormCondition;
+
+export const formDefinitionSchema = z
+  .object({
+    /** 2 when the form has a layout, a `requiredIf` or a condition tree (set on save); absent or 1 for a flat form. */
+    version: z.union([z.literal(1), z.literal(2)]).optional(),
+    fields: z.array(formFieldSchema).min(1).max(100),
+    /** Sections and wizard steps (`form-layout.ts`); absent: one untitled section with every field. */
+    layout: formLayoutSchema.optional(),
+    submitLabel: z.string().max(60).optional(),
+    successMessage: z.string().max(500).optional()
+  })
+  .strict();
+export type FormDefinition = z.infer<typeof formDefinitionSchema>;
+
+export interface FormRow {
+  id: string;
+  tenant_id: string;
+  app_id: string;
+  entity_id: string;
+  name: string;
+  title: string;
+  definition: FormDefinition;
+  public: boolean;
+  token_hash: string | null;
+  rate_per_minute: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+const formFrom = (r: Record<string, unknown>): FormRow => ({ ...(r as unknown as FormRow), definition: formDefinitionSchema.parse(json(r.definition, {})), public: !!r.public, rate_per_minute: Number(r.rate_per_minute), created_at: Number(r.created_at), updated_at: Number(r.updated_at) });
+
+export const formView = (f: FormRow, entity: EntityRow) => ({ id: f.id, name: f.name, title: f.title, entity: entity.name, definition: f.definition, public: f.public, ratePerMinute: f.rate_per_minute, createdAt: f.created_at, updatedAt: f.updated_at });
+
+const PUBLIC_REFUSED = (f: Field): boolean => f.type === 'file' || f.type === 'reference' || (f.type === 'lookup' && f.source !== 'static');
+
+/** Is a condition met by the values so far? (A tree since follow-up 2; a version 1 leaf evaluates as before.) */
+export function conditionMet(c: Condition, values: Values): boolean {
+  return conditionMatches(c, values);
+}
+
+/**
+ * The values a submission may write: the form's fields, in layout order, that are visible given the earlier answers
+ * (their step's, section's and own conditions). Returns them and the names of everything dropped. `planForm` also
+ * says which visible fields are required and unanswered.
+ */
+export function pickFormValues(def: FormDefinition, input: Values): { values: Values; dropped: string[]; visible: string[] } {
+  const plan = planForm(def, input);
+  return { values: plan.values, dropped: plan.dropped, visible: plan.visible };
+}
+
+export class AppForms {
+  /** 1.6.0 (B-4701): public submissions held for review. */
+  readonly held: HeldSubmissions;
+
+  constructor(
+    private readonly s: () => Services,
+    private readonly apps: AppService
+  ) {
+    this.held = new HeldSubmissions(s, apps);
+  }
+
+  private get db() {
+    return this.s().db;
+  }
+
+  private check(entity: EntityRow, def: FormDefinition, isPublic: boolean): void {
+    const fields = new Map(entity.definition.fields.map((f) => [f.name, f]));
+    const seen = new Set<string>();
+    const problems: string[] = [];
+    for (const ff of def.fields) {
+      const f = fields.get(ff.field);
+      if (!f) problems.push(`${ff.field} is not a field of ${entity.name}.`);
+      else if (isComputed(f)) problems.push(`${ff.field} is computed; a form cannot ask for it.`);
+      else if (f.type === 'relation') problems.push(`${ff.field} is a relation; links are made on the record, not asked for in a form.`);
+      else if (isPublic && PUBLIC_REFUSED(f)) problems.push(`${ff.field} is a ${f.type === 'lookup' ? `${f.source} lookup` : f.type} field; a public form cannot ask for it.`);
+      if (seen.has(ff.field)) problems.push(`${ff.field} is on the form twice.`);
+      seen.add(ff.field);
+    }
+    // Sections, steps and condition trees: conditions read only fields earlier in layout order.
+    problems.push(...layoutProblems(def));
+    // A field the entity requires and the form leaves out (or hides) would refuse every submission.
+    for (const f of entity.definition.fields) {
+      if (!f.required) continue;
+      // 1.8.0 (B-128): a required relation needs links, which no form asks for.
+      if (f.type === 'relation') problems.push(`${entity.name} requires links in ${f.name}, which a form cannot ask for; make ${f.name} optional to take records from a form.`);
+      else if (!seen.has(f.name)) problems.push(`${entity.name} requires ${f.name}; the form must ask for it.`);
+    }
+    if (problems.length) throw new HttpProblem(400, 'Invalid form', problems[0]!, { extensions: { problems } });
+  }
+
+  async list(app: AppRow): Promise<{ form: FormRow; entity: EntityRow }[]> {
+    const entities = new Map((await this.apps.entities(app)).map((e) => [e.id, e]));
+    return ((await this.db('app_forms').where({ app_id: app.id }).orderBy('name')) as Record<string, unknown>[]).map(formFrom).flatMap((f) => (entities.get(f.entity_id) ? [{ form: f, entity: entities.get(f.entity_id)! }] : []));
+  }
+
+  async form(p: Principal, appRef: string, formRef: string): Promise<{ app: AppRow; entity: EntityRow; form: FormRow }> {
+    const app = await this.apps.app(p, appRef);
+    const r = await this.db('app_forms').where({ app_id: app.id }).andWhere((q) => q.where({ id: formRef }).orWhere({ name: formRef })).first();
+    if (!r) throw notFound('Form');
+    const form = formFrom(r);
+    const entity = await this.apps.entityById(app.tenant_id, form.entity_id);
+    if (!entity) throw notFound('Form');
+    return { app, entity, form };
+  }
+
+  private audit(actor: Actor & { principal: Principal }, action: string, target: Record<string, unknown>, detail?: Record<string, unknown>) {
+    return this.s().audit.append({ tenantId: actor.principal.tenantId, action, kind: 'admin', actor: actorFrom(actor.principal, actor.ip ?? null), target, ...(detail ? { detail } : {}), traceId: actor.traceId ?? null });
+  }
+
+  async create(actor: Actor & { principal: Principal }, appRef: string, input: { name: string; title?: string; entity: string; definition: FormDefinition; ratePerMinute?: number }) {
+    const app = await this.apps.app(actor.principal, appRef);
+    const entity = await this.apps.entityOf(app, input.entity);
+    const definition = normalizeDefinition(input.definition);
+    this.check(entity, definition, false);
+    const t = Date.now();
+    const row: FormRow = { id: ulid(), tenant_id: app.tenant_id, app_id: app.id, entity_id: entity.id, name: input.name, title: input.title ?? input.name, definition, public: false, token_hash: null, rate_per_minute: input.ratePerMinute ?? 10, created_by: actor.principal.userId, updated_by: actor.principal.userId, created_at: t, updated_at: t };
+    const dup = await this.db('app_forms').where({ app_id: app.id, name: input.name }).first('id');
+    if (dup) throw conflict(`The app has a form named ${input.name}.`);
+    await this.db('app_forms').insert({ ...row, definition: JSON.stringify(row.definition) });
+    await this.audit(actor, 'app.form.created', { app: app.id, form: row.id, name: row.name, entity: entity.id });
+    await this.apps.schema.record(actor, app, 'form.created', row.name, `Form ${row.name} on ${entity.name} created with ${row.definition.fields.length} field${row.definition.fields.length === 1 ? '' : 's'}`, { entity: entity.name, definition: row.definition });
+    return { app, entity, form: row };
+  }
+
+  async update(actor: Actor & { principal: Principal }, appRef: string, formRef: string, patch: { title?: string; definition?: FormDefinition; ratePerMinute?: number }) {
+    const { app, entity, form } = await this.form(actor.principal, appRef, formRef);
+    const def = patch.definition ? normalizeDefinition(patch.definition) : form.definition;
+    this.check(entity, def, form.public);
+    const upd = { title: patch.title ?? form.title, definition: JSON.stringify(def), rate_per_minute: patch.ratePerMinute ?? form.rate_per_minute, updated_by: actor.principal.userId, updated_at: Date.now() };
+    await this.db('app_forms').where({ id: form.id }).update(upd);
+    await this.audit(actor, 'app.form.updated', { app: app.id, form: form.id, name: form.name }, { fields: def.fields.length, ratePerMinute: upd.rate_per_minute, version: def.version ?? 1, ...(def.layout ? { layout: def.layout.mode, sections: def.layout.sections.length, steps: def.layout.steps?.length ?? 0 } : {}) });
+    await this.apps.schema.record(actor, app, 'form.updated', form.name, `Form ${form.name} updated (${def.fields.length} field${def.fields.length === 1 ? '' : 's'})`, { entity: entity.name, definition: def });
+    return { app, entity, form: { ...form, ...upd, definition: def } };
+  }
+
+  async remove(actor: Actor & { principal: Principal }, appRef: string, formRef: string) {
+    const { app, form } = await this.form(actor.principal, appRef, formRef);
+    await this.db('app_forms').where({ id: form.id }).delete();
+    await this.audit(actor, 'app.form.deleted', { app: app.id, form: form.id, name: form.name }, { public: form.public });
+    await this.apps.schema.record(actor, app, 'form.deleted', form.name, `Form ${form.name} deleted`, null);
+  }
+
+  private tokenHash(token: string): string {
+    return mac(this.s().sysKeys.key('link'), `app-form:${token}`);
+  }
+
+  /** Makes a form public with a new link (the token is shown once; an older link stops working), or private again. */
+  async setPublic(actor: Actor & { principal: Principal }, appRef: string, formRef: string, enabled: boolean): Promise<{ token: string | null }> {
+    const { app, entity, form } = await this.form(actor.principal, appRef, formRef);
+    if (!enabled) {
+      await this.db('app_forms').where({ id: form.id }).update({ public: false, token_hash: null, updated_by: actor.principal.userId, updated_at: Date.now() });
+      await this.audit(actor, 'app.form.unpublished', { app: app.id, form: form.id, name: form.name });
+      return { token: null };
+    }
+    this.check(entity, form.definition, true);
+    const token = `exa_${randomToken(32)}`;
+    await this.db('app_forms').where({ id: form.id }).update({ public: true, token_hash: this.tokenHash(token), updated_by: actor.principal.userId, updated_at: Date.now() });
+    await this.audit(actor, form.public ? 'app.form.link.rotated' : 'app.form.published', { app: app.id, form: form.id, name: form.name });
+    return { token };
+  }
+
+  /**
+   * What a form shows: its fields with type, options and conditions (never other fields of the entity), in layout
+   * order, and its layout (a flat form: one untitled section `main`, no steps). Clients that predate layouts read
+   * `fields` alone; the page scripts evaluate the same conditions with `web/js/form-layout.js`.
+   */
+  describe(entity: EntityRow, form: FormRow) {
+    const fields = new Map(entity.definition.fields.map((f) => [f.name, f]));
+    const layout = layoutOf(form.definition);
+    return {
+      title: form.title,
+      submitLabel: form.definition.submitLabel ?? 'Submit',
+      version: form.definition.version ?? 1,
+      fields: form.definition.fields.map((ff) => {
+        const f = fields.get(ff.field)!;
+        return {
+          name: f.name,
+          label: ff.label ?? f.title ?? f.name,
+          help: ff.help ?? f.description ?? null,
+          type: f.type,
+          required: ff.required ?? f.required,
+          ...(f.type === 'enum' ? { options: f.options } : {}),
+          ...(f.type === 'lookup' && f.source === 'static' ? { options: f.options ?? [] } : {}),
+          ...(f.type === 'string' ? { maxLength: f.maxLength, multiline: !!f.multiline } : {}),
+          ...(f.type === 'number' ? { min: f.min ?? null, max: f.max ?? null, integer: f.integer } : {}),
+          ...(f.type === 'date' ? { withTime: f.withTime } : {}),
+          visibleIf: ff.visibleIf ?? null,
+          requiredIf: ff.requiredIf ?? null
+        };
+      }),
+      layout: {
+        mode: layout.mode,
+        review: layout.review,
+        sections: layout.sections.map((s) => ({ id: s.id, title: s.title ?? null, help: s.help ?? null, collapsible: !!s.collapsible, collapsed: !!s.collapsed, fields: s.fields, visibleIf: s.visibleIf ?? null, requiredIf: s.requiredIf ?? null })),
+        steps: layout.steps.map((st) => ({ id: st.id, title: st.title, help: st.help ?? null, sections: st.sections, visibleIf: st.visibleIf ?? null, requiredIf: st.requiredIf ?? null }))
+      }
+    };
+  }
+
+  /**
+   * A submission: the form's visible fields only (the rest dropped), required ones checked, text screened at the
+   * `user-input` checkpoint, then written as a record of the form's entity.
+   */
+  private async submit(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor, holdable = false): Promise<{ id: string; dropped: string[]; held?: boolean }> {
+    const s = this.s();
+    const { values, dropped, held } = await this.screen(app, entity, form, input, actor, holdable);
+    if (held.length) {
+      const h = await this.held.hold({ app, entity, form, values, dropped: dropped.length, held, ip: actor.ip ?? null, traceId: actor.traceId ?? null });
+      return { id: h.id, dropped, held: true };
+    }
+    const rec = await this.apps.createRecord(actor, app, entity, { values });
+    await s.audit.append({
+      tenantId: app.tenant_id,
+      action: 'app.form.submitted',
+      kind: actor.principal ? 'admin' : 'system',
+      actor: actor.principal ? actorFrom(actor.principal, actor.ip ?? null) : { service: 'apps.forms', ...(actor.ip ? { ip: actor.ip } : {}) },
+      target: { app: app.id, form: form.id, record: rec.id },
+      label: rec.label,
+      detail: { public: !actor.principal, fields: Object.keys(values), dropped: dropped.slice(0, 50) },
+      traceId: actor.traceId ?? null
+    });
+    return { id: rec.id, dropped };
+  }
+
+  /**
+   * B-3907: answers to a form that writes nothing (a workflow approval's form): the same checks as a submission
+   * (visible fields only, required ones, the `user-input` checkpoint, then the entity's own validation and links), and
+   * the validated values back.
+   */
+  async validateAnswers(actor: Actor & { principal: Principal }, app: AppRow, entity: EntityRow, form: FormRow, input: Values): Promise<{ values: Values; dropped: string[] }> {
+    const { values, dropped } = await this.screen(app, entity, form, input, actor);
+    const prep = await this.apps.prepare(actor, app, entity, ulid(), values, null);
+    return { values: prep.values, dropped };
+  }
+
+  /** B-3907: a form by id within its tenant (an approval stores the ids of the form it asks for). */
+  async byId(tenantId: string, formId: string): Promise<{ app: AppRow; entity: EntityRow; form: FormRow } | null> {
+    const r = await this.db('app_forms').where({ tenant_id: tenantId, id: formId }).first();
+    if (!r) return null;
+    const form = formFrom(r);
+    const app = await this.apps.appById(tenantId, form.app_id);
+    const entity = await this.apps.entityById(tenantId, form.entity_id);
+    return app && entity ? { app, entity, form } : null;
+  }
+
+  /** What a submission may write: the visible fields, required ones present, text screened at `user-input`. */
+  private async screen(app: AppRow, entity: EntityRow, form: FormRow, input: Values, actor: Actor, holdable = false): Promise<{ values: Values; dropped: string[]; held: HeldField[] }> {
+    const s = this.s();
+    // Hidden fields (by their own, their section's or their step's condition) are dropped here and never written;
+    // required ones are the form's own, and those a `requiredIf` of the field, its section or its step turns on.
+    const { values, dropped, missing } = planForm(form.definition, input);
+    const wizard = form.definition.layout?.mode === 'wizard';
+    if (missing.length) throw new HttpProblem(400, 'Invalid record', `${missing.map((f) => f.field).join(', ')} ${missing.length === 1 ? 'is' : 'are'} required.`, { extensions: { problems: missing.map((f) => ({ field: f.field, message: 'is required', ...(wizard ? { step: f.step } : {}), ...(form.definition.layout ? { section: f.section } : {}) })) } });
+    const held: HeldField[] = [];
+    for (const [k, v] of Object.entries(values)) {
+      if (typeof v !== 'string' || !v) continue;
+      const d = await s.guardrails.check({ tenantId: app.tenant_id, workspaceId: app.workspace_id, checkpoint: 'user-input', text: v, label: entity.label, ...(actor.principal ? { principal: actor.principal } : {}), source: { kind: 'app-form', id: form.id }, meta: { app: app.id, entity: entity.name, field: k, public: !actor.principal } });
+      // B-4701: a hold on a public submission waits for review; a hold from a check that could not run stays a refusal.
+      const hold = holdable && d.action === 'require-approval' ? d.findings.find((f) => f.stage === 'enforce' && f.action === 'require-approval' && !f.detail?.startsWith('unavailable:')) : undefined;
+      if (hold) {
+        held.push({ field: k, ruleId: hold.ruleId, ruleName: hold.ruleName, setId: hold.setId ?? null, reason: d.reason ?? null });
+        values[k] = d.text;
+        continue;
+      }
+      if (d.action === 'block' || d.action === 'require-approval') throw new HttpProblem(422, 'Submission refused', `The submission was refused by the content rules${d.reason ? `: ${d.reason}` : '.'}`, { extensions: { field: k } });
+      if (d.action === 'redact') values[k] = d.text;
+    }
+    return { values, dropped, held };
+  }
+
+  async submitSignedIn(actor: Actor & { principal: Principal }, appRef: string, formRef: string, input: Values) {
+    const { app, entity, form } = await this.form(actor.principal, appRef, formRef);
+    return this.submit(app, entity, form, input, { ...actor, source: 'form' });
+  }
+
+  private async byToken(token: string): Promise<{ app: AppRow; entity: EntityRow; form: FormRow }> {
+    const r = await this.db('app_forms').where({ public: true }).whereIn('token_hash', macs(this.s().sysKeys.key('link'), `app-form:${token}`)).first();
+    if (!r) throw notFound('Form');
+    const form = formFrom(r);
+    const tenant = await this.s().tenants.byId(form.tenant_id);
+    const app = await this.apps.appById(form.tenant_id, form.app_id);
+    const entity = await this.apps.entityById(form.tenant_id, form.entity_id);
+    if (!tenant || tenant.state !== 'active' || !app || !entity) throw notFound('Form');
+    return { app, entity, form };
+  }
+
+  async openPublic(token: string) {
+    const { entity, form } = await this.byToken(token);
+    return this.describe(entity, form);
+  }
+
+  /** A public submission: per-address and per-form limits first, then the same path as a signed-in one. */
+  async submitPublic(token: string, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; held: boolean; message: string; dropped: number }> {
+    const { form } = await this.byToken(token);
+    return this.submitPublicForm(form, input, ip, traceId, perAddress);
+  }
+
+  /** 1.6.0 (B-8701): the public submission path for a form an embed page already resolved (by its embed id). */
+  async submitPublicForm(formRow: FormRow, input: Values, ip: string | null, traceId: string | undefined, perAddress: Limiter): Promise<{ submitted: true; held: boolean; message: string; dropped: number }> {
+    const app = await this.apps.appById(formRow.tenant_id, formRow.app_id);
+    const entity = await this.apps.entityById(formRow.tenant_id, formRow.entity_id);
+    if (!app || !entity || !formRow.public) throw notFound('Form');
+    const form = formRow;
+    const addr = await perAddress.consume(ip ?? 'unknown');
+    if (!addr.allowed) throw tooManyRequests('Too many form submissions from this address; try again in a minute.', addr.resetMs / 1000);
+    const perForm = await new Limiter(this.s().counters, 'app-form', form.rate_per_minute, 60_000).consume(form.id);
+    if (!perForm.allowed) throw tooManyRequests('This form is receiving too many submissions; try again in a minute.', perForm.resetMs / 1000);
+    const out = await this.submit(app, entity, form, input, { principal: null, source: 'form', service: 'apps.forms', ip, ...(traceId ? { traceId } : {}) }, true);
+    if (out.held) return { submitted: true, held: true, message: 'Thank you. Your submission was received and will be reviewed before it is recorded.', dropped: out.dropped.length };
+    return { submitted: true, held: false, message: form.definition.successMessage ?? 'Thank you. Your submission was received.', dropped: out.dropped.length };
+  }
+}

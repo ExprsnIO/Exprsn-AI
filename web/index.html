@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Exprsn-AI Console</title>
+<!-- No external requests: fonts fall back to the system stack so the console works inside the air gap. -->
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<a class="skip" id="skip-link" href="#main">Skip to main content</a>
+<div class="app signed-out" id="app">
+  <nav class="sidebar" id="sidebar" aria-label="Primary"></nav>
+  <div class="body">
+    <header class="header" id="header"></header>
+    <main class="main" id="main" tabindex="-1"></main>
+  </div>
+</div>
+<div class="toasts" id="toasts" role="region" aria-label="Messages" aria-live="polite"></div>
+<script src="/socket.io/socket.io.min.js"></script>
+<script src="/js/app.js"></script>
+<script src="/js/surfaces.js"></script>
+<script src="/js/webpush.js"></script>
+<script src="/js/flags.js"></script>
+<!-- screens -->
+<script src="/js/screens/signin.js"></script>
+<script src="/js/screens/chat-images.js"></script>
+<script src="/js/screens/chat-capabilities.js"></script>
+<script src="/js/screens/chat-organize.js"></script>
+<script src="/js/screens/chat.js"></script>
+<script src="/js/screens/compare.js"></script>
+<script src="/js/screens/runs.js"></script>
+<script src="/js/screens/knowledge-feedback.js"></script>
+<script src="/js/screens/knowledge-references.js"></script>
+<script src="/js/screens/knowledge.js"></script>
+<script src="/js/screens/docs.js"></script>
+<script src="/js/screens/memory.js"></script>
+<script src="/js/screens/media.js"></script>
+<script src="/js/screens/images.js"></script>
+<script src="/js/screens/images-export.js"></script>
+<script src="/js/screens/files.js"></script>
+<script src="/js/screens/files-reports.js"></script>
+<script src="/js/screens/files-locations.js"></script>
+<script src="/js/screens/albums.js"></script>
+<script src="/js/screens/search.js"></script>
+<script src="/js/screens/albums-public.js"></script>
+<script src="/js/screens/file-edit.js"></script>
+<script src="/js/screens/file-query.js"></script>
+<script src="/js/screens/design-presence.js"></script>
+<script src="/js/screens/apps.js"></script>
+<script src="/js/screens/apps-flows.js"></script>
+<script src="/js/screens/apps-board.js"></script>
+<script src="/js/screens/apps-import.js"></script>
+<script src="/js/form-layout.js"></script>
+<script src="/js/screens/apps-forms.js"></script>
+<script src="/js/screens/apps-views.js"></script>
+<script src="/js/screens/apps-charts.js"></script>
+<script src="/js/screens/apps-dashboards.js"></script>
+<script src="/js/screens/apps-subscriptions.js"></script>
+<script src="/js/screens/apps-reports.js"></script>
+<script src="/js/screens/apps-roles.js"></script>
+<script src="/js/screens/apps-export.js"></script>
+<script src="/js/screens/apps-relations.js"></script>
+<script src="/js/screens/apps-formula.js"></script>
+<script src="/js/screens/apps-platform-import.js"></script>
+<script src="/js/screens/groups.js"></script>
+<script src="/js/screens/groups-governance.js"></script>
+<script src="/js/screens/messages.js"></script>
+<script src="/js/screens/person.js"></script>
+<script src="/js/screens/overview-cards.js"></script>
+<script src="/js/screens/overview.js"></script>
+<script src="/js/screens/models-cloud.js"></script>
+<script src="/js/screens/models.js"></script>
+<script src="/js/screens/import.js"></script>
+<script src="/js/screens/profiles.js"></script>
+<script src="/js/screens/pools-cloud.js"></script>
+<script src="/js/screens/pools.js"></script>
+<script src="/js/screens/training.js"></script>
+<script src="/js/screens/registry.js"></script>
+<script src="/js/screens/mcp-servers.js"></script>
+<script src="/js/screens/workflows-ops.js"></script>
+<script src="/js/screens/workflows-templates.js"></script>
+<script src="/js/screens/workflows-schedules.js"></script>
+<script src="/js/screens/workflows-analytics.js"></script>
+<script src="/js/screens/workflows-decisions.js"></script>
+<script src="/js/screens/workflows-editing.js"></script>
+<script src="/js/screens/workflows.js"></script>
+<script src="/js/screens/scripts.js"></script>
+<script src="/js/screens/connections-sources.js"></script>
+<script src="/js/screens/connections-designer.js"></script>
+<script src="/js/screens/connections-schema-edit.js"></script>
+<script src="/js/screens/connections.js"></script>
+<script src="/js/screens/guardrails.js"></script>
+<script src="/js/screens/guardrails-conditions.js"></script>
+<script src="/js/screens/guardrails-tests.js"></script>
+<script src="/js/screens/guardrails-terms.js"></script>
+<script src="/js/screens/sla-routing.js"></script>
+<script src="/js/screens/flags.js"></script>
+<script src="/js/screens/classifiers.js"></script>
+<script src="/js/screens/moderation-spam.js"></script>
+<script src="/js/screens/moderation.js"></script>
+<script src="/js/screens/channels.js"></script>
+<script src="/js/screens/social.js"></script>
+<script src="/js/screens/usage-audit.js"></script>
+<script src="/js/screens/billing-plans.js"></script>
+<script src="/js/screens/analytics-showback.js"></script>
+<script src="/js/screens/analytics.js"></script>
+<script src="/js/screens/tenants.js"></script>
+<script src="/js/screens/roles.js"></script>
+<script src="/js/screens/identity.js"></script>
+<script src="/js/screens/identity-signin-policy.js"></script>
+<script src="/js/screens/directories.js"></script>
+<script src="/js/screens/directories-stores.js"></script>
+<script src="/js/screens/directories-import.js"></script>
+<script src="/js/screens/certificates-settings.js"></script>
+<script src="/js/screens/certificates-tokens.js"></script>
+<script src="/js/screens/certificates.js"></script>
+<script src="/js/screens/vault.js"></script>
+<script src="/js/screens/plugins.js"></script>
+<script src="/js/screens/plugin-creator.js"></script>
+<script src="/js/screens/atproto.js"></script>
+<script src="/js/screens/zones.js"></script>
+<script src="/js/screens/cloud.js"></script>
+<script src="/js/screens/deployments.js"></script>
+<script src="/js/screens/cloud-data.js"></script>
+<script src="/js/screens/cloud-compute.js"></script>
+<script src="/js/screens/cloud-spend.js"></script>
+<script src="/js/screens/jobs.js"></script>
+<script src="/js/screens/storage.js"></script>
+<script src="/js/screens/configuration.js"></script>
+<script src="/js/screens/platform-security.js"></script>
+<script src="/js/screens/platform-push.js"></script>
+<script src="/js/screens/platform-leaked.js"></script>
+<script src="/js/screens/platform-flags.js"></script>
+<script src="/js/screens/platform.js"></script>
+<script src="/js/screens/settings.js"></script>
+<script src="/js/screens/settings-devices.js"></script>
+<script src="/js/screens/settings-certificates.js"></script>
+<script src="/js/screens/settings-notifications.js"></script>
+<script src="/js/screens/components.js"></script>
+<script src="/js/screens/shared.js"></script>
+</body>
+</html>

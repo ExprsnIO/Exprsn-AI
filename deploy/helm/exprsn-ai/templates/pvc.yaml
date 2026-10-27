@@ -1,0 +1,20 @@
+{{- if and (eq .Values.config.blobStore.type "pvc") (not .Values.config.blobStore.pvc.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "exprsn-ai.fullname" . }}-blobs
+  labels:
+    {{- include "exprsn-ai.labels" . | nindent 4 }}
+  annotations:
+    # Blobs hold attachments, exports and audit checkpoints: keep the volume when the release is removed.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.config.blobStore.pvc.accessModes | nindent 4 }}
+  {{- with .Values.config.blobStore.pvc.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.config.blobStore.pvc.size }}
+{{- end }}

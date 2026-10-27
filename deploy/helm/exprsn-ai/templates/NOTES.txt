@@ -1,0 +1,30 @@
+Exprsn-AI {{ .Chart.AppVersion }} is deployed as {{ include "exprsn-ai.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+1. Wait for the pods to become ready (the readiness check needs the database migrated, the KMS and the blob store):
+
+     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "exprsn-ai.fullname" . }}
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "exprsn-ai.fullname" . }} -- \
+       node -e "fetch('http://127.0.0.1:8080/readyz').then(r=>r.text()).then(console.log)"
+
+2. Create the first administrator (the password is prompted for; a second factor is enrolled at first sign-in):
+
+     kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "exprsn-ai.fullname" . }} -- \
+       node server/dist/cli.js admin:create --username root --display-name "Platform admin"
+
+3. Open {{ .Values.config.publicUrl }} and register your Ollama instances under Admin > Pools.
+{{- if .Values.networkPolicy.enabled }}
+   NetworkPolicies are on: the inference egress group (networkPolicy.egress.inference) must allow the instances'
+   namespace or CIDRs, or the gateway cannot reach them.
+{{- $missing := list }}
+{{- range (list "database" "redis" "objectStorage" "inference") }}
+{{- $r := index $.Values.networkPolicy.egress . | default dict }}
+{{- if not $r.to }}{{ $missing = append $missing . }}{{ end }}
+{{- end }}
+{{- if $missing }}
+
+   Note: these egress groups have no peers yet, so their traffic is denied: {{ join ", " $missing }}.
+   Set networkPolicy.egress.<group>.to for each, or the server will not become ready.
+{{- end }}
+{{- end }}
+
+Runbooks for backup and restore, incidents and upgrades: docs/runbooks/ in the repository.

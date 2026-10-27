@@ -1,0 +1,46 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-10-10T09:30:00.000Z",
+  "ArtifactName": "registry.internal/exprsn-ai/scripts@sha256:4f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211a0b9c8d7e6f5a4b3",
+  "ArtifactType": "container_image",
+  "Trivy": { "Version": "0.56.2" },
+  "Metadata": {
+    "OS": { "Family": "debian", "Name": "12.7" },
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "RepoDigests": ["registry.internal/exprsn-ai/scripts@sha256:4f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211a0b9c8d7e6f5a4b3"]
+  },
+  "Results": [
+    {
+      "Target": "registry.internal/exprsn-ai/scripts (debian 12.7)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        { "VulnerabilityID": "CVE-2026-1001", "PkgName": "openssl", "InstalledVersion": "3.0.14-1", "FixedVersion": "3.0.15-1", "Severity": "CRITICAL", "Title": "openssl: remote code execution in the handshake" },
+        { "VulnerabilityID": "CVE-2026-1002", "PkgName": "zlib1g", "InstalledVersion": "1:1.2.13", "FixedVersion": "", "Severity": "HIGH", "Title": "zlib: heap overflow" },
+        { "VulnerabilityID": "CVE-2026-1003", "PkgName": "libc6", "InstalledVersion": "2.36-9", "Severity": "MEDIUM" },
+        { "VulnerabilityID": "CVE-2026-1004", "PkgName": "bash", "InstalledVersion": "5.2.15", "Severity": "LOW" }
+      ]
+    },
+    {
+      "Target": "usr/lib/node_modules/app/package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Vulnerabilities": [
+        { "VulnerabilityID": "GHSA-aaaa-bbbb-cccc", "PkgName": "lodash", "InstalledVersion": "4.17.20", "FixedVersion": "4.17.21", "Severity": "HIGH", "PkgPath": "usr/lib/node_modules/app/node_modules/lodash/package.json" }
+      ]
+    },
+    {
+      "Target": "Node.js",
+      "Class": "license",
+      "Licenses": [
+        { "Severity": "HIGH", "Category": "restricted", "PkgName": "evil-copyleft", "FilePath": "usr/lib/node_modules/evil-copyleft/package.json", "Name": "AGPL-3.0-only", "Confidence": 1 },
+        { "Severity": "LOW", "Category": "notice", "PkgName": "lodash", "FilePath": "", "Name": "MIT", "Confidence": 1 }
+      ]
+    },
+    {
+      "Target": "/etc/app/secret.env",
+      "Class": "secret",
+      "Secrets": [ { "RuleID": "aws-access-key-id", "Category": "AWS", "Severity": "CRITICAL", "Title": "AWS Access Key ID", "Match": "AKIA****************" } ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "source": "exprsn-platform services/atproto (didResolver.didExprsnFromKey, resolveDid, labeler/labelSigner.signLabel), 2026-10-14",
+  "did": "did:exprsn:zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd",
+  "publicKeyMultibase": "zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd",
+  "document": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://w3id.org/security/multikey/v1"
+    ],
+    "id": "did:exprsn:zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd",
+    "verificationMethod": [
+      {
+        "id": "did:exprsn:zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd#atproto_label",
+        "type": "Multikey",
+        "controller": "did:exprsn:zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd",
+        "publicKeyMultibase": "zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd"
+      }
+    ],
+    "service": [
+      {
+        "id": "#atproto_labeler",
+        "type": "AtprotoLabeler",
+        "serviceEndpoint": "https://labeler.exprsn.example"
+      },
+      {
+        "id": "#bsky_fg",
+        "type": "BskyFeedGenerator",
+        "serviceEndpoint": "https://labeler.exprsn.example"
+      }
+    ]
+  },
+  "label": {
+    "ver": 1,
+    "src": "did:exprsn:zQ3shNtJCVKpM1ua96sfvqRxsJXkkTrhgv6KDoYbvthTJ7Mrd",
+    "uri": "at://did:exprsn:peer/app.bsky.feed.post/3abc",
+    "val": "nsfw",
+    "cts": "2026-06-23T00:00:00.000Z"
+  },
+  "sig": "EWUeARcCXXIeSTyZRFZO+7uL1hpMMupZTazDktY0FywBbGSnxYgAd90gUxMbQurArQPZ6KQ3FaCq2NHzOjgsiA=="
+}
