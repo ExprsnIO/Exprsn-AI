@@ -22,6 +22,8 @@
     "loadtest:platform": "tsx loadtest/platform.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-ec2": "3.1146.0",
+    "@aws-sdk/client-iam": "3.1156.0",
     "@aws-sdk/client-ec2": "3.1156.0",
     "@aws-sdk/client-iam": "3.1146.0",
     "@aws-sdk/client-route-53": "3.1146.0",
