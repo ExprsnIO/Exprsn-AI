@@ -20,7 +20,7 @@ services:
   cloudflared:
     # Cloudflare's release 2025.8.1 (2025-08-21; `--token-file` needs 2025.4.0 or later), pinned by its multi-arch
     # index digest from Docker Hub (checked 2026-10-21). Set CLOUDFLARED_IMAGE to move on (tag and digest together).
-    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.8.1@sha256:b77d84e8704db38db22c22661cf7e56468c526e3a6a5fe9c8b7c151452fa1472}
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39}
     restart: unless-stopped
     read_only: true
     security_opt: ["no-new-privileges:true"]
