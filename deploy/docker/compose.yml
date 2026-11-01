@@ -65,7 +65,7 @@ services:
     networks: [data]
 
   redis:
-    image: redis:8-bookworm@sha256:164c759a0c342ee69d08fc99219382b0fd682181465c0df2e0e6911f4c85d73c
+    image: redis:8-bookworm@sha256:99ffb973380cc2f47bca06bd094f7f8c7138a0879a63cb8939896a22b7a65bba
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", ""]
     volumes: [redisdata:/data]
