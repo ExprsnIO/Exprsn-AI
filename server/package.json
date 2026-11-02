@@ -33,7 +33,7 @@
     "@azure/arm-dns": "5.1.0",
     "@azure/arm-network": "39.1.0",
     "@azure/arm-resources": "8.0.0",
-    "@azure/arm-storage": "20.2.0",
+    "@azure/arm-storage": "21.0.0",
     "@azure/core-auth": "1.11.0",
     "@azure/core-rest-pipeline": "1.25.0",
     "@simplewebauthn/server": "^14.0.3",
